@@ -1,0 +1,34 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "default_agent": "orchestrator",
+  "instructions": ["AGENTS.md"],
+  "agent": {
+    "orchestrator": {
+      "description": "总管 agent，分析用户意图并调度 designer/coder/tester subagent 完成任务",
+      "mode": "primary",
+      "permission": { "edit": "deny", "bash": "deny", "task": "allow" },
+      "steps": 30
+    },
+    "designer": {
+      "description": "设计 agent，负责 InstantBoard 项目的架构设计、API 设计、数据流设计和内容分类体系规划",
+      "mode": "subagent",
+      "permission": { "edit": "deny", "bash": "deny" },
+      "steps": 15
+    },
+    "coder": {
+      "description": "编码 agent，按设计文档实现 InstantBoard 服务的 Python/FastAPI 后端和 Vue.js 前端代码",
+      "mode": "subagent",
+      "permission": { "edit": "allow", "bash": "allow" },
+      "steps": 40
+    },
+    "tester": {
+      "description": "测试 agent，为 InstantBoard 服务编写和运行单元测试、集成测试与端到端测试",
+      "mode": "subagent",
+      "permission": {
+        "edit": "allow",
+        "bash": { "pytest *": "allow", "npm *": "allow", "pip *": "allow", "python *": "allow", "*": "ask" }
+      },
+      "steps": 20
+    }
+  }
+}

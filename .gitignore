@@ -1,0 +1,30 @@
+# Environment
+.env
+.env.*
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+venv/
+.venv/
+
+# Node
+node_modules/
+.opencode/node_modules/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log

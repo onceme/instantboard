@@ -350,8 +350,10 @@ SQL查询逻辑:
       "tech": 300       // 保持默认
     },
     "color_overrides": {
-      "finance": "#FF0000",  // 租户A希望中国红涨绿跌配色
-    }
+      "finance": "#FF0000",  // 租户A希望财经分类使用自定义颜色
+    },
+    "color_scheme": "international",  // 租户A覆盖配色方案为国际配色(绿涨红跌), 默认为中国配色(红涨绿跌)
+  }
   }
 
 实际刷新频率 = tenants.settings.refresh_overrides[category.slug]

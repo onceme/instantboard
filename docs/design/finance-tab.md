@@ -65,7 +65,8 @@ async def search_symbols(query: str, type: str, market: str):
 ```
 1. 初始状态: WatchlistPanel 显示用户自选列表
    - 每行: symbol + name + 当前价 + 涨跌幅(颜色) + mini sparkline
-   - 涨: 绿色 ↑, 跌: 红色 ↓
+    - 涨: 红色 ↑ (默认中国配色), 跌: 绿色 ↓ (默认中国配色)
+    - 可切换为国际配色: 涨绿跌红 (SettingsView → ProfileSettings)
    - 可拖拽排序 (display_order)
    - 左滑(移动端)或右键菜单 → 移除/设置提醒阈值
 2. SSE实时更新: quote_update 事件 → 实时刷新价格和涨跌幅
@@ -91,7 +92,7 @@ graph TD
     List --> WIR["WatchlistItemRow × N"]
     WIR --> SN["Symbol + Name"]
     WIR --> Price["Price (实时)"]
-    WIR --> Change["Change% (颜色: 绿涨红跌)"]
+    WIR --> Change["Change% (颜色: 默认红涨绿跌, 可切换)"]
     WIR --> MS["MiniSparkline (5日)"]
     WIR --> Click["操作: 点击 → DetailDrawer"]
     WIR --> Drag["操作: 拖拽排序"]
@@ -236,7 +237,7 @@ graph TD
     MIC["MarketIndexCard<br/>单个市场指数卡片"]
     MIC --> IN["指数名称 (如 'S&P 500') + 地区标签"]
     MIC --> CP["当前点位: 5234.18"]
-    MIC --> CF["涨跌幅: +0.24% (颜色: 绿涨红跌)"]
+    MIC --> CF["涨跌幅: +0.24% (颜色: 默认红涨绿跌, 可切换)"]
     MIC --> MS2["市场状态指示: 开盘/盘前/休市"]
     MIC --> SP2["Mini Sparkline (当日走势, 仅交易时段)"]
     MIC --> TS2["时间戳: 10:30:00 EST"]
@@ -505,7 +506,7 @@ FINANCE_SCHEDULE_CONFIG = {
 | 行情刷新频率 | 30s高频 + 5min低频 + 动态调整 | 交易时段高频实时、休市低频省资源、自适应降频保护系统 |
 | 市场状态判断 | 时间区间 + 交易日历 | 精确判断开盘/休市/盘前，避免休市无效采集 |
 | NAV估值方法 | 指数跟踪法 (仅指数ETF) | 主动管理基金无法精确估值，仅提供指数ETF的实时估算 |
-| 涨跌颜色 | 国际惯例: 绿涨红跌 (可配置为中国红涨绿跌) | 默认国际惯例，中国用户可在设置中切换 |
+| 涨跌颜色 | 默认中国配色（红涨绿跌），提供设置切换选项 | 默认红涨绿跌符合中国用户直觉，国际用户可切换为绿涨红跌；CSS变量实现运行时切换，无需重建样式 |
 | 自选列表存储 | PostgreSQL持久化 + Redis缓存 | PG保证持久、Redis保证实时查询快 |
 
 ## 5. 边界情况
@@ -516,7 +517,7 @@ FINANCE_SCHEDULE_CONFIG = {
 - **跨境ETF估值偏差**: 汇率因素、时差因素导致估值偏差较大 → UI标注"跨境ETF估值偏差可能较大"
 - **搜索结果过旧**: Redis缓存5min → 超时后强制重新搜索
 - **休市日无数据**: 交易日历判断 → 采集器跳过，前端显示"今日休市"
-- **自选列表超过50项**: 性能影响 → UI限制最多50项，超出提示"已达上限"
+- **自选列表超过512项**: 性能影响 → UI限制最多512项，超出提示"已达上限"
 - **Alpha Vantage限流**: 5 calls/min → 使用Key池轮换 + 失败后排队等待
 
 ## 6. 与其他模块的依赖

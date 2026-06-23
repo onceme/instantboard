@@ -518,6 +518,7 @@ services:
     volumes:
       - mongodb_dev_data:/data/db
       - ./mongodb/init.js:/docker-entrypoint-initdb.d/init.js
+    profiles: ["mongodb"]  # 初始版本默认不启动, 需显式启用: docker compose --profile mongodb up
   
   frontend:
     build:

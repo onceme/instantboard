@@ -423,7 +423,7 @@ Response 200:
 
 ```
 GET    /api/v1/finance/watchlist               — 获取自选列表
-POST   /api/v1/finance/watchlist               — 添加到自选列表
+POST   /api/v1/finance/watchlist               — 添加到自选列表 (最多512项, 超出返回400 VALIDATION_ERROR)
 DELETE /api/v1/finance/watchlist/{item_id}      — 从自选列表移除
 PUT    /api/v1/finance/watchlist/reorder        — 重排序自选列表
 GET    /api/v1/finance/watchlist/quotes         — 自选列表所有行情

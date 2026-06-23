@@ -396,7 +396,37 @@ ThemeToggle → useTheme composable:
 - 文字: 高对比度浅色 (#E2E8F0)
 - 卡片: 微妙边框区分 (#334155)，不用阴影
 - 图表: 使用透明填充色，网格线浅色
-- 行情: 上涨用绿色 (#34D399)，下跌用红色 (#F87171)
+
+**涨跌配色方案 (可切换)**:
+
+默认采用**中国配色** (红涨绿跌)，用户可在 SettingsView → ProfileSettings 中切换为**国际配色** (绿涨红跌)。配色方案存储在 `users.preferences.colorScheme` 中，优先级: 用户偏好 > 租户配置覆盖 > 默认中国配色。
+
+| 配色方案 | 上涨 (positive) | 下跌 (negative) | 适用场景 |
+|---------|----------------|----------------|---------|
+| **中国配色 (默认)** | 🔴 红色 `--up-color: #EF4444` / 暗色 `#F87171` | 🟢 绿色 `--down-color: #10B981` / 暗色 `#34D399` | 中国A股/港股用户直觉 |
+| **国际配色 (可选)** | 🟢 绿色 `--up-color: #10B981` / 暗色 `#34D399` | 🔴 红色 `--down-color: #EF4444` / 暗色 `#F87171` | 美股/国际市场用户习惯 |
+
+CSS 变量实现:
+```scss
+:root {
+  --up-color: #EF4444;    // 中国配色默认: 红涨
+  --down-color: #10B981;  // 中国配色默认: 绿跌
+}
+[data-theme="dark"] {
+  --up-color: #F87171;
+  --down-color: #34D399;
+}
+[data-color-scheme="international"] {
+  --up-color: #10B981;    // 国际配色: 绿涨
+  --down-color: #EF4444;  // 国际配色: 红跌
+}
+[data-theme="dark"][data-color-scheme="international"] {
+  --up-color: #34D399;
+  --down-color: #F87171;
+}
+```
+
+前端组件使用 `var(--up-color)` 和 `var(--down-color)` 替代硬编码颜色，所有涨跌相关 UI (WatchlistPanel、MarketIndexCard、CommodityCard、StockDetail) 统一使用 CSS 变量。
 
 ### 3.9 移动端适配策略
 

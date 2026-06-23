@@ -10,11 +10,11 @@ cross_refs: [architecture.md, api.md, security.md, data-flow.md]
 
 ## 1. 目标
 
-定义 InstantBoard 的完整数据库方案：PostgreSQL 表结构、Redis 使用场景、MongoDB 按需使用场景、数据迁移策略和多租户隔离方案。
+定义 InstantBoard 的完整数据库方案：PostgreSQL 表结构、Redis 使用场景、MongoDB 后续版本按需启用场景、数据迁移策略和多租户隔离方案。
 
 ## 2. 方案概述
 
-**PostgreSQL 存核心关系数据，Redis 存缓存/实时/会话数据，MongoDB 按需存储原始抓取内容和历史行情数据**，三者通过数据管道协同工作。
+**PostgreSQL 存核心关系数据，Redis 存缓存/实时/会话数据，MongoDB 初始版本不启用（后续版本按需启用）**，初始版本通过 PostgreSQL JSONB 替代 MongoDB 的灵活存储场景。
 
 ## 3. 详细设计
 
@@ -320,13 +320,15 @@ CREATE INDEX idx_dashboard_snapshots_time ON dashboard_snapshots(tenant_id, time
 
 ### 3.3 MongoDB 使用场景
 
-**何时使用 MongoDB**: 仅在以下场景按需启用（生产环境通过 `--profile mongodb` 按需启动）
+**初始版本不启用 MongoDB**。以下场景标注为后续版本按需启用，初始版本通过 PostgreSQL JSONB 字段替代。
 
-| 场景 | Collection | 理由 |
-|------|-----------|------|
-| **原始抓取内容** | `raw_crawled_content` | RSS原文、网页HTML，schema不统一，用MongoDB灵活存储 |
-| **历史行情数据** | `historical_quotes` | 日级/分钟级历史数据量大，MongoDB时序集合更高效 |
-| **新闻全文** | `news_full_text` | 部分源提供全文，内容长度不一，MongoDB无schema约束 |
+**何时使用 MongoDB**: 仅在以下场景按需启用（初始版本默认不启动，生产环境通过 `--profile mongodb` 按需启动，后续版本可启用）
+
+| 场景 | Collection | 理由 | 初始版本替代方案 |
+|------|-----------|------|----------------|
+| **原始抓取内容** | `raw_crawled_content` | RSS原文、网页HTML，schema不统一 | PostgreSQL items.extra_data JSONB 字段存储 |
+| **历史行情数据** | `historical_quotes` | 日级/分钟级历史数据量大 | PostgreSQL finance_quotes 分区表 (近期数据) + 归档策略 |
+| **新闻全文** | `news_full_text` | 部分源提供全文，内容长度不一 | PostgreSQL items.summary 字段 (截断200字符) + items.extra_data JSONB |
 
 **Collection 定义**:
 
@@ -441,14 +443,14 @@ class TenantMiddleware:
 ```
 
 **Redis 隔离**: 所有 key 前缀 `t:{tenant_id}:xxx`
-**MongoDB 隿离**: 所有查询包含 `tenant_id` 条件
+**MongoDB 隑离** (后续版本启用时): 所有查询包含 `tenant_id` 条件
 
 ## 4. 关键决策
 
 | 决策 | 选择 | 理由 |
 |------|------|------|
 | 多租户隔离 | 行级隔离 + RLS | 共享数据库成本最低、运维简单、RLS保证安全 |
-| 历史行情存储 | PostgreSQL 近期 + MongoDB 历史 | 近期数据频繁查询(PostgreSQL)，历史数据量大(MongoDB时序) |
+| 历史行情存储 | PostgreSQL 近期 (初始版本) | 初始版本仅用PostgreSQL分区存储近期行情，历史数据归档策略后续优化；MongoDB时序存储为后续版本可选增强 |
 | 去重策略 | PostgreSQL UNIQUE + Redis Set | 双重保障：PG持久化去重、Redis快速去重 |
 | 是否分区 | finance_quotes 按月分区 | 行情数据量大，分区查询性能好 |
 | 连接池 | SQLAlchemy async session + pool | FastAPI async 需要异步连接池 |
@@ -457,7 +459,7 @@ class TenantMiddleware:
 
 - **数据库连接失败**: FastAPI lifespan 中检测连接，失败时返回 503
 - **Redis 不可用**: 降级为直接 PostgreSQL 查询，SSE 降级为 REST 拉取
-- **MongoDB 不可用**: 原始内容存储降级为 PostgreSQL JSONB 字段
+- **MongoDB 不可用**: 初始版本不启用MongoDB，原始内容存储使用PostgreSQL JSONB字段 (items.extra_data)；后续版本启用MongoDB时，MongoDB不可用降级为PostgreSQL JSONB字段
 - **迁移冲突**: 多 worker 同时启动时，使用 `alembic upgrade head` 的幂等性，只有一个成功执行
 - **大表查询**: items 表可能百万级，依赖索引 + 分页，不使用全量查询
 

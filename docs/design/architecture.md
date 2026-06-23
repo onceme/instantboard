@@ -53,7 +53,7 @@ graph TD
     subgraph DataLayer["Data Layer"]
         PostgreSQL["PostgreSQL — 核心关系数据<br>users, categories, sources, items, watchlists"]
         Redis["Redis — 缓存/会话/实时<br>sessions, SSE, market_cache, rate_limit"]
-        MongoDB["MongoDB — 原始抓取数据<br>raw_content, history"]
+        MongoDB["MongoDB — 原始抓取数据<br>raw_content, history<br>(后续版本可选, 初始版本不启用)"]
     end
 
     subgraph ExternalSources["External Data Sources"]
@@ -162,7 +162,7 @@ graph TD
 | **categories** | 内容分类 CRUD | `/api/v1/categories/*` | PostgreSQL |
 | **sources** | 数据源管理 CRUD | `/api/v1/sources/*` | PostgreSQL, categories |
 | **finance** | 股票/基金搜索、自选、估值、市场指数 | `/api/v1/finance/*`, `/api/v1/stream/finance` | PostgreSQL, Redis, external APIs |
-| **tech** | 科技资讯聚合、话题标签 | `/api/v1/tech/*`, `/api/v1/stream/tech` | PostgreSQL, MongoDB, collectors |
+| **tech** | 科技资讯聚合、话题标签 | `/api/v1/tech/*`, `/api/v1/stream/tech` | PostgreSQL, Redis, collectors |
 | **dashboard** | 系统状态监控 | `/api/v1/dashboard/*`, `/api/v1/stream/dashboard` | Redis, PostgreSQL |
 | **collector** | 数据采集引擎 | 内部调度接口 | httpx, feedparser, sources |
 | **processor** | 数据处理管道 | 内部管道接口 | collector, PostgreSQL, Redis |
@@ -179,7 +179,7 @@ services:
   worker:         # 后台任务 Worker (Celery/APScheduler)
   postgres:       # PostgreSQL 15
   redis:          # Redis 7 (缓存 + Pub/Sub)
-  mongodb:        # MongoDB 6 (可选，按需启用)
+  mongodb:        # MongoDB 6 (后续版本可选, 初始版本不启用, profiles方式)
   flower:         # Celery 任务监控面板 (可选)
 ```
 
@@ -189,7 +189,7 @@ services:
   api:            # FastAPI (热重载 uvicorn --reload)
   postgres:       # PostgreSQL 15
   redis:          # Redis 7
-  mongodb:        # MongoDB 6 (可选)
+  mongodb:        # MongoDB 6 (后续版本可选, 初始版本默认不启动)
   # nginx 在开发中不使用，直接 uvicorn 提供服务
   # worker 在开发中集成在 api 进程内 (APScheduler)
 ```
@@ -208,7 +208,7 @@ services:
 | 定时任务 | APScheduler (开发) → Celery (生产) | APScheduler 简单够用；Celery 生产级可靠、支持重试、优先级 |
 | 关系数据库 | PostgreSQL 15 | 功能最强开源 RDBMS、JSON 支持、多租户友好 |
 | 内存数据库 | Redis 7 | 缓存+Pub/Sub+会话+限流，一工具多场景 |
-| 对象数据库 | MongoDB 6 | 按需使用：存储原始抓取内容、历史市场数据（灵活 schema） |
+| 对象数据库 | MongoDB 6 | 后续版本可选：存储原始抓取内容、历史市场数据（初始版本不启用，PostgreSQL JSONB 替代） |
 | HTTP客户端 | httpx | async 支持、HTTP/2、比 aiohttp 更现代 |
 | HTML解析 | BeautifulSoup | 简单可靠、社区成熟 |
 | RSS解析 | feedparser | Python RSS 解析标准库 |
@@ -226,7 +226,7 @@ services:
 | SSE vs WebSocket | **SSE** | InstantBoard 主要是服务端→客户端推送，SSE 原生重连、简单、HTTP/2 多路复用（详见 [data-flow.md](data-flow.md)） |
 | APScheduler vs Celery | **渐进式** | 开发用 APScheduler（集成在 API 进程），生产用 Celery（独立 worker） |
 | SQLite vs PostgreSQL | **统一 PostgreSQL** | 多租户、JSON 字段、并发写入需求，SQLite 不适合 |
-| 是否用 MongoDB | **按需使用** | 仅用于原始抓取数据存储，核心数据全部 PostgreSQL |
+| 是否用 MongoDB | **初始版本不启用，后续按需启用** | 核心数据全部 PostgreSQL，MongoDB 仅用于原始抓取数据存储，初始版本不启用以简化部署 |
 
 ## 5. 边界情况
 

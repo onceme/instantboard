@@ -1,0 +1,103 @@
+services:
+  # --- 基础服务 ---
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-instantboard_dev}
+      POSTGRES_USER: ${POSTGRES_USER:-instantboard}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-devpass}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-instantboard}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_dev_data:/data
+      - ./redis/redis.conf:/usr/local/etc/redis/redis.conf
+    command: redis-server /usr/local/etc/redis/redis.conf --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  mongodb:
+    image: mongo:6
+    ports:
+      - "${MONGODB_PORT:-27017}:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER:-instantboard}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-devpass}
+    volumes:
+      - mongodb_dev_data:/data/db
+    profiles:
+      - mongodb
+    restart: unless-stopped
+
+  # --- 应用服务 ---
+  api:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+      target: development
+    env_file:
+      - ../.env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-instantboard}:${DB_PASSWORD:-devpass}@postgres:5432/${POSTGRES_DB:-instantboard_dev}
+      - REDIS_URL=redis://redis:6379/0
+      - MONGODB_URL=mongodb://${MONGO_USER:-instantboard}:${MONGO_PASSWORD:-devpass}@mongodb:27017/instantboard_dev
+      - ENV=development
+    ports:
+      - "${API_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ../backend/app:/app/app
+      - ../backend/entrypoint.sh:/app/entrypoint.sh
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+      target: dev
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    volumes:
+      - ../frontend/src:/app/src
+      - ../frontend/public:/app/public
+      - ../frontend/vite.config.ts:/app/vite.config.ts
+    environment:
+      - VITE_API_URL=http://localhost:${API_PORT:-8000}
+      - VITE_SSE_URL=http://localhost:${API_PORT:-8000}
+      - VITE_PROXY_TARGET=http://api:8000
+    depends_on:
+      - api
+    command: npm run dev -- --host 0.0.0.0 --port 3000
+    restart: unless-stopped
+
+volumes:
+  postgres_dev_data:
+  redis_dev_data:
+  mongodb_dev_data:

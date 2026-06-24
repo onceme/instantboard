@@ -1,6 +1,9 @@
-# Environment
+# Environment (.env.example 入 Git，其他不入)
 .env
-.env.*
+.env.local
+.env.staging
+.env.production
+!.env.example
 
 # Python
 __pycache__/
@@ -16,6 +19,9 @@ venv/
 node_modules/
 .opencode/node_modules/
 
+# Frontend build
+frontend/dist/
+
 # OS
 .DS_Store
 Thumbs.db
@@ -28,3 +34,12 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Docker
+docker/nginx/ssl/*.pem
+docker/nginx/ssl/*.key
+
+# Coverage
+coverage.xml
+htmlcov/
+.coverage

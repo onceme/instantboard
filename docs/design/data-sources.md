@@ -127,15 +127,42 @@ cross_refs: [architecture.md, api.md, database.md, data-flow.md, finance-tab.md,
 |------|-----|
 | **类型** | REST API + WebSocket |
 | **覆盖范围** | 全球股票、外汇、加密、新闻 |
-| **URL** | `https://finnhub.io/api/v1/quote?symbol=AAPL&token={KEY}` |
+| **Base URL** | `https://finnhub.io/api/v1` |
 | **数据格式** | JSON |
 | **费用** | 免费(60 calls/min) / Premium |
-| **API Key** | 需要 (`FINNHUB_API_KEY`) |
-| **频率限制** | 60 calls/min (免费) |
+| **API Key** | 需要 (`FINNHUB_API_KEY`), 支持多Key池 (`FINNHUB_API_KEYS`) |
+| **频率限制** | 60 calls/min (免费), 429时自动等待60s重试 |
 | **数据延迟** | 实时 |
-| **优点** | WebSocket实时推送、官方API |
-| **缺点** | 覆盖不如yfinance全面 |
+| **优点** | WebSocket实时推送、官方API、搜索和基本面数据丰富 |
+| **缺点** | 免费版大宗商品支持有限、覆盖不如yfinance全面 |
 | **优先级** | **可选备用** (Failover #2) |
+| **采集器** | `FinnhubCollector` |
+
+**API Endpoints (已实现)**:
+
+| Endpoint | 路径 | 参数 | 用途 |
+|----------|------|------|------|
+| **Quote** | `/quote?symbol={SYM}&token={KEY}` | symbol | 实时行情 (c/h/l/o/pc/d/dp) |
+| **Symbol Lookup** | `/search?q={QUERY}&token={KEY}` | q | 搜索股票代码 |
+| **Company Profile** | `/stock/profile2?symbol={SYM}&token={KEY}` | symbol | 公司基本面 (市值/行业/国家) |
+
+**关键配置** (`sources.config` JSONB):
+```json
+{
+  "data_type": "stock_quote",
+  "symbols": ["AAPL", "MSFT", "GOOGL"],
+  "api_key_env": "FINNHUB_API_KEY"
+}
+```
+
+支持的 `data_type` 值: `stock_quote`, `market_indices`, `commodities`, `search`, `company_profile`
+
+**API Key轮换策略**: 多Key池 (round-robin), 429限流时自动切换下一个Key, 所有Key限流时等待60s
+
+**错误处理**:
+- 401/403: 标记Key失效, 返回None → 上层触发failover到下一个数据源
+- 429: 等待60秒重试一次
+- 超时: 10秒, 走BaseCollector的retry机制 (3次指数退避)
 
 #### 3.2.5 天天基金 (中国基金NAV)
 

@@ -1,0 +1,445 @@
+import logging
+
+from app.config import settings
+from app.db.session import async_session_factory, engine
+from app.models.base import Base
+from app.models.category import Category
+from app.models.source import Source, SourceHealth
+from app.models.tenant import Tenant
+
+logger = logging.getLogger(__name__)
+
+
+async def create_tables():
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    logger.info("All database tables created")
+
+
+FINANCE_SOURCES = [
+    {
+        "name": "东方财富-A股实时",
+        "source_type": "web_scrape",
+        "url": "https://push2.eastmoney.com/api/qt/stock/get",
+        "config": {"selector": "data", "url_pattern": "push2.eastmoney.com"},
+        "refresh_interval_seconds": 15,
+        "priority": 1,
+    },
+    {
+        "name": "yfinance-沪深300指数",
+        "source_type": "api",
+        "url": "https://query1.finance.yahoo.com/v7/finance/chart/000001.SS",
+        "config": {
+            "library": "yfinance",
+            "symbols": ["000001.SS", "399001.SZ", "000300.SS"],
+            "history_period": "5d",
+            "retry_on_fail": True,
+        },
+        "refresh_interval_seconds": 30,
+        "priority": 2,
+    },
+    {
+        "name": "yfinance-世界市场指数",
+        "source_type": "api",
+        "url": "https://query1.finance.yahoo.com/v7/finance/chart/^GSPC",
+        "config": {
+            "library": "yfinance",
+            "symbols": ["^GSPC", "^DJI", "^IXIC", "^HSI", "^N225", "^FTSE", "^GDAXI"],
+            "history_period": "5d",
+            "retry_on_fail": True,
+        },
+        "refresh_interval_seconds": 30,
+        "priority": 2,
+    },
+    {
+        "name": "Alpha Vantage-市场指数(failover)",
+        "source_type": "api",
+        "url": "https://www.alphavantage.co/query",
+        "config": {"api_key_env": "ALPHA_VANTAGE_API_KEY", "method": "GET", "function": "TIME_SERIES_INTRADAY"},
+        "refresh_interval_seconds": 30,
+        "priority": 5,
+    },
+    {
+        "name": "yfinance-大宗商品",
+        "source_type": "api",
+        "url": "https://query1.finance.yahoo.com/v7/finance/chart/GC=F",
+        "config": {
+            "library": "yfinance",
+            "symbols": ["GC=F", "SI=F", "CL=F", "NG=F", "HG=F", "ZS=F", "ZC=F"],
+            "history_period": "5d",
+        },
+        "refresh_interval_seconds": 60,
+        "priority": 3,
+    },
+    {
+        "name": "天天基金-官方NAV",
+        "source_type": "web_scrape",
+        "url": "https://fund.eastmoney.com/f10/F10DataApi.aspx",
+        "config": {"selector": "table", "url_pattern": "fund.eastmoney.com"},
+        "refresh_interval_seconds": 86400,
+        "priority": 1,
+    },
+]
+
+TECH_AI_SOURCES = [
+    {
+        "name": "MIT Tech Review AI Feed",
+        "source_type": "rss",
+        "url": "https://www.technologyreview.com/feed/",
+        "config": {"parse_rules": {"summary": "excerpt"}},
+        "refresh_interval_seconds": 300,
+        "priority": 3,
+    },
+    {
+        "name": "HackerNews-AI/ML",
+        "source_type": "rss",
+        "url": "https://hnrss.org/new?q=AI+machine+learning",
+        "config": {"parse_rules": {"summary": "comments_text", "extra": {"hn_votes": "score"}}},
+        "refresh_interval_seconds": 120,
+        "priority": 2,
+    },
+    {
+        "name": "Arxiv CS.AI",
+        "source_type": "rss",
+        "url": "https://arxiv.org/rss/cs.AI",
+        "config": {"parse_rules": {"summary": "abstract", "extra": {"arxiv_id": "id"}}},
+        "refresh_interval_seconds": 1800,
+        "priority": 4,
+    },
+    {
+        "name": "OpenAI Blog",
+        "source_type": "web_scrape",
+        "url": "https://openai.com/blog",
+        "config": {"selector": "article", "parse_rules": {"title": "h2", "summary": "p.excerpt"}},
+        "refresh_interval_seconds": 1800,
+        "priority": 3,
+    },
+    {
+        "name": "The Batch (deeplearning.ai)",
+        "source_type": "rss",
+        "url": "https://deeplearning.ai/the-batch/",
+        "config": {"parse_rules": {}},
+        "refresh_interval_seconds": 604800,
+        "priority": 5,
+    },
+]
+
+TECH_ROBOTICS_SOURCES = [
+    {
+        "name": "HackerNews-Robotics",
+        "source_type": "rss",
+        "url": "https://hnrss.org/new?q=robot+robotics",
+        "config": {"parse_rules": {"summary": "comments_text"}},
+        "refresh_interval_seconds": 120,
+        "priority": 2,
+    },
+    {
+        "name": "The Robot Report",
+        "source_type": "rss",
+        "url": "https://www.robotreport.com/feed",
+        "config": {"parse_rules": {"summary": "excerpt"}},
+        "refresh_interval_seconds": 300,
+        "priority": 3,
+    },
+    {
+        "name": "IEEE Robotics",
+        "source_type": "rss",
+        "url": "https://www.ieee.org/publications/rss_feed.xml",
+        "config": {"parse_rules": {"summary": "abstract"}},
+        "refresh_interval_seconds": 86400,
+        "priority": 5,
+    },
+    {
+        "name": "ROS Blog",
+        "source_type": "rss",
+        "url": "https://ros.org/blog/rss.xml",
+        "config": {"parse_rules": {}},
+        "refresh_interval_seconds": 604800,
+        "priority": 6,
+    },
+    {
+        "name": "Automotive News",
+        "source_type": "web_scrape",
+        "url": "https://www.autonews.com",
+        "config": {"selector": "article", "parse_rules": {"title": "h2.article-title", "summary": "p.excerpt"}},
+        "refresh_interval_seconds": 86400,
+        "priority": 5,
+    },
+]
+
+TECH_EMBEDDED_SOURCES = [
+    {
+        "name": "Hackaday",
+        "source_type": "rss",
+        "url": "https://hackaday.com/blog/feed/",
+        "config": {"parse_rules": {"summary": "excerpt"}},
+        "refresh_interval_seconds": 300,
+        "priority": 2,
+    },
+    {
+        "name": "Embedded.com",
+        "source_type": "rss",
+        "url": "https://www.embedded.com/rss/",
+        "config": {"parse_rules": {}},
+        "refresh_interval_seconds": 300,
+        "priority": 3,
+    },
+    {
+        "name": "RISC-V International Blog",
+        "source_type": "web_scrape",
+        "url": "https://riscv.org/blog/",
+        "config": {"selector": "article", "parse_rules": {"title": "h2.post-title", "summary": "p"}},
+        "refresh_interval_seconds": 1800,
+        "priority": 4,
+    },
+    {
+        "name": "EE Times",
+        "source_type": "rss",
+        "url": "https://www.eetimes.com/rss/",
+        "config": {"parse_rules": {}},
+        "refresh_interval_seconds": 86400,
+        "priority": 5,
+    },
+    {
+        "name": "Zephyr Project Blog",
+        "source_type": "rss",
+        "url": "https://zephyrproject.org/blog/rss",
+        "config": {"parse_rules": {}},
+        "refresh_interval_seconds": 2592000,
+        "priority": 6,
+    },
+]
+
+TECH_SPACE_SOURCES = [
+    {
+        "name": "SpaceNews",
+        "source_type": "rss",
+        "url": "https://spacenews.com/feed/",
+        "config": {"parse_rules": {"summary": "excerpt"}},
+        "refresh_interval_seconds": 300,
+        "priority": 2,
+    },
+    {
+        "name": "NASA News",
+        "source_type": "rss",
+        "url": "https://www.nasa.gov/rss/dyn/breaking_news.rss",
+        "config": {"parse_rules": {"summary": "description"}},
+        "refresh_interval_seconds": 1800,
+        "priority": 4,
+    },
+    {
+        "name": "SpaceX Updates",
+        "source_type": "web_scrape",
+        "url": "https://www.spacex.com/updates/",
+        "config": {"selector": "article", "parse_rules": {"title": "h3.update-title", "summary": "p"}},
+        "refresh_interval_seconds": 1800,
+        "priority": 3,
+    },
+    {
+        "name": "ESA News",
+        "source_type": "rss",
+        "url": "https://www.esa.int/RSS",
+        "config": {"parse_rules": {}},
+        "refresh_interval_seconds": 1800,
+        "priority": 4,
+    },
+    {
+        "name": "Ars Technica Space",
+        "source_type": "rss",
+        "url": "https://arstechnica.com/science/feed/",
+        "config": {"parse_rules": {"summary": "excerpt"}},
+        "refresh_interval_seconds": 300,
+        "priority": 3,
+    },
+]
+
+TECH_CROSS_DOMAIN_SOURCES = [
+    {
+        "name": "Reddit-科技全领域",
+        "source_type": "social",
+        "url": "https://www.reddit.com/r/artificial+robotics+embedded+space/new.json",
+        "config": {"platform": "reddit", "query": "r/artificial+robotics+embedded+space", "parse_rules": {}},
+        "refresh_interval_seconds": 600,
+        "priority": 4,
+    },
+    {
+        "name": "Google News Tech",
+        "source_type": "rss",
+        "url": "https://news.google.com/rss/search?q=technology+AI+robotics",
+        "config": {"parse_rules": {}},
+        "refresh_interval_seconds": 300,
+        "priority": 5,
+    },
+]
+
+
+async def seed_default_data():
+    async with async_session_factory() as session:
+        from sqlalchemy import select
+
+        result = await session.execute(select(Tenant).where(Tenant.slug == "system"))
+        system_tenant = result.scalar_one_or_none()
+
+        if system_tenant is None:
+            system_tenant = Tenant(
+                id="00000000-0000-0000-0000-000000000000",
+                name="System",
+                slug="system",
+                plan="enterprise",
+                settings={},
+                max_users=100,
+                max_categories=50,
+                max_sources=200,
+                is_active=True,
+            )
+            session.add(system_tenant)
+            await session.flush()
+            logger.info("System tenant created")
+        else:
+            logger.info("System tenant already exists")
+
+        result = await session.execute(select(Tenant).where(Tenant.slug == settings.default_tenant_slug))
+        default_tenant = result.scalar_one_or_none()
+
+        if default_tenant is None:
+            default_tenant = Tenant(
+                name=settings.default_tenant_name,
+                slug=settings.default_tenant_slug,
+                plan="free",
+                settings={},
+            )
+            session.add(default_tenant)
+            await session.flush()
+            logger.info("Default tenant created")
+        else:
+            logger.info("Default tenant already exists")
+
+        result = await session.execute(
+            select(Category).where(
+                Category.tenant_id == system_tenant.id,
+                Category.slug == "finance",
+            )
+        )
+        finance_category = result.scalar_one_or_none()
+
+        if finance_category is None:
+            finance_category = Category(
+                tenant_id=system_tenant.id,
+                name="财经",
+                slug="finance",
+                description="金融市场行情数据",
+                icon="chart-line",
+                color="#FF6B6B",
+                type="finance",
+                refresh_interval_seconds=30,
+                keywords_filter=["股票", "基金", "行情", "指数", "A股", "期货", "大宗商品"],
+                is_active=True,
+            )
+            session.add(finance_category)
+            await session.flush()
+            logger.info("Finance category created")
+        else:
+            logger.info("Finance category already exists")
+
+        result = await session.execute(
+            select(Category).where(
+                Category.tenant_id == system_tenant.id,
+                Category.slug == "tech",
+            )
+        )
+        tech_category = result.scalar_one_or_none()
+
+        if tech_category is None:
+            tech_category = Category(
+                tenant_id=system_tenant.id,
+                name="科技",
+                slug="tech",
+                description="科技领域新闻资讯：AI、机器人、嵌入式、太空",
+                icon="cpu",
+                color="#3B82F6",
+                type="tech",
+                refresh_interval_seconds=300,
+                keywords_filter=["AI", "机器人", "嵌入式", "太空", "RISC-V", "FPGA", "LLM"],
+                is_active=True,
+            )
+            session.add(tech_category)
+            await session.flush()
+            logger.info("Tech category created")
+        else:
+            logger.info("Tech category already exists")
+
+        existing_source_count = await session.execute(
+            select(func.count())
+            .select_from(Source)
+            .where(
+                Source.tenant_id == system_tenant.id,
+            )
+        )
+        existing_sources = existing_source_count.scalar() or 0
+
+        if existing_sources == 0:
+            all_sources = []
+
+            for src_data in FINANCE_SOURCES:
+                all_sources.append(
+                    Source(
+                        tenant_id=system_tenant.id,
+                        category_id=finance_category.id,
+                        name=src_data["name"],
+                        source_type=src_data["source_type"],
+                        url=src_data["url"],
+                        config=src_data["config"],
+                        refresh_interval_seconds=src_data["refresh_interval_seconds"],
+                        is_active=True,
+                        priority=src_data["priority"],
+                    )
+                )
+
+            tech_sources = (
+                TECH_AI_SOURCES
+                + TECH_ROBOTICS_SOURCES
+                + TECH_EMBEDDED_SOURCES
+                + TECH_SPACE_SOURCES
+                + TECH_CROSS_DOMAIN_SOURCES
+            )
+            for src_data in tech_sources:
+                all_sources.append(
+                    Source(
+                        tenant_id=system_tenant.id,
+                        category_id=tech_category.id,
+                        name=src_data["name"],
+                        source_type=src_data["source_type"],
+                        url=src_data["url"],
+                        config=src_data["config"],
+                        refresh_interval_seconds=src_data["refresh_interval_seconds"],
+                        is_active=True,
+                        priority=src_data["priority"],
+                    )
+                )
+
+            for source in all_sources:
+                session.add(source)
+            await session.flush()
+
+            for source in all_sources:
+                health = SourceHealth(
+                    source_id=source.id,
+                    status="healthy",
+                )
+                session.add(health)
+
+            await session.flush()
+            logger.info(f"Seeded {len(all_sources)} data sources for system tenant")
+        else:
+            logger.info(f"System tenant already has {existing_sources} sources, skipping source seed")
+
+        await session.commit()
+        logger.info("Default data seeded successfully")
+
+
+from sqlalchemy import func  # noqa: E402
+
+
+async def init_db():
+    await create_tables()
+    await seed_default_data()

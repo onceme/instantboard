@@ -289,6 +289,8 @@ Response 200:
 
 #### GET `/api/v1/finance/search` — 股票/基金搜索
 
+**后端数据源**: 优先使用 Finnhub Symbol Lookup API (`/search?q=XXX`), 回退到 yfinance 本地搜索
+
 ```
 Query Params:
   q: str (required) — 搜索关键词（股票代码、名称、基金名称）

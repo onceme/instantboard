@@ -1,0 +1,18 @@
+from datetime import datetime
+
+from pydantic import BaseModel
+
+
+class ItemResponse(BaseModel):
+    id: str
+    title: str
+    summary: str | None
+    url: str
+    image_url: str | None
+    source_name: str | None
+    source_id: str
+    category_id: str
+    topic_tags: list[str]
+    published_at: datetime
+    fetched_at: datetime
+    priority: int

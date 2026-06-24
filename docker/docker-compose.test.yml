@@ -1,0 +1,47 @@
+services:
+  postgres-test:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: instantboard_test
+      POSTGRES_USER: instantboard
+      POSTGRES_PASSWORD: testpass
+    ports:
+      - "5433:5432"
+    volumes:
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U instantboard"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis-test:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api-test:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+      target: development
+    environment:
+      - ENV=test
+      - DATABASE_URL=postgresql+asyncpg://instantboard:testpass@postgres-test:5432/instantboard_test
+      - REDIS_URL=redis://redis-test:6379/1
+      - SECRET_KEY=test-secret-key
+      - JWT_SECRET=test-jwt-secret
+      - SCHEDULER_ENABLED=false
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+      redis-test:
+        condition: service_healthy
+    command: pytest --cov=app --cov-report=xml --cov-report=term-missing -v /app/tests/
+    profiles:
+      - test

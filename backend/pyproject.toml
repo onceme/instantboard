@@ -1,0 +1,96 @@
+[project]
+name = "instantboard"
+version = "1.0.0"
+description = "Real-time information aggregation message board"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [
+    {name = "InstantBoard Team"},
+]
+
+dependencies = [
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "sqlalchemy[asyncio]>=2.0.23",
+    "alembic>=1.13.0",
+    "pydantic>=2.5.0",
+    "pydantic-settings>=2.1.0",
+    "httpx>=0.25.0",
+    "feedparser>=6.0.10",
+    "redis>=5.0.0",
+    "python-jose[cryptography]>=3.3.0",
+    "passlib[bcrypt]>=1.7.4",
+    "psutil>=5.9.0",
+    "apscheduler>=3.10.4",
+    "asyncpg>=0.29.0",
+    "beautifulsoup4>=4.12.0",
+    "lxml>=4.9.0",
+    "python-multipart>=0.0.6",
+    "bcrypt>=4.1.0",
+    "yfinance>=0.2.31",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.1.0",
+    "httpx>=0.25.0",
+    "black>=23.12.0",
+    "ruff>=0.1.0",
+    "mypy>=1.7.0",
+    "pre-commit>=3.6.0",
+]
+prod = [
+    "gunicorn>=21.2.0",
+]
+
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+src = ["app"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "A", "SIM"]
+ignore = [
+    "E501",    # line too long (handled by formatter)
+    "B008",    # function call in default argument (FastAPI Depends pattern)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"app/models/__init__.py" = ["F401"]
+"app/schemas/__init__.py" = ["F401"]
+"app/api/v1/__init__.py" = ["F401"]
+"tests/**" = ["F401", "F811"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
+[tool.black]
+target-version = ["py311"]
+line-length = 120
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "--cov=app --cov-report=term-missing -v"
+markers = [
+    "unit: unit tests",
+    "integration: integration tests",
+    "e2e: end-to-end tests",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*"]

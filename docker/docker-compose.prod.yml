@@ -38,9 +38,9 @@ services:
       - ../.env
     environment:
       - ENV=production
-      - DATABASE_URL=${PROD_DATABASE_URL}
-      - REDIS_URL=${PROD_REDIS_URL}
-      - SECRET_KEY=${PROD_SECRET_KEY}
+      - DATABASE_URL=${PROD_DATABASE_URL:-postgresql+asyncpg://instantboard:prodpass123@postgres:5432/instantboard}
+      - REDIS_URL=${PROD_REDIS_URL:-redis://:prodredis123@redis:6379/0}
+      - SECRET_KEY=${PROD_SECRET_KEY:-change-this-prod-secret-key-at-least-32-chars}
     ports: []
     depends_on:
       postgres:
@@ -72,9 +72,9 @@ services:
       - ../.env
     environment:
       - ENV=production
-      - DATABASE_URL=${PROD_DATABASE_URL}
-      - REDIS_URL=${PROD_REDIS_URL}
-      - SECRET_KEY=${PROD_SECRET_KEY}
+      - DATABASE_URL=${PROD_DATABASE_URL:-postgresql+asyncpg://instantboard:prodpass123@postgres:5432/instantboard}
+      - REDIS_URL=${PROD_REDIS_URL:-redis://:prodredis123@redis:6379/0}
+      - SECRET_KEY=${PROD_SECRET_KEY:-change-this-prod-secret-key-at-least-32-chars}
     depends_on:
       postgres:
         condition: service_healthy
@@ -102,6 +102,7 @@ services:
       context: ../frontend
       dockerfile: Dockerfile
       target: prod
+    command: nginx -g "daemon off;"
     volumes:
       - frontend_static:/usr/share/nginx/html
     deploy:
@@ -117,7 +118,7 @@ services:
     environment:
       POSTGRES_DB: ${PROD_POSTGRES_DB:-instantboard}
       POSTGRES_USER: ${PROD_POSTGRES_USER:-instantboard}
-      POSTGRES_PASSWORD: ${PROD_DB_PASSWORD}
+      POSTGRES_PASSWORD: ${PROD_DB_PASSWORD:-prodpass123}
     ports: []
     volumes:
       - postgres_prod_data:/var/lib/postgresql/data
@@ -143,9 +144,9 @@ services:
     volumes:
       - redis_prod_data:/data
       - ./redis/redis.conf:/usr/local/etc/redis/redis.conf
-    command: redis-server /usr/local/etc/redis/redis.conf --appendonly yes --requirepass ${PROD_REDIS_PASSWORD}
+    command: redis-server /usr/local/etc/redis/redis.conf --appendonly yes --requirepass ${PROD_REDIS_PASSWORD:-prodredis123}
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${PROD_REDIS_PASSWORD}", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${PROD_REDIS_PASSWORD:-prodredis123}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -164,7 +165,7 @@ services:
     ports: []
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${PROD_MONGO_USER:-instantboard}
-      MONGO_INITDB_ROOT_PASSWORD: ${PROD_MONGO_PASSWORD}
+      MONGO_INITDB_ROOT_PASSWORD: ${PROD_MONGO_PASSWORD:-prodmongo123}
     volumes:
       - mongodb_prod_data:/data/db
     profiles:

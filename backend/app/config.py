@@ -1,5 +1,25 @@
-from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+import json
+from typing import Annotated
+
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+
+def _parse_list_str(v: object) -> list[str]:
+    if isinstance(v, list):
+        return v
+    if v is None or (isinstance(v, str) and v.strip() == ""):
+        return []
+    if isinstance(v, str):
+        stripped = v.strip()
+        try:
+            parsed = json.loads(stripped)
+            if isinstance(parsed, list):
+                return [str(item) for item in parsed]
+        except (json.JSONDecodeError, ValueError):
+            pass
+        return [item.strip() for item in stripped.split(",") if item.strip()]
+    return v
 
 
 class Settings(BaseSettings):
@@ -63,13 +83,18 @@ class Settings(BaseSettings):
     yahoo_finance_api_key: str | None = Field(default=None, alias="YAHOO_FINANCE_API_KEY")
     alpha_vantage_api_key: str | None = Field(default=None, alias="ALPHA_VANTAGE_API_KEY")
     finnhub_api_key: str = Field(default="", alias="FINNHUB_API_KEY")
-    finnhub_api_keys: list[str] = Field(default=[], alias="FINNHUB_API_KEYS")
+    finnhub_api_keys: Annotated[list[str], NoDecode] = Field(default=[], alias="FINNHUB_API_KEYS")
 
     # CORS
-    cors_origins: list[str] = Field(
+    cors_origins: Annotated[list[str], NoDecode] = Field(
         default=["http://localhost:3000", "http://localhost:8000"],
         alias="CORS_ORIGINS",
     )
+
+    @field_validator("finnhub_api_keys", "cors_origins", mode="before")
+    @classmethod
+    def parse_list_env_var(cls, v: object) -> list[str]:
+        return _parse_list_str(v)
 
     # SSE
     sse_heartbeat_interval: int = Field(default=30, alias="SSE_HEARTBEAT_INTERVAL")

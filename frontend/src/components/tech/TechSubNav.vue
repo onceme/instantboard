@@ -39,20 +39,35 @@ function selectSort(sort: TechSort) {
 
 <template>
   <div class="tech-sub-nav">
-    <div v-if="isMobile" class="sub-nav-mobile">
+    <div
+      v-if="isMobile"
+      class="sub-nav-mobile"
+    >
       <div class="mobile-selectors">
-        <button class="dropdown-trigger" @click="domainDropdownOpen = !domainDropdownOpen">
-          <span class="domain-indicator" :style="{ backgroundColor: DOMAIN_CONFIG[techStore.currentDomain]?.color || 'var(--accent)' }" />
+        <button
+          class="dropdown-trigger"
+          @click="domainDropdownOpen = !domainDropdownOpen"
+        >
+          <span
+            class="domain-indicator"
+            :style="{ backgroundColor: DOMAIN_CONFIG[techStore.currentDomain]?.color || 'var(--accent)' }"
+          />
           <span>{{ domainButtons.find(d => d.key === techStore.currentDomain)?.label }}</span>
           <ChevronDown :size="16" />
         </button>
-        <button class="dropdown-trigger" @click="sortDropdownOpen = !sortDropdownOpen">
+        <button
+          class="dropdown-trigger"
+          @click="sortDropdownOpen = !sortDropdownOpen"
+        >
           <span>{{ sortButtons.find(s => s.key === techStore.currentSort)?.label }}</span>
           <ChevronDown :size="16" />
         </button>
       </div>
       <Transition name="fade">
-        <div v-if="domainDropdownOpen" class="dropdown-menu">
+        <div
+          v-if="domainDropdownOpen"
+          class="dropdown-menu"
+        >
           <button
             v-for="item in domainButtons"
             :key="item.key"
@@ -60,13 +75,20 @@ function selectSort(sort: TechSort) {
             :class="{ active: techStore.currentDomain === item.key }"
             @click="selectDomain(item.key as TechDomain)"
           >
-            <span v-if="item.color" class="domain-dot" :style="{ backgroundColor: item.color }" />
+            <span
+              v-if="item.color"
+              class="domain-dot"
+              :style="{ backgroundColor: item.color }"
+            />
             {{ item.label }}
           </button>
         </div>
       </Transition>
       <Transition name="fade">
-        <div v-if="sortDropdownOpen" class="dropdown-menu">
+        <div
+          v-if="sortDropdownOpen"
+          class="dropdown-menu"
+        >
           <button
             v-for="item in sortButtons"
             :key="item.key"
@@ -80,7 +102,10 @@ function selectSort(sort: TechSort) {
       </Transition>
     </div>
 
-    <div v-else class="sub-nav-desktop">
+    <div
+      v-else
+      class="sub-nav-desktop"
+    >
       <div class="domain-group">
         <button
           v-for="item in domainButtons"
@@ -89,7 +114,11 @@ function selectSort(sort: TechSort) {
           :class="{ active: techStore.currentDomain === item.key }"
           @click="selectDomain(item.key as TechDomain)"
         >
-          <span v-if="item.color" class="domain-indicator" :style="{ backgroundColor: item.color }" />
+          <span
+            v-if="item.color"
+            class="domain-indicator"
+            :style="{ backgroundColor: item.color }"
+          />
           {{ item.label }}
         </button>
       </div>

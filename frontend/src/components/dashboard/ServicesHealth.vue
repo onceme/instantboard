@@ -22,20 +22,33 @@ function statusColor(status: string): string {
 
 <template>
   <div class="services-health">
-    <h3 class="health-title">服务健康</h3>
+    <h3 class="health-title">
+      服务健康
+    </h3>
 
     <div class="services-grid">
-      <div v-for="service in services" :key="service.service" class="service-card card">
+      <div
+        v-for="service in services"
+        :key="service.service"
+        class="service-card card"
+      >
         <div class="service-header">
           <span class="service-name">{{ service.service }}</span>
-          <component :is="statusIcon(service.status)" :size="16" :style="{ color: statusColor(service.status) }" />
+          <component
+            :is="statusIcon(service.status)"
+            :size="16"
+            :style="{ color: statusColor(service.status) }"
+          />
         </div>
         <div class="service-details">
           <div class="detail-item">
             <span class="detail-label">响应时间</span>
             <span class="detail-value">{{ service.response_time_ms }}ms</span>
           </div>
-          <div class="detail-item" v-if="service.connection_count">
+          <div
+            v-if="service.connection_count"
+            class="detail-item"
+          >
             <span class="detail-label">连接数</span>
             <span class="detail-value">{{ service.connection_count }}</span>
           </div>

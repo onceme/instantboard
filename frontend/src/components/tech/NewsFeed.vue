@@ -30,7 +30,10 @@ const filteredItems = computed(() => {
 </script>
 
 <template>
-  <div class="news-feed" ref="containerRef">
+  <div
+    ref="containerRef"
+    class="news-feed"
+  >
     <EmptyState
       v-if="filteredItems.length === 0 && !techStore.isLoading"
       title="暂无新闻"
@@ -39,12 +42,19 @@ const filteredItems = computed(() => {
     />
 
     <div class="feed-list">
-      <NewsCard v-for="item in filteredItems" :key="item.id" :item="item" />
+      <NewsCard
+        v-for="item in filteredItems"
+        :key="item.id"
+        :item="item"
+      />
     </div>
 
     <LoadingSpinner v-if="isLoading || techStore.isLoading" />
 
-    <div v-if="filteredItems.length > 0 && techStore.currentPage >= techStore.totalPages" class="feed-end">
+    <div
+      v-if="filteredItems.length > 0 && techStore.currentPage >= techStore.totalPages"
+      class="feed-end"
+    >
       已显示全部内容
     </div>
   </div>

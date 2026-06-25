@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
-import { Sun, Moon, Menu, Wifi, WifiOff } from 'lucide-vue-next'
+import { Menu, Wifi, WifiOff } from 'lucide-vue-next'
 import { useAuthStore } from '@/stores/auth'
 import { useFinanceStore } from '@/stores/finance'
 import { useTechStore } from '@/stores/tech'
@@ -51,22 +51,38 @@ const userName = computed(() => authStore.user?.name || '用户')
 
 <template>
   <header class="app-header">
-    <button class="hamburger-btn" @click="emit('toggleSidebar')">
+    <button
+      class="hamburger-btn"
+      @click="emit('toggleSidebar')"
+    >
       <Menu :size="20" />
     </button>
 
-    <h1 class="page-title">{{ pageTitle }}</h1>
+    <h1 class="page-title">
+      {{ pageTitle }}
+    </h1>
 
     <div class="header-actions">
-      <div class="sse-indicator" :class="sseColorClass">
-        <Wifi v-if="sseState === SSEConnectionState.CONNECTED" :size="16" />
-        <WifiOff v-else :size="16" />
+      <div
+        class="sse-indicator"
+        :class="sseColorClass"
+      >
+        <Wifi
+          v-if="sseState === SSEConnectionState.CONNECTED"
+          :size="16"
+        />
+        <WifiOff
+          v-else
+          :size="16"
+        />
       </div>
 
       <ThemeToggle />
 
       <div class="user-menu">
-        <div class="user-avatar">{{ userName.charAt(0) }}</div>
+        <div class="user-avatar">
+          {{ userName.charAt(0) }}
+        </div>
       </div>
     </div>
   </header>

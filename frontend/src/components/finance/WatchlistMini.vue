@@ -22,27 +22,51 @@ function changeClass(changePercent: number): string {
 <template>
   <div class="watchlist-mini">
     <div class="mini-header">
-      <h3 class="mini-title">自选列表</h3>
+      <h3 class="mini-title">
+        自选列表
+      </h3>
     </div>
 
-    <div v-if="items.length === 0" class="mini-empty">
-      <p class="empty-text">添加自选</p>
+    <div
+      v-if="items.length === 0"
+      class="mini-empty"
+    >
+      <p class="empty-text">
+        添加自选
+      </p>
     </div>
 
-    <div v-else class="mini-list">
-      <div v-for="item in items" :key="item.id" class="mini-item">
-        <div class="item-symbol">{{ item.symbol }}</div>
-        <div class="item-name text-truncate">{{ item.name || item.symbol }}</div>
+    <div
+      v-else
+      class="mini-list"
+    >
+      <div
+        v-for="item in items"
+        :key="item.id"
+        class="mini-item"
+      >
+        <div class="item-symbol">
+          {{ item.symbol }}
+        </div>
+        <div class="item-name text-truncate">
+          {{ item.name || item.symbol }}
+        </div>
         <div class="item-price">
           {{ item.quote ? formatCurrency(item.quote.current_price) : '--' }}
         </div>
-        <div class="item-change" :class="item.quote ? changeClass(item.quote.change_percent) : ''">
+        <div
+          class="item-change"
+          :class="item.quote ? changeClass(item.quote.change_percent) : ''"
+        >
           {{ item.quote ? formatPercent(item.quote.change_percent) : '--' }}
         </div>
       </div>
     </div>
 
-    <button class="view-all-btn" @click="goToWatchlist">
+    <button
+      class="view-all-btn"
+      @click="goToWatchlist"
+    >
       查看全部
     </button>
   </div>

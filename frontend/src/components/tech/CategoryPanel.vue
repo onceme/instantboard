@@ -42,14 +42,28 @@ const domainColorVar = computed(() => `var(--domain-${props.domain})`)
 
 <template>
   <div class="category-panel">
-    <div class="domain-bar" :style="{ backgroundColor: domainColorVar }" />
+    <div
+      class="domain-bar"
+      :style="{ backgroundColor: domainColorVar }"
+    />
 
     <div class="panel-header">
       <span class="domain-icon">{{ config?.icon }}</span>
-      <h3 class="domain-title">{{ config?.label }}</h3>
-      <button class="expand-btn" @click="toggleExpand">
-        <ChevronUp v-if="expanded" :size="16" />
-        <ChevronDown v-else :size="16" />
+      <h3 class="domain-title">
+        {{ config?.label }}
+      </h3>
+      <button
+        class="expand-btn"
+        @click="toggleExpand"
+      >
+        <ChevronUp
+          v-if="expanded"
+          :size="16"
+        />
+        <ChevronDown
+          v-else
+          :size="16"
+        />
       </button>
     </div>
 
@@ -66,15 +80,31 @@ const domainColorVar = computed(() => `var(--domain-${props.domain})`)
       </button>
     </div>
 
-    <div class="news-list" v-if="domainNews.length > 0">
-      <NewsCard v-for="item in domainNews" :key="item.id" :item="item" />
+    <div
+      v-if="domainNews.length > 0"
+      class="news-list"
+    >
+      <NewsCard
+        v-for="item in domainNews"
+        :key="item.id"
+        :item="item"
+      />
     </div>
 
-    <div v-else class="no-news">
-      <p class="no-news-text">暂无新闻</p>
+    <div
+      v-else
+      class="no-news"
+    >
+      <p class="no-news-text">
+        暂无新闻
+      </p>
     </div>
 
-    <button v-if="domainNews.length > 0" class="more-btn" @click="techStore.setDomain(props.domain as any)">
+    <button
+      v-if="domainNews.length > 0"
+      class="more-btn"
+      @click="techStore.setDomain(props.domain as any)"
+    >
       查看更多
     </button>
   </div>

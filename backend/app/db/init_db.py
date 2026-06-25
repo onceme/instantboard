@@ -1,7 +1,11 @@
 import logging
 
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.pool import NullPool
+
 from app.config import settings
-from app.db.session import async_session_factory, engine
+from app.db.session import async_session_factory
 from app.models.base import Base
 from app.models.category import Category
 from app.models.source import Source, SourceHealth
@@ -11,9 +15,16 @@ logger = logging.getLogger(__name__)
 
 
 async def create_tables():
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    logger.info("All database tables created")
+    _engine = create_async_engine(
+        settings.database_url,
+        poolclass=NullPool,
+    )
+    try:
+        async with _engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        logger.info("All database tables created")
+    finally:
+        await _engine.dispose()
 
 
 FINANCE_SOURCES = [
@@ -275,7 +286,11 @@ TECH_CROSS_DOMAIN_SOURCES = [
 
 async def seed_default_data():
     async with async_session_factory() as session:
-        from sqlalchemy import select
+        tenant_count = (await session.execute(select(func.count()).select_from(Tenant))).scalar() or 0
+        if tenant_count > 0:
+            logger.info(f"Tenants already exist (count={tenant_count}), skipping seed data")
+            await session.close()
+            return
 
         result = await session.execute(select(Tenant).where(Tenant.slug == "system"))
         system_tenant = result.scalar_one_or_none()
@@ -435,9 +450,6 @@ async def seed_default_data():
 
         await session.commit()
         logger.info("Default data seeded successfully")
-
-
-from sqlalchemy import func  # noqa: E402
 
 
 async def init_db():

@@ -45,8 +45,15 @@ function statusColor(): string {
 
 <template>
   <div class="health-panel">
-    <div class="overall-status" :style="{ '--status-color': statusColor() }">
-      <component :is="statusIcon()" :size="28" :style="{ color: statusColor() }" />
+    <div
+      class="overall-status"
+      :style="{ '--status-color': statusColor() }"
+    >
+      <component
+        :is="statusIcon()"
+        :size="28"
+        :style="{ color: statusColor() }"
+      />
       <span class="overall-label">{{ statusLabel }}</span>
     </div>
 
@@ -65,7 +72,10 @@ function statusColor(): string {
       </div>
     </div>
 
-    <div class="status-light" :style="{ backgroundColor: statusColor() }" />
+    <div
+      class="status-light"
+      :style="{ backgroundColor: statusColor() }"
+    />
   </div>
 </template>
 

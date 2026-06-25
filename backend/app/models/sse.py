@@ -14,7 +14,7 @@ class SSEConnection(Base):
         UUID(as_uuid=True),
         primary_key=True,
         default=uuid.uuid4,
-        server_default="gen_random_uuid()",
+        server_default=text("gen_random_uuid()"),
     )
     tenant_id = Column(
         UUID(as_uuid=True),
@@ -26,7 +26,7 @@ class SSEConnection(Base):
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
     )
-    channels = Column(JSONB, nullable=False, default=list, server_default="'[]'")
+    channels = Column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
     connected_at = Column(
         DateTime(timezone=True),
         nullable=False,
@@ -46,5 +46,5 @@ class SSEConnection(Base):
         ),
     )
 
-    tenant = relationship("Tenant")
-    user = relationship("User", back_populates="sse_connections")
+    tenant = relationship("Tenant", lazy="selectin")
+    user = relationship("User", back_populates="sse_connections", lazy="selectin")

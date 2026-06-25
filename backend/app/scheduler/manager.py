@@ -5,6 +5,7 @@ from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from sqlalchemy.orm import selectinload
 
 from app.core.sse_router import event_router
 from app.models.source import Source, SourceHealth
@@ -494,7 +495,5 @@ class AsyncSchedulerManager:
         except Exception as e:
             logger.warning(f"Failed to update health for source {source.id}: {e}")
 
-
-from sqlalchemy.orm import selectinload  # noqa: E402
 
 scheduler_manager = AsyncSchedulerManager()

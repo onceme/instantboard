@@ -20,7 +20,9 @@ const diskPercent = computed(() => {
 
 <template>
   <div class="system-status">
-    <h3 class="status-title">系统状态</h3>
+    <h3 class="status-title">
+      系统状态
+    </h3>
 
     <div class="status-item">
       <div class="status-label-row">
@@ -28,7 +30,10 @@ const diskPercent = computed(() => {
         <span class="status-value">{{ formatPercent(cpuPercent) }}</span>
       </div>
       <div class="progress-bar">
-        <div class="progress-fill" :style="{ width: cpuPercent + '%' }" />
+        <div
+          class="progress-fill"
+          :style="{ width: cpuPercent + '%' }"
+        />
       </div>
     </div>
 
@@ -38,7 +43,10 @@ const diskPercent = computed(() => {
         <span class="status-value">{{ formatPercent(memoryPercent) }}</span>
       </div>
       <div class="progress-bar">
-        <div class="progress-fill" :style="{ width: memoryPercent + '%' }" />
+        <div
+          class="progress-fill"
+          :style="{ width: memoryPercent + '%' }"
+        />
       </div>
     </div>
 
@@ -48,11 +56,17 @@ const diskPercent = computed(() => {
         <span class="status-value">{{ formatPercent(diskPercent) }}</span>
       </div>
       <div class="progress-bar">
-        <div class="progress-fill" :style="{ width: diskPercent + '%' }" />
+        <div
+          class="progress-fill"
+          :style="{ width: diskPercent + '%' }"
+        />
       </div>
     </div>
 
-    <div class="network-row" v-if="systemInfo">
+    <div
+      v-if="systemInfo"
+      class="network-row"
+    >
       <div class="network-item">
         <span class="network-label">发送</span>
         <span class="network-value">{{ systemInfo.network_out_kbps ? `${systemInfo.network_out_kbps} KB/s` : '--' }}</span>
@@ -63,7 +77,10 @@ const diskPercent = computed(() => {
       </div>
     </div>
 
-    <div class="system-meta" v-if="systemInfo">
+    <div
+      v-if="systemInfo"
+      class="system-meta"
+    >
       <div class="meta-item">
         <span class="meta-label">API版本</span>
         <span class="meta-value">{{ systemInfo.api_version || systemInfo.version }}</span>

@@ -1,9 +1,8 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import type { User, AuthTokens, UserPreferences } from '@/types'
+import type { User, AuthTokens } from '@/types'
 import { apiPost, apiGet, apiDelete } from '@/utils/api'
-import { SSEConnection, SSEConnectionState } from '@/utils/sse'
-import { DEFAULT_THEME, DEFAULT_COLOR_SCHEME, SSO_PROVIDERS } from '@/utils/constants'
+import { DEFAULT_THEME, DEFAULT_COLOR_SCHEME } from '@/utils/constants'
 
 export const useAuthStore = defineStore('auth', () => {
   const user = ref<User | null>(null)

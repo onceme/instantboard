@@ -12,7 +12,7 @@ from app.config import settings
 from app.core.middleware import setup_middlewares
 from app.core.redis import close_redis, get_redis_client
 from app.core.sse_router import event_router
-from app.db.init_db import init_db
+from app.db.init_db import create_tables
 
 logger = logging.getLogger("instantboard")
 logging.basicConfig(
@@ -33,9 +33,9 @@ async def lifespan(app: FastAPI):
 
     logger.info("InstantBoard starting up...")
 
-    logger.info("Initializing database...")
-    await init_db()
-    logger.info("Database initialized")
+    logger.info("Ensuring database tables exist...")
+    await create_tables()
+    logger.info("Database tables ready")
 
     logger.info("Connecting to Redis...")
     redis_client = await get_redis_client()
@@ -53,6 +53,7 @@ async def lifespan(app: FastAPI):
 
     if settings.scheduler_enabled:
         from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
 
         from app.db.session import async_session_factory
         from app.models.source import Source
@@ -62,7 +63,9 @@ async def lifespan(app: FastAPI):
         logger.info("Scheduler started")
 
         async with async_session_factory() as session:
-            result = await session.execute(select(Source).where(Source.is_active))
+            result = await session.execute(
+                select(Source).where(Source.is_active).options(selectinload(Source.category))
+            )
             active_sources = result.scalars().all()
             await scheduler_manager.schedule_all_active_sources(active_sources)
             logger.info(f"Scheduled {len(active_sources)} active data sources")

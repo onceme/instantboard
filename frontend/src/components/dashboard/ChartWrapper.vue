@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
+import { ref, watch, computed } from 'vue'
 import { Bar, Line, Pie, Doughnut } from 'vue-chartjs'
 import {
   Chart as ChartJS,
@@ -64,7 +64,7 @@ watch(() => props.options, (newOptions) => {
 
 function pushDataPoint(point: Record<string, unknown>) {
   if (!chartData.value || !chartRef.value) return
-  const datasets = chartData.value.datasets as any[]
+  const datasets = chartData.value.datasets as Array<Record<string, unknown>>
   if (datasets && datasets[0]) {
     datasets[0].data.push(point)
     if (datasets[0].data.length > 60) {
@@ -84,10 +84,30 @@ defineExpose({ pushDataPoint })
 
 <template>
   <div class="chart-wrapper">
-    <Bar v-if="type === 'bar'" ref="chartRef" :data="chartData" :options="themeAwareOptions" />
-    <Line v-if="type === 'line'" ref="chartRef" :data="chartData" :options="themeAwareOptions" />
-    <Pie v-if="type === 'pie'" ref="chartRef" :data="chartData" :options="themeAwareOptions" />
-    <Doughnut v-if="type === 'doughnut'" ref="chartRef" :data="chartData" :options="themeAwareOptions" />
+    <Bar
+      v-if="type === 'bar'"
+      ref="chartRef"
+      :data="chartData"
+      :options="themeAwareOptions"
+    />
+    <Line
+      v-if="type === 'line'"
+      ref="chartRef"
+      :data="chartData"
+      :options="themeAwareOptions"
+    />
+    <Pie
+      v-if="type === 'pie'"
+      ref="chartRef"
+      :data="chartData"
+      :options="themeAwareOptions"
+    />
+    <Doughnut
+      v-if="type === 'doughnut'"
+      ref="chartRef"
+      :data="chartData"
+      :options="themeAwareOptions"
+    />
   </div>
 </template>
 

@@ -21,11 +21,6 @@ const allTags = computed(() => {
   return tags
 })
 
-const activeTags = computed(() => {
-  if (!techStore.currentSubcategory && techStore.currentDomain === 'all') return []
-  return [techStore.currentSubcategory || techStore.currentDomain]
-})
-
 function toggleTag(tag: string) {
   if (techStore.currentSubcategory === tag) {
     techStore.setSubcategory('')
@@ -49,7 +44,12 @@ function tagColor(domain: string): string {
 
 <template>
   <div class="topic-filter">
-    <button class="filter-btn clear-btn" @click="clearAll">全部</button>
+    <button
+      class="filter-btn clear-btn"
+      @click="clearAll"
+    >
+      全部
+    </button>
 
     <div class="filter-scroll">
       <button

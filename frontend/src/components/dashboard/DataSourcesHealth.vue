@@ -30,9 +30,14 @@ function toggleExpand(id: string) {
 
 <template>
   <div class="data-sources-health">
-    <h3 class="health-title">数据源健康</h3>
+    <h3 class="health-title">
+      数据源健康
+    </h3>
 
-    <div v-if="summary" class="summary-cards">
+    <div
+      v-if="summary"
+      class="summary-cards"
+    >
       <div class="summary-card healthy">
         <span class="summary-count">{{ summary.healthy }}</span>
         <span class="summary-label">Healthy</span>
@@ -47,7 +52,10 @@ function toggleExpand(id: string) {
       </div>
     </div>
 
-    <div class="sources-table" v-if="summary">
+    <div
+      v-if="summary"
+      class="sources-table"
+    >
       <table>
         <thead>
           <tr>
@@ -67,12 +75,19 @@ function toggleExpand(id: string) {
             @click="toggleExpand(source.id)"
           >
             <td class="cell-name">
-              <component :is="statusIcon(source.status)" :size="14" :style="{ color: statusColor(source.status) }" />
+              <component
+                :is="statusIcon(source.status)"
+                :size="14"
+                :style="{ color: statusColor(source.status) }"
+              />
               {{ source.name }}
             </td>
             <td>{{ source.id }}</td>
             <td>
-              <span class="status-badge" :style="{ backgroundColor: statusColor(source.status), color: 'white' }">
+              <span
+                class="status-badge"
+                :style="{ backgroundColor: statusColor(source.status), color: 'white' }"
+              >
                 {{ source.status }}
               </span>
             </td>

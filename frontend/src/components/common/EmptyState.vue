@@ -8,10 +8,6 @@ const props = defineProps<{
   icon?: string
 }>()
 
-const emit = defineEmits<{
-  action: []
-}>()
-
 const iconComponent = computed(() => {
   const iconMap: Record<string, typeof Inbox> = {
     inbox: Inbox,
@@ -26,9 +22,20 @@ const iconComponent = computed(() => {
 
 <template>
   <div class="empty-state">
-    <component :is="iconComponent" :size="48" class="empty-icon" />
-    <h3 class="empty-title">{{ title }}</h3>
-    <p v-if="description" class="empty-desc">{{ description }}</p>
+    <component
+      :is="iconComponent"
+      :size="48"
+      class="empty-icon"
+    />
+    <h3 class="empty-title">
+      {{ title }}
+    </h3>
+    <p
+      v-if="description"
+      class="empty-desc"
+    >
+      {{ description }}
+    </p>
   </div>
 </template>
 

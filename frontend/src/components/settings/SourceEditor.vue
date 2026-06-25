@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref } from 'vue'
 import type { Source, Category } from '@/types'
-import { apiGet, apiPost, apiPut, apiDelete } from '@/utils/api'
+import { apiGet, apiPost, apiPut } from '@/utils/api'
 import { Plus, ToggleLeft, ToggleRight } from 'lucide-vue-next'
 import EmptyState from '@/components/common/EmptyState.vue'
 
@@ -53,11 +53,6 @@ async function toggleSource(source: Source) {
   await fetchSources()
 }
 
-async function deleteSource(id: string) {
-  await apiDelete(`/sources/${id}`)
-  await fetchSources()
-}
-
 function healthStatusClass(status: string): string {
   if (status === 'healthy') return 'status-healthy'
   if (status === 'degraded') return 'status-degraded'
@@ -76,26 +71,60 @@ fetchCategories()
 <template>
   <div class="source-editor">
     <div class="add-section">
-      <button class="add-btn" @click="showAddForm = !showAddForm">
+      <button
+        class="add-btn"
+        @click="showAddForm = !showAddForm"
+      >
         <Plus :size="16" />
         添加数据源
       </button>
     </div>
 
-    <div v-if="showAddForm" class="add-form card">
-      <input v-model="newSource.name" type="text" placeholder="数据源名称" />
+    <div
+      v-if="showAddForm"
+      class="add-form card"
+    >
+      <input
+        v-model="newSource.name"
+        type="text"
+        placeholder="数据源名称"
+      >
       <select v-model="newSource.category_id">
-        <option value="">选择分类</option>
-        <option v-for="cat in categories" :key="cat.id" :value="cat.id">{{ cat.name }}</option>
+        <option value="">
+          选择分类
+        </option>
+        <option
+          v-for="cat in categories"
+          :key="cat.id"
+          :value="cat.id"
+        >
+          {{ cat.name }}
+        </option>
       </select>
       <select v-model="newSource.source_type">
-        <option value="rss">RSS</option>
-        <option value="api">API</option>
-        <option value="web_scrape">Web抓取</option>
-        <option value="social">社交媒体</option>
+        <option value="rss">
+          RSS
+        </option>
+        <option value="api">
+          API
+        </option>
+        <option value="web_scrape">
+          Web抓取
+        </option>
+        <option value="social">
+          社交媒体
+        </option>
       </select>
-      <input v-model="newSource.url" type="text" placeholder="URL" />
-      <button class="submit-btn" @click="addSource" :disabled="!newSource.name.trim() || !newSource.url.trim()">
+      <input
+        v-model="newSource.url"
+        type="text"
+        placeholder="URL"
+      >
+      <button
+        class="submit-btn"
+        :disabled="!newSource.name.trim() || !newSource.url.trim()"
+        @click="addSource"
+      >
         确认添加
       </button>
     </div>
@@ -107,20 +136,41 @@ fetchCategories()
       icon="link"
     />
 
-    <div v-else class="source-list">
-      <div v-for="source in sources" :key="source.id" class="source-item">
+    <div
+      v-else
+      class="source-list"
+    >
+      <div
+        v-for="source in sources"
+        :key="source.id"
+        class="source-item"
+      >
         <div class="source-main">
           <span class="source-name">{{ source.name }}</span>
           <span class="source-type">{{ source.source_type }}</span>
           <span class="source-category">{{ categoryName(source.category_id) }}</span>
         </div>
         <div class="source-actions">
-          <span :class="healthStatusClass(source.health_status)" class="health-badge">
+          <span
+            :class="healthStatusClass(source.health_status)"
+            class="health-badge"
+          >
             {{ source.health_status }}
           </span>
-          <button class="toggle-btn" @click="toggleSource(source)">
-            <ToggleRight v-if="source.is_active" :size="18" :style="{ color: 'var(--success)' }" />
-            <ToggleLeft v-else :size="18" :style="{ color: 'var(--text-muted)' }" />
+          <button
+            class="toggle-btn"
+            @click="toggleSource(source)"
+          >
+            <ToggleRight
+              v-if="source.is_active"
+              :size="18"
+              :style="{ color: 'var(--success)' }"
+            />
+            <ToggleLeft
+              v-else
+              :size="18"
+              :style="{ color: 'var(--text-muted)' }"
+            />
           </button>
         </div>
       </div>

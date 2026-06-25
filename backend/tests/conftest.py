@@ -1,4 +1,5 @@
 import asyncio
+import os
 from typing import AsyncGenerator
 
 import pytest
@@ -12,12 +13,17 @@ from app.main import app
 from app.models.base import Base
 from app.config import settings
 
-TEST_DATABASE_URL = "sqlite+aiosqlite:///./test.db"
+TEST_DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite+aiosqlite:///./test.db")
+
+_is_sqlite = TEST_DATABASE_URL.startswith("sqlite")
+_engine_kwargs = {
+    "connect_args": {"check_same_thread": False},
+    "poolclass": StaticPool,
+} if _is_sqlite else {}
 
 test_engine = create_async_engine(
     TEST_DATABASE_URL,
-    connect_args={"check_same_thread": False},
-    poolclass=StaticPool,
+    **_engine_kwargs,
 )
 
 test_session_factory = async_sessionmaker(

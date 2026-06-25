@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useAuth } from '@/composables/useAuth'
-import { ref, computed } from 'vue'
+import { ref } from 'vue'
 import { SSO_PROVIDERS } from '@/utils/constants'
 import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
 
@@ -29,9 +29,15 @@ const providerIcons: Record<string, string> = {
   <div class="login-view">
     <div class="login-card">
       <div class="login-header">
-        <div class="login-logo">IB</div>
-        <h1 class="login-title">InstantBoard</h1>
-        <p class="login-desc">实时信息聚合面板</p>
+        <div class="login-logo">
+          IB
+        </div>
+        <h1 class="login-title">
+          InstantBoard
+        </h1>
+        <p class="login-desc">
+          实时信息聚合面板
+        </p>
       </div>
 
       <div class="sso-buttons">

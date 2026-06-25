@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, CheckConstraint, Column, Integer, String
+from sqlalchemy import Boolean, CheckConstraint, Column, Integer, String, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 
@@ -16,7 +16,7 @@ class Tenant(BaseModel):
         default="free",
         server_default="free",
     )
-    settings = Column(JSONB, nullable=False, default=dict, server_default="'{}'")
+    settings = Column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
     max_users = Column(Integer, nullable=False, default=5, server_default="5")
     max_categories = Column(Integer, nullable=False, default=10, server_default="10")
     max_sources = Column(Integer, nullable=False, default=50, server_default="50")
@@ -29,6 +29,6 @@ class Tenant(BaseModel):
         ),
     )
 
-    users = relationship("User", back_populates="tenant", cascade="all, delete-orphan")
-    categories = relationship("Category", back_populates="tenant", cascade="all, delete-orphan")
-    sources = relationship("Source", back_populates="tenant", cascade="all, delete-orphan")
+    users = relationship("User", back_populates="tenant", cascade="all, delete-orphan", lazy="noload")
+    categories = relationship("Category", back_populates="tenant", cascade="all, delete-orphan", lazy="noload")
+    sources = relationship("Source", back_populates="tenant", cascade="all, delete-orphan", lazy="noload")

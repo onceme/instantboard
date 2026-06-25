@@ -18,12 +18,6 @@ const domainColorVar = computed(() => {
   return 'var(--accent)'
 })
 
-const tagLabel = computed(() => {
-  for (const [, subcats] of Object.entries(DOMAIN_CONFIG)) {
-    // check subcategories
-  }
-  return props.tag
-})
 </script>
 
 <template>

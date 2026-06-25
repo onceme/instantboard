@@ -47,7 +47,9 @@ const channelChartOptions = computed(() => ({
 
 <template>
   <div class="sse-stats">
-    <h3 class="stats-title">SSE连接统计</h3>
+    <h3 class="stats-title">
+      SSE连接统计
+    </h3>
 
     <div class="stats-grid">
       <div class="stat-card">
@@ -67,7 +69,10 @@ const channelChartOptions = computed(() => ({
       </div>
     </div>
 
-    <div v-if="channelChartData" class="chart-section">
+    <div
+      v-if="channelChartData"
+      class="chart-section"
+    >
       <ChartWrapper
         type="bar"
         :data="channelChartData"

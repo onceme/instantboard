@@ -48,23 +48,45 @@ async function refresh() {
 <template>
   <div class="market-indices">
     <div class="indices-header">
-      <h2 class="indices-title">市场指数</h2>
-      <button class="refresh-btn" @click="refresh" :disabled="refreshing">
-        <RefreshCw :size="16" :class="{ spinning: refreshing }" />
+      <h2 class="indices-title">
+        市场指数
+      </h2>
+      <button
+        class="refresh-btn"
+        :disabled="refreshing"
+        @click="refresh"
+      >
+        <RefreshCw
+          :size="16"
+          :class="{ spinning: refreshing }"
+        />
       </button>
     </div>
 
-    <div v-for="[groupKey, group] in Object.entries(groupedIndices)" :key="groupKey" class="region-group">
-      <h3 class="region-label">{{ MARKET_REGION_GROUPS[groupKey]?.label || groupKey }}</h3>
+    <div
+      v-for="[groupKey, group] in Object.entries(groupedIndices)"
+      :key="groupKey"
+      class="region-group"
+    >
+      <h3 class="region-label">
+        {{ MARKET_REGION_GROUPS[groupKey]?.label || groupKey }}
+      </h3>
       <div class="indices-list">
-        <div v-for="index in group" :key="index.symbol" class="index-row">
+        <div
+          v-for="index in group"
+          :key="index.symbol"
+          class="index-row"
+        >
           <div class="index-info">
             <span class="index-name">{{ index.name }}</span>
             <span class="index-status">{{ marketStatusLabel(index.market_status) }}</span>
           </div>
           <div class="index-data">
             <span class="index-value">{{ formatNumber(index.value, 2) }}</span>
-            <span :class="changeClass(index.change_percent)" class="index-change">
+            <span
+              :class="changeClass(index.change_percent)"
+              class="index-change"
+            >
               {{ formatPercent(index.change_percent) }}
             </span>
           </div>

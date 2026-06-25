@@ -41,23 +41,45 @@ async function refresh() {
 <template>
   <div class="commodities">
     <div class="commodities-header">
-      <h2 class="commodities-title">大宗商品</h2>
-      <button class="refresh-btn" @click="refresh" :disabled="refreshing">
-        <RefreshCw :size="16" :class="{ spinning: refreshing }" />
+      <h2 class="commodities-title">
+        大宗商品
+      </h2>
+      <button
+        class="refresh-btn"
+        :disabled="refreshing"
+        @click="refresh"
+      >
+        <RefreshCw
+          :size="16"
+          :class="{ spinning: refreshing }"
+        />
       </button>
     </div>
 
-    <div v-for="[groupKey, group] in Object.entries(groupedCommodities)" :key="groupKey" class="commodity-group">
-      <h3 class="group-label">{{ group.label }}</h3>
+    <div
+      v-for="[groupKey, group] in Object.entries(groupedCommodities)"
+      :key="groupKey"
+      class="commodity-group"
+    >
+      <h3 class="group-label">
+        {{ group.label }}
+      </h3>
       <div class="commodity-list">
-        <div v-for="item in group.items" :key="item.symbol" class="commodity-row">
+        <div
+          v-for="item in group.items"
+          :key="item.symbol"
+          class="commodity-row"
+        >
           <div class="commodity-info">
             <span class="commodity-name">{{ item.name }}</span>
             <span class="commodity-unit">{{ item.unit }}</span>
           </div>
           <div class="commodity-data">
             <span class="commodity-price">{{ formatCurrency(item.value) }}</span>
-            <span :class="changeClass(item.change_percent)" class="commodity-change">
+            <span
+              :class="changeClass(item.change_percent)"
+              class="commodity-change"
+            >
               {{ formatPercent(item.change_percent) }}
             </span>
           </div>

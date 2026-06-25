@@ -42,17 +42,23 @@ function changeClass(changePercent?: number): string {
 <template>
   <div class="search-symbols">
     <div class="search-box">
-      <Search :size="16" class="search-icon" />
+      <Search
+        :size="16"
+        class="search-icon"
+      />
       <input
         v-model="searchQuery"
         type="text"
         placeholder="搜索股票、基金、指数..."
         class="search-input"
         @input="onInput"
-      />
+      >
     </div>
 
-    <div v-if="financeStore.searchResults.length > 0 && !selectedSymbol" class="search-results">
+    <div
+      v-if="financeStore.searchResults.length > 0 && !selectedSymbol"
+      class="search-results"
+    >
       <div
         v-for="result in financeStore.searchResults"
         :key="result.symbol"
@@ -67,20 +73,32 @@ function changeClass(changePercent?: number): string {
           <span class="result-exchange">{{ result.exchange }}</span>
           <span class="result-type">{{ result.type }}</span>
         </div>
-        <div class="result-price" v-if="result.current_price">
+        <div
+          v-if="result.current_price"
+          class="result-price"
+        >
           <span class="price-value">{{ formatCurrency(result.current_price) }}</span>
-          <span :class="changeClass(result.change_percent)" class="price-change">
+          <span
+            :class="changeClass(result.change_percent)"
+            class="price-change"
+          >
             {{ result.change_percent ? formatPercent(result.change_percent) : '' }}
           </span>
         </div>
       </div>
     </div>
 
-    <div v-if="selectedQuote" class="selected-quote">
+    <div
+      v-if="selectedQuote"
+      class="selected-quote"
+    >
       <QuoteCard :quote="selectedQuote" />
     </div>
 
-    <div v-if="!searchQuery.trim() && !selectedSymbol" class="search-empty">
+    <div
+      v-if="!searchQuery.trim() && !selectedSymbol"
+      class="search-empty"
+    >
       输入关键词搜索股票、基金或指数
     </div>
   </div>

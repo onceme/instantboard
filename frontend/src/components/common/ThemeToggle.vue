@@ -6,9 +6,19 @@ const { theme, toggleTheme } = useTheme()
 </script>
 
 <template>
-  <button class="theme-toggle" @click="toggleTheme" :title="theme === 'dark' ? '切换亮色' : '切换暗色'">
-    <Sun v-if="theme === 'dark'" :size="18" />
-    <Moon v-else :size="18" />
+  <button
+    class="theme-toggle"
+    :title="theme === 'dark' ? '切换亮色' : '切换暗色'"
+    @click="toggleTheme"
+  >
+    <Sun
+      v-if="theme === 'dark'"
+      :size="18"
+    />
+    <Moon
+      v-else
+      :size="18"
+    />
   </button>
 </template>
 

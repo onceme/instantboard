@@ -4,6 +4,7 @@ import re
 from redis.asyncio import Redis
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import CategoryNotFound, DuplicateCategory, Forbidden, ValidationError
 from app.models.category import Category
@@ -318,7 +319,12 @@ class CategoryService:
         if category.tenant_id != tenant_id and category.tenant_id != SYSTEM_TENANT_ID:
             raise CategoryNotFound(message="Category not accessible for this tenant")
 
-        sources_stmt = select(Source).where(Source.category_id == category_id).order_by(Source.priority.asc())
+        sources_stmt = (
+            select(Source)
+            .where(Source.category_id == category_id)
+            .options(selectinload(Source.health))
+            .order_by(Source.priority.asc())
+        )
         sources = (await self.db.execute(sources_stmt)).scalars().all()
 
         source_list = []

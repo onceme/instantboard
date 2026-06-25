@@ -2,7 +2,7 @@
 import { XCircle, X } from 'lucide-vue-next'
 import { ref } from 'vue'
 
-const props = defineProps<{
+defineProps<{
   message: string
   code?: string
 }>()
@@ -16,13 +16,25 @@ function close() {
 
 <template>
   <Transition name="fade">
-    <div v-if="visible" class="error-alert">
-      <XCircle :size="16" class="alert-icon" />
+    <div
+      v-if="visible"
+      class="error-alert"
+    >
+      <XCircle
+        :size="16"
+        class="alert-icon"
+      />
       <div class="alert-content">
-        <span v-if="code" class="alert-code">{{ code }}</span>
+        <span
+          v-if="code"
+          class="alert-code"
+        >{{ code }}</span>
         <span class="alert-message">{{ message }}</span>
       </div>
-      <button class="alert-close" @click="close">
+      <button
+        class="alert-close"
+        @click="close"
+      >
         <X :size="14" />
       </button>
     </div>

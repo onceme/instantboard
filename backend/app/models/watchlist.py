@@ -15,7 +15,7 @@ class WatchlistItem(Base):
         UUID(as_uuid=True),
         primary_key=True,
         default=uuid.uuid4,
-        server_default="gen_random_uuid()",
+        server_default=text("gen_random_uuid()"),
     )
     tenant_id = Column(
         UUID(as_uuid=True),
@@ -47,6 +47,6 @@ class WatchlistItem(Base):
         Index("idx_watchlist_user", "user_id", "display_order"),
     )
 
-    tenant = relationship("Tenant")
-    user = relationship("User", back_populates="watchlist_items")
-    symbol = relationship("FinanceSymbol", back_populates="watchlist_items")
+    tenant = relationship("Tenant", lazy="selectin")
+    user = relationship("User", back_populates="watchlist_items", lazy="selectin")
+    symbol = relationship("FinanceSymbol", back_populates="watchlist_items", lazy="selectin")

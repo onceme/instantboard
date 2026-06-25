@@ -34,19 +34,37 @@ function switchToGridMode() {
     <TopicFilter />
 
     <div class="mode-switch">
-      <button class="mode-btn" :class="{ active: !isFeedMode }" @click="switchToGridMode">
+      <button
+        class="mode-btn"
+        :class="{ active: !isFeedMode }"
+        @click="switchToGridMode"
+      >
         面板模式
       </button>
-      <button class="mode-btn" :class="{ active: isFeedMode }" @click="switchToFeedMode">
+      <button
+        class="mode-btn"
+        :class="{ active: isFeedMode }"
+        @click="switchToFeedMode"
+      >
         合并流
       </button>
     </div>
 
-    <div v-if="!isFeedMode" class="category-grid">
-      <CategoryPanel v-for="domain in domains" :key="domain" :domain="domain" />
+    <div
+      v-if="!isFeedMode"
+      class="category-grid"
+    >
+      <CategoryPanel
+        v-for="domain in domains"
+        :key="domain"
+        :domain="domain"
+      />
     </div>
 
-    <div v-else class="feed-mode">
+    <div
+      v-else
+      class="feed-mode"
+    >
       <NewsFeed />
     </div>
   </div>

@@ -22,13 +22,22 @@ function toggleDropdown() {
 
 <template>
   <div class="finance-sub-nav">
-    <div v-if="isMobile" class="sub-nav-mobile">
-      <button class="dropdown-trigger" @click="toggleDropdown">
+    <div
+      v-if="isMobile"
+      class="sub-nav-mobile"
+    >
+      <button
+        class="dropdown-trigger"
+        @click="toggleDropdown"
+      >
         <span>{{ FINANCE_SUB_NAV_ITEMS.find(i => i.key === financeStore.currentPanel)?.label }}</span>
         <ChevronDown :size="16" />
       </button>
       <Transition name="fade">
-        <div v-if="dropdownOpen" class="dropdown-menu">
+        <div
+          v-if="dropdownOpen"
+          class="dropdown-menu"
+        >
           <button
             v-for="item in FINANCE_SUB_NAV_ITEMS"
             :key="item.key"
@@ -42,7 +51,10 @@ function toggleDropdown() {
       </Transition>
     </div>
 
-    <div v-else class="sub-nav-desktop">
+    <div
+      v-else
+      class="sub-nav-desktop"
+    >
       <button
         v-for="item in FINANCE_SUB_NAV_ITEMS"
         :key="item.key"

@@ -451,7 +451,7 @@ class SourceService:
         )
 
         if health.status != previous_status:
-            source_stmt = select(Source).where(Source.id == source_id)
+            source_stmt = select(Source).where(Source.id == source_id).options(selectinload(Source.category))
             source = (await self.db.execute(source_stmt)).scalar_one_or_none()
             category_slug = source.category.slug if source and source.category else "unknown"
             await redis_publish(

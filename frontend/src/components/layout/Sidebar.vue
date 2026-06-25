@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
-import { TrendingUp, Code, Activity, Settings, ChevronLeft, ChevronRight, LogOut } from 'lucide-vue-next'
+import { TrendingUp, Code, Activity, Settings, LogOut } from 'lucide-vue-next'
 import { useAuthStore } from '@/stores/auth'
 import ThemeToggle from '@/components/common/ThemeToggle.vue'
 
@@ -34,10 +34,18 @@ const userName = computed(() => authStore.user?.name || '用户')
 </script>
 
 <template>
-  <aside class="sidebar" :class="{ collapsed: props.collapsed, 'mobile-visible': props.mobileVisible }">
+  <aside
+    class="sidebar"
+    :class="{ collapsed: props.collapsed, 'mobile-visible': props.mobileVisible }"
+  >
     <div class="sidebar-header">
-      <div class="brand-logo">IB</div>
-      <span v-if="!props.collapsed" class="brand-name">InstantBoard</span>
+      <div class="brand-logo">
+        IB
+      </div>
+      <span
+        v-if="!props.collapsed"
+        class="brand-name"
+      >InstantBoard</span>
     </div>
 
     <nav class="sidebar-nav">
@@ -49,19 +57,35 @@ const userName = computed(() => authStore.user?.name || '用户')
         :class="{ active: currentPath === item.path || currentPath.startsWith(item.path + '/') }"
         @click="emit('close')"
       >
-        <component :is="item.icon" class="nav-icon" :size="20" />
-        <span v-if="!props.collapsed" class="nav-label">{{ item.name }}</span>
+        <component
+          :is="item.icon"
+          class="nav-icon"
+          :size="20"
+        />
+        <span
+          v-if="!props.collapsed"
+          class="nav-label"
+        >{{ item.name }}</span>
       </router-link>
     </nav>
 
     <div class="sidebar-footer">
       <ThemeToggle v-if="!props.collapsed" />
-      <div class="user-section" v-if="!props.collapsed">
+      <div
+        v-if="!props.collapsed"
+        class="user-section"
+      >
         <div class="user-info">
-          <div class="user-avatar">{{ userName.charAt(0) }}</div>
+          <div class="user-avatar">
+            {{ userName.charAt(0) }}
+          </div>
           <span class="user-name">{{ userName }}</span>
         </div>
-        <button class="logout-btn" @click="handleLogout" title="登出">
+        <button
+          class="logout-btn"
+          title="登出"
+          @click="handleLogout"
+        >
           <LogOut :size="16" />
         </button>
       </div>

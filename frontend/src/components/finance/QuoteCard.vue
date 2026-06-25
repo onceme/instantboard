@@ -23,15 +23,26 @@ const changeColorClass = computed(() => {
         <span class="symbol">{{ quote.symbol }}</span>
         <span class="name text-truncate">{{ quote.name }}</span>
       </div>
-      <div class="quote-type" v-if="quote.type">{{ quote.type }}</div>
+      <div
+        v-if="quote.type"
+        class="quote-type"
+      >
+        {{ quote.type }}
+      </div>
     </div>
 
     <div class="quote-price">
       <span class="current-price">{{ formatCurrency(quote.current_price, quote.currency || 'USD') }}</span>
-      <span :class="changeColorClass" class="change-value">
+      <span
+        :class="changeColorClass"
+        class="change-value"
+      >
         {{ formatCurrency(quote.change, quote.currency || 'USD') }}
       </span>
-      <span :class="changeColorClass" class="change-percent">
+      <span
+        :class="changeColorClass"
+        class="change-percent"
+      >
         {{ formatPercent(quote.change_percent) }}
       </span>
     </div>
@@ -59,7 +70,10 @@ const changeColorClass = computed(() => {
       </div>
     </div>
 
-    <div class="quote-volume" v-if="quote.volume">
+    <div
+      v-if="quote.volume"
+      class="quote-volume"
+    >
       <span class="volume-label">成交量</span>
       <span class="volume-value">{{ formatVolume(quote.volume) }}</span>
     </div>

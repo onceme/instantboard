@@ -33,7 +33,7 @@ class FinanceSymbol(BaseModel):
     type = Column(String(20), nullable=False)
     market = Column(String(10), nullable=False)
     exchange = Column(String(50), nullable=True)
-    currency = Column(String(3), default="USD", server_default="'USD'")
+    currency = Column(String(3), default="USD", server_default=text("'USD'"))
     is_active = Column(Boolean, nullable=False, default=True, server_default="true")
 
     __table_args__ = (
@@ -46,10 +46,14 @@ class FinanceSymbol(BaseModel):
         Index("idx_finance_symbols_market", "tenant_id", "market"),
     )
 
-    tenant = relationship("Tenant")
-    quotes = relationship("FinanceQuote", back_populates="symbol", cascade="all, delete-orphan")
-    nav_estimates = relationship("FundNAVEstimate", back_populates="symbol", cascade="all, delete-orphan")
-    watchlist_items = relationship("WatchlistItem", back_populates="symbol", cascade="all, delete-orphan")
+    tenant = relationship("Tenant", lazy="selectin")
+    quotes = relationship("FinanceQuote", back_populates="symbol", cascade="all, delete-orphan", lazy="noload")
+    nav_estimates = relationship(
+        "FundNAVEstimate", back_populates="symbol", cascade="all, delete-orphan", lazy="noload"
+    )
+    watchlist_items = relationship(
+        "WatchlistItem", back_populates="symbol", cascade="all, delete-orphan", lazy="noload"
+    )
 
 
 class FinanceQuote(Base):
@@ -59,7 +63,7 @@ class FinanceQuote(Base):
         UUID(as_uuid=True),
         primary_key=True,
         default=uuid.uuid4,
-        server_default="gen_random_uuid()",
+        server_default=text("gen_random_uuid()"),
     )
     tenant_id = Column(
         UUID(as_uuid=True),
@@ -97,8 +101,8 @@ class FinanceQuote(Base):
         Index("idx_finance_quotes_tenant", "tenant_id"),
     )
 
-    tenant = relationship("Tenant")
-    symbol = relationship("FinanceSymbol", back_populates="quotes")
+    tenant = relationship("Tenant", lazy="selectin")
+    symbol = relationship("FinanceSymbol", back_populates="quotes", lazy="selectin")
 
 
 class FundNAVEstimate(Base):
@@ -108,7 +112,7 @@ class FundNAVEstimate(Base):
         UUID(as_uuid=True),
         primary_key=True,
         default=uuid.uuid4,
-        server_default="gen_random_uuid()",
+        server_default=text("gen_random_uuid()"),
     )
     tenant_id = Column(
         UUID(as_uuid=True),
@@ -138,5 +142,5 @@ class FundNAVEstimate(Base):
 
     __table_args__ = (Index("idx_fund_nav_symbol", "symbol_id", "estimate_timestamp"),)
 
-    tenant = relationship("Tenant")
-    symbol = relationship("FinanceSymbol", back_populates="nav_estimates")
+    tenant = relationship("Tenant", lazy="selectin")
+    symbol = relationship("FinanceSymbol", back_populates="nav_estimates", lazy="selectin")

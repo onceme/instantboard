@@ -20,7 +20,13 @@ echo "Waiting for Redis..."
 REDIS_HOST="${REDISHOST:-${REDIS_HOST:-redis}}"
 REDIS_PORT="${REDISPORT:-6379}"
 
-until redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" ping > /dev/null 2>&1; do
+if [ -n "$REDIS_PASSWORD" ]; then
+  REDIS_AUTH_ARGS="-a $REDIS_PASSWORD"
+else
+  REDIS_AUTH_ARGS=""
+fi
+
+until redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" $REDIS_AUTH_ARGS ping > /dev/null 2>&1; do
   echo "Redis not ready yet... waiting"
   sleep 1
 done
@@ -50,7 +56,7 @@ if [ "${ENV}" = "production" ] || [ "${APP_ENV}" = "production" ]; then
     --workers "${UVICORN_WORKERS:-4}" \
     --worker-class uvicorn.workers.UvicornWorker \
     --timeout 120 \
-    --graceful_timeout 30 \
+    --graceful-timeout 30 \
     --access-logfile - \
     --error-logfile -
 else

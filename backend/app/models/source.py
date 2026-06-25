@@ -24,7 +24,7 @@ class Source(BaseModel):
     name = Column(String(100), nullable=False)
     source_type = Column(String(20), nullable=False)
     url = Column(Text, nullable=False)
-    config = Column(JSONB, nullable=False, default=dict, server_default="'{}'")
+    config = Column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
     refresh_interval_seconds = Column(Integer, nullable=True)
     is_active = Column(Boolean, nullable=False, default=True, server_default="true")
     priority = Column(Integer, nullable=False, default=5, server_default="5")
@@ -39,10 +39,12 @@ class Source(BaseModel):
         Index("idx_sources_type", "tenant_id", "source_type"),
     )
 
-    tenant = relationship("Tenant", back_populates="sources")
-    category = relationship("Category", back_populates="sources")
-    health = relationship("SourceHealth", back_populates="source", uselist=False, cascade="all, delete-orphan")
-    items = relationship("Item", back_populates="source", cascade="all, delete-orphan")
+    tenant = relationship("Tenant", back_populates="sources", lazy="selectin")
+    category = relationship("Category", back_populates="sources", lazy="selectin")
+    health = relationship(
+        "SourceHealth", back_populates="source", uselist=False, cascade="all, delete-orphan", lazy="selectin"
+    )
+    items = relationship("Item", back_populates="source", cascade="all, delete-orphan", lazy="noload")
 
 
 class SourceHealth(Base):
@@ -52,7 +54,7 @@ class SourceHealth(Base):
         UUID(as_uuid=True),
         primary_key=True,
         default=uuid.uuid4,
-        server_default="gen_random_uuid()",
+        server_default=text("gen_random_uuid()"),
     )
     source_id = Column(
         UUID(as_uuid=True),
@@ -89,4 +91,4 @@ class SourceHealth(Base):
         Index("idx_source_health_status", "status"),
     )
 
-    source = relationship("Source", back_populates="health")
+    source = relationship("Source", back_populates="health", lazy="selectin")

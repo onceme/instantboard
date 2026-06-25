@@ -32,7 +32,11 @@ function closeSidebar() {
     </div>
 
     <Transition name="fade">
-      <div v-if="isMobile && sidebarVisible" class="sidebar-overlay" @click="closeSidebar" />
+      <div
+        v-if="isMobile && sidebarVisible"
+        class="sidebar-overlay"
+        @click="closeSidebar"
+      />
     </Transition>
   </div>
 </template>

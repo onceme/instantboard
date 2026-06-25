@@ -24,7 +24,9 @@ const sseStatus = computed(() => {
 <template>
   <div class="profile-settings">
     <div class="user-section">
-      <div class="user-avatar">{{ userName.charAt(0) }}</div>
+      <div class="user-avatar">
+        {{ userName.charAt(0) }}
+      </div>
       <div class="user-info">
         <span class="user-name">{{ userName }}</span>
         <span class="user-email">{{ userEmail }}</span>
@@ -34,12 +36,23 @@ const sseStatus = computed(() => {
 
     <div class="setting-item">
       <div class="setting-header">
-        <Sun v-if="theme === 'dark'" :size="18" />
-        <Moon v-else :size="18" />
+        <Sun
+          v-if="theme === 'dark'"
+          :size="18"
+        />
+        <Moon
+          v-else
+          :size="18"
+        />
         <span class="setting-label">主题</span>
       </div>
       <span class="setting-value">{{ theme === 'dark' ? '暗色' : '亮色' }}</span>
-      <button class="toggle-btn" @click="toggleTheme">切换</button>
+      <button
+        class="toggle-btn"
+        @click="toggleTheme"
+      >
+        切换
+      </button>
     </div>
 
     <div class="setting-item">
@@ -48,16 +61,30 @@ const sseStatus = computed(() => {
         <span class="setting-label">涨跌配色</span>
       </div>
       <span class="setting-value">{{ colorSchemeLabel }}</span>
-      <button class="toggle-btn" @click="toggleColorScheme">切换</button>
+      <button
+        class="toggle-btn"
+        @click="toggleColorScheme"
+      >
+        切换
+      </button>
     </div>
 
     <div class="setting-item">
       <div class="setting-header">
-        <Wifi v-if="sseStatus === SSEConnectionState.CONNECTED" :size="18" />
-        <WifiOff v-else :size="18" />
+        <Wifi
+          v-if="sseStatus === SSEConnectionState.CONNECTED"
+          :size="18"
+        />
+        <WifiOff
+          v-else
+          :size="18"
+        />
         <span class="setting-label">SSE连接</span>
       </div>
-      <span class="setting-value" :class="sseStatus === SSEConnectionState.CONNECTED ? 'sse-connected' : 'sse-disconnected'">
+      <span
+        class="setting-value"
+        :class="sseStatus === SSEConnectionState.CONNECTED ? 'sse-connected' : 'sse-disconnected'"
+      >
         {{ sseStatus === SSEConnectionState.CONNECTED ? '已连接' : '未连接' }}
       </span>
     </div>

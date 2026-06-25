@@ -28,7 +28,10 @@ const visibleTags = computed(() => props.item.topic_tags.slice(0, 3))
 </script>
 
 <template>
-  <div class="news-card" :style="{ '--domain-color': domainColorVar }">
+  <div
+    class="news-card"
+    :style="{ '--domain-color': domainColorVar }"
+  >
     <div class="domain-stripe" />
 
     <div class="card-content">
@@ -41,15 +44,30 @@ const visibleTags = computed(() => props.item.topic_tags.slice(0, 3))
         >
           {{ item.title }}
         </a>
-        <a :href="item.url" target="_blank" rel="noopener noreferrer" class="ext-link">
+        <a
+          :href="item.url"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="ext-link"
+        >
           <ExternalLink :size="14" />
         </a>
       </div>
 
-      <p v-if="item.summary" class="card-summary line-clamp-2">{{ item.summary }}</p>
+      <p
+        v-if="item.summary"
+        class="card-summary line-clamp-2"
+      >
+        {{ item.summary }}
+      </p>
 
       <div class="card-tags">
-        <TopicTag v-for="tag in visibleTags" :key="tag" :tag="tag" :domain="primaryDomain" />
+        <TopicTag
+          v-for="tag in visibleTags"
+          :key="tag"
+          :tag="tag"
+          :domain="primaryDomain"
+        />
       </div>
 
       <div class="card-footer">

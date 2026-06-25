@@ -71,41 +71,101 @@ fetchCategories()
 <template>
   <div class="category-editor">
     <div class="add-section">
-      <input v-model="newName" type="text" placeholder="新分类名称" class="input-name" />
-      <input v-model="newDescription" type="text" placeholder="描述(可选)" class="input-desc" />
-      <button class="add-btn" @click="addCategory" :disabled="!newName.trim()">
+      <input
+        v-model="newName"
+        type="text"
+        placeholder="新分类名称"
+        class="input-name"
+      >
+      <input
+        v-model="newDescription"
+        type="text"
+        placeholder="描述(可选)"
+        class="input-desc"
+      >
+      <button
+        class="add-btn"
+        :disabled="!newName.trim()"
+        @click="addCategory"
+      >
         <Plus :size="16" />
         添加
       </button>
     </div>
 
     <div class="category-list">
-      <h4 class="list-label">预定义分类</h4>
-      <div v-for="cat in predefinedCategories" :key="cat.id" class="category-item predefined">
+      <h4 class="list-label">
+        预定义分类
+      </h4>
+      <div
+        v-for="cat in predefinedCategories"
+        :key="cat.id"
+        class="category-item predefined"
+      >
         <span class="cat-name">{{ cat.name }}</span>
         <span class="cat-type">{{ cat.type }}</span>
         <span class="cat-slug">{{ cat.slug }}</span>
       </div>
 
-      <h4 class="list-label">自定义分类</h4>
+      <h4 class="list-label">
+        自定义分类
+      </h4>
       <EmptyState
         v-if="customCategories.length === 0"
         title="暂无自定义分类"
         description="点击上方添加按钮创建"
         icon="folder"
       />
-      <div v-for="cat in customCategories" :key="cat.id" class="category-item custom">
-        <div v-if="editingId === cat.id" class="edit-row">
-          <input v-model="newName" type="text" class="input-name" />
-          <input v-model="newDescription" type="text" class="input-desc" />
-          <button class="save-btn" @click="updateCategory(cat.id)">保存</button>
-          <button class="cancel-btn" @click="cancelEdit">取消</button>
+      <div
+        v-for="cat in customCategories"
+        :key="cat.id"
+        class="category-item custom"
+      >
+        <div
+          v-if="editingId === cat.id"
+          class="edit-row"
+        >
+          <input
+            v-model="newName"
+            type="text"
+            class="input-name"
+          >
+          <input
+            v-model="newDescription"
+            type="text"
+            class="input-desc"
+          >
+          <button
+            class="save-btn"
+            @click="updateCategory(cat.id)"
+          >
+            保存
+          </button>
+          <button
+            class="cancel-btn"
+            @click="cancelEdit"
+          >
+            取消
+          </button>
         </div>
-        <div v-else class="display-row">
+        <div
+          v-else
+          class="display-row"
+        >
           <span class="cat-name">{{ cat.name }}</span>
           <span class="cat-desc">{{ cat.description }}</span>
-          <button class="edit-btn" @click="startEdit(cat)"><Pencil :size="14" /></button>
-          <button class="delete-btn" @click="deleteCategory(cat.id)"><Trash2 :size="14" /></button>
+          <button
+            class="edit-btn"
+            @click="startEdit(cat)"
+          >
+            <Pencil :size="14" />
+          </button>
+          <button
+            class="delete-btn"
+            @click="deleteCategory(cat.id)"
+          >
+            <Trash2 :size="14" />
+          </button>
         </div>
       </div>
     </div>

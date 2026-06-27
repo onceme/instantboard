@@ -280,19 +280,18 @@ graph LR
     end
 
     subgraph datasource["DataSourceHealth 表格 全宽"]
-      DSTable["名称 | 状态 | 成功率 | 频率 | 时间 | 延迟<br/>... 分页20行"]
+      DSTable["名称 / 状态 / 成功率 / 频率 / 时间 / 延迟<br/>... 分页20行"]
     end
 
     subgraph bottom["SchedulerPanel + BusinessMetrics 底部两列"]
       subgraph sched["定时任务列表"]
-        SchedContent["Job | 状态 | 下次运行"]
+        SchedContent["Job / 状态 / 下次运行"]
       end
       subgraph biz["业务指标"]
         BizContent["用户数/条目数饼图"]
       end
     end
   end
-```
 ```
 
 #### 3.8.3 图表渲染优化

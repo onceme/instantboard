@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import type { SSEConnectionState } from '@/types'
 
 export const useSSEStore = defineStore('sse', () => {
@@ -43,5 +43,3 @@ export const useSSEStore = defineStore('sse', () => {
     setDashboardState,
   }
 })
-
-import { computed } from 'vue'

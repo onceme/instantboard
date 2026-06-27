@@ -64,7 +64,7 @@ graph TD
 ```mermaid
 graph LR
     cat["一级分类<br/>→ categories 表<br/>id, name, slug, icon, color,<br/>type, refresh_interval_seconds,<br/>keywords_filter"]
-    subcat["二级子分类<br/>→ 虚拟子分类,<br/>通过 items.topic_tags 实现<br/>不独立建表<br/>二级标签作为 topic_tags 数组中<br/>的固定前缀标签存在<br/>如: topic_tags: &quot;finance&quot;, &quot;china-stock&quot;, &quot;GPT-4&quot;<br/>前端按二级标签分组展示<br/>查询时 GIN索引过滤"]
+    subcat["二级子分类<br/>→ 虚拟子分类,<br/>通过 items.topic_tags 实现<br/>不独立建表<br/>二级标签作为 topic_tags 数组中<br/>的固定前缀标签存在<br/>如: topic_tags: [finance, china-stock, GPT-4]<br/>前端按二级标签分组展示<br/>查询时 GIN索引过滤"]
     tag["三级标签<br/>→ items.topic_tags<br/>JSONB数组 + GIN索引<br/>动态生成, 无上限<br/>从内容自动提取或手动标注"]
     src["数据源<br/>→ sources 表<br/>绑定到一级分类<br/>source.category_id → 一级分类的 categories.id<br/>数据源不直接绑定二级子分类<br/>采集后自动打标签归入子分类"]
     cat --> subcat
@@ -437,7 +437,7 @@ SQL查询逻辑:
 ```mermaid
 graph TD
     subgraph level1_tags["一级标签 — 领域级, 固定, 6个"]
-        t_finance["finance — 负经领域"]
+        t_finance["finance — 财经领域"]
         t_tech["tech — 科技领域"]
         subgraph tech_level1["科技领域内部 (科技的一级同时也是二级)"]
             t_robotics["robotics — 机器人"]
@@ -447,7 +447,7 @@ graph TD
         end
     end
     subgraph level2_tags["二级标签 — 子分类级, 固定, 30个"]
-        subgraph fin_l2["负经"]
+        subgraph fin_l2["财经"]
             l2_cs["china-stock"]
             l2_wl["watchlist"]
             l2_s["search"]

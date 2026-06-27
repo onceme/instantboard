@@ -227,6 +227,10 @@ class SourceService:
         health = SourceHealth(
             source_id=source.id,
             status="healthy",
+            total_fetches_24h=0,
+            success_count_24h=0,
+            avg_response_time_ms=0,
+            consecutive_failures=0,
         )
         self.db.add(health)
         await self.db.flush()
@@ -398,6 +402,10 @@ class SourceService:
             health = SourceHealth(
                 source_id=source_id,
                 status="healthy",
+                total_fetches_24h=0,
+                success_count_24h=0,
+                avg_response_time_ms=0,
+                consecutive_failures=0,
             )
             self.db.add(health)
             await self.db.flush()

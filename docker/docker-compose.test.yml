@@ -42,6 +42,11 @@ services:
         condition: service_healthy
       redis-test:
         condition: service_healthy
-    command: pytest --cov=app --cov-report=xml --cov-report=term-missing -v /app/tests/
+    command: >
+      sh -c "
+        python -m pytest tests/ -v --cov=app --cov-report=html
+      "
+    volumes:
+      - ../backend/seed_data.py:/app/seed_data.py:ro
     profiles:
       - test

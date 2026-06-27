@@ -112,7 +112,7 @@ class AsyncSchedulerManager:
             self.scheduler.remove_job(job_id)
             self._original_intervals.pop(job_id, None)
             self._adaptive_multipliers.pop(job_id, None)
-            self._source_category_cache.pop(job_id.replace("collect_", ""), None)
+            _source_category_cache.pop(job_id.replace("collect_", ""), None)
             logger.info(f"Job {job_id} removed")
 
     async def pause_job(self, job_id: str) -> None:

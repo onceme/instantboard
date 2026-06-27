@@ -200,6 +200,7 @@ class CategoryService:
         )
         self.db.add(category)
         await self.db.flush()
+        await self.db.refresh(category)
 
         return SuccessResponse(
             success=True,
@@ -248,6 +249,7 @@ class CategoryService:
                 setattr(category, field, value)
 
         await self.db.flush()
+        await self.db.refresh(category)
 
         source_count_stmt = select(func.count()).select_from(Source).where(Source.category_id == category_id)
         source_count = (await self.db.execute(source_count_stmt)).scalar() or 0

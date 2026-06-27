@@ -8,7 +8,8 @@
     "build": "vue-tsc && vite build",
     "preview": "vite preview",
     "lint": "eslint . --fix",
-    "type-check": "vue-tsc --noEmit"
+    "type-check": "vue-tsc --noEmit",
+    "test": "echo 'Tests pending: vitest will be configured by the tester agent'"
   },
   "dependencies": {
     "@vueuse/core": "^10.7.0",

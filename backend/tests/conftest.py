@@ -6,12 +6,45 @@ import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
 from httpx import AsyncClient, ASGITransport
+from sqlalchemy import Text, event, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.pool import StaticPool
 
 from app.main import app
 from app.models.base import Base
 from app.config import settings
+
+
+@compiles(JSONB, "sqlite")
+def _compile_jsonb_sqlite(element, compiler, **kw):
+    return "JSON"
+
+
+class _PgDefaultSentinel:
+    def __init__(self, original):
+        self.original = original
+
+
+def _strip_pg_server_defaults():
+    stripped: list[tuple] = []
+    for table in Base.metadata.tables.values():
+        for col in table.columns:
+            if col.server_default is not None:
+                arg = getattr(col.server_default, "arg", None)
+                if arg is not None:
+                    sql = str(arg) if hasattr(arg, "text") else str(arg)
+                    if "::jsonb" in sql or "gen_random_uuid" in sql or "NOW()" in sql:
+                        stripped.append((col, col.server_default))
+                        col.server_default = None
+    return stripped
+
+
+def _restore_server_defaults(stripped: list[tuple]) -> None:
+    for col, sd in stripped:
+        col.server_default = sd
+
 
 TEST_DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite+aiosqlite:///./test.db")
 
@@ -42,8 +75,13 @@ def event_loop():
 
 @pytest_asyncio.fixture(scope="session", autouse=True)
 async def setup_database():
-    async with test_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    stripped = _strip_pg_server_defaults() if _is_sqlite else []
+    try:
+        async with test_engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+    finally:
+        if stripped:
+            _restore_server_defaults(stripped)
     yield
     async with test_engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)

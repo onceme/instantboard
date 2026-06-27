@@ -1,10 +1,13 @@
 import logging
+import secrets
 
-from fastapi import APIRouter, Body, Depends
+from fastapi import APIRouter, Body, Depends, Query
+from pydantic import BaseModel
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ValidationError
+from app.core.sso_handlers import SSOHandlerFactory
 from app.dependencies import get_current_user, get_db, get_raw_token, get_redis
 from app.schemas.auth import (
     LogoutResponse,
@@ -22,6 +25,27 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 SUPPORTED_PROVIDERS = ("google", "azure_ad", "github", "apple", "facebook")
+
+
+class SSOAuthorizeResponse(BaseModel):
+    authorize_url: str
+    state: str
+
+
+@router.get("/sso/{provider}/authorize", response_model=SuccessResponse[SSOAuthorizeResponse])
+async def sso_authorize(
+    provider: str,
+    redirect_uri: str = Query(..., description="OAuth redirect URI after authorization"),
+):
+    if provider not in SUPPORTED_PROVIDERS:
+        raise ValidationError(
+            message=f"Unsupported SSO provider: {provider}",
+            details=[{"field": "provider", "message": f"Must be one of: {', '.join(SUPPORTED_PROVIDERS)}"}],
+        )
+    handler = SSOHandlerFactory.create(provider)
+    state = secrets.token_urlsafe(32)
+    authorize_url = handler.get_authorize_url(state=state, redirect_uri=redirect_uri)
+    return SuccessResponse(data=SSOAuthorizeResponse(authorize_url=authorize_url, state=state))
 
 
 @router.post("/sso/{provider}", response_model=SuccessResponse[TokenResponse])

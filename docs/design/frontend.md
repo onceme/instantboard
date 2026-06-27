@@ -143,7 +143,7 @@ graph LR
   App --> compLayout
   App --> stores
   App --> composables
-
+```
 
 ### 3.2 组件层级设计
 
@@ -168,7 +168,7 @@ graph TD
   MainVue --> FinView["FinanceView.vue"]
   FinView --> MktTicker["MarketTicker.vue — 横向滚动市场指数条，固定顶部"]
   FinView --> FinSubNav["FinanceSubNav.vue — 子区域切换"]
-  FinSubNav --> SubOpts["子选项: Overview | Watchlist | Search | Market Indices | Commodities"]
+  FinSubNav --> SubOpts["子选项: Overview / Watchlist / Search / Market Indices / Commodities"]
   FinView --> FinGrid["FinanceGrid.vue — 主内容网格"]
   FinGrid --> AreaMain["区域1: 主面板 根据SubNav切换"]
   AreaMain --> OverviewPanel["Overview → WatchlistPanel + 重点关注项"]
@@ -321,9 +321,9 @@ graph LR
       NavTech["🔬 Tech"]
       NavDash["📊 Dashboard"]
       NavSet["⚙️ Settings"]
-      Sep2[""]
+      Sep2[" "]
       ThemeBtn["🌙 ThemeToggle"]
-      Sep3[""]
+      Sep3[" "]
       UserBtn["👤 UserAvatar + Logout"]
     end
 

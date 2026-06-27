@@ -1,4 +1,4 @@
-import { onMounted, onUnmounted } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { SSEConnection, SSEConnectionState } from '@/utils/sse.ts'
 import type { SSEEventType } from '@/types'
 import { useAuthStore } from '@/stores/auth'
@@ -48,5 +48,3 @@ export function useSSE(
     disconnect,
   }
 }
-
-import { ref } from 'vue'

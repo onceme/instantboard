@@ -27,6 +27,9 @@ async def create_tables():
         await _engine.dispose()
 
 
+# Sources with is_active=False are disabled because collectors are not yet implemented
+# (api, web_scrape, social). They are kept as templates for future development.
+
 FINANCE_SOURCES = [
     {
         "name": "东方财富-A股实时",
@@ -35,6 +38,7 @@ FINANCE_SOURCES = [
         "config": {"selector": "data", "url_pattern": "push2.eastmoney.com"},
         "refresh_interval_seconds": 15,
         "priority": 1,
+        "is_active": False,  # No web_scrape collector
     },
     {
         "name": "yfinance-沪深300指数",
@@ -48,6 +52,7 @@ FINANCE_SOURCES = [
         },
         "refresh_interval_seconds": 30,
         "priority": 2,
+        "is_active": False,  # No API collector
     },
     {
         "name": "yfinance-世界市场指数",
@@ -61,6 +66,7 @@ FINANCE_SOURCES = [
         },
         "refresh_interval_seconds": 30,
         "priority": 2,
+        "is_active": False,  # No API collector
     },
     {
         "name": "Alpha Vantage-市场指数(failover)",
@@ -69,6 +75,7 @@ FINANCE_SOURCES = [
         "config": {"api_key_env": "ALPHA_VANTAGE_API_KEY", "method": "GET", "function": "TIME_SERIES_INTRADAY"},
         "refresh_interval_seconds": 30,
         "priority": 5,
+        "is_active": False,  # No API collector
     },
     {
         "name": "yfinance-大宗商品",
@@ -81,6 +88,7 @@ FINANCE_SOURCES = [
         },
         "refresh_interval_seconds": 60,
         "priority": 3,
+        "is_active": False,  # No API collector
     },
     {
         "name": "天天基金-官方NAV",
@@ -89,6 +97,7 @@ FINANCE_SOURCES = [
         "config": {"selector": "table", "url_pattern": "fund.eastmoney.com"},
         "refresh_interval_seconds": 86400,
         "priority": 1,
+        "is_active": False,  # No web_scrape collector
     },
 ]
 
@@ -104,7 +113,7 @@ TECH_AI_SOURCES = [
     {
         "name": "HackerNews-AI/ML",
         "source_type": "rss",
-        "url": "https://hnrss.org/new?q=AI+machine+learning",
+        "url": "https://hnrss.org/newest?q=AI+machine+learning+LLM",
         "config": {"parse_rules": {"summary": "comments_text", "extra": {"hn_votes": "score"}}},
         "refresh_interval_seconds": 120,
         "priority": 2,
@@ -124,6 +133,7 @@ TECH_AI_SOURCES = [
         "config": {"selector": "article", "parse_rules": {"title": "h2", "summary": "p.excerpt"}},
         "refresh_interval_seconds": 1800,
         "priority": 3,
+        "is_active": False,  # No web_scrape collector
     },
     {
         "name": "The Batch (deeplearning.ai)",
@@ -139,16 +149,16 @@ TECH_ROBOTICS_SOURCES = [
     {
         "name": "HackerNews-Robotics",
         "source_type": "rss",
-        "url": "https://hnrss.org/new?q=robot+robotics",
+        "url": "https://hnrss.org/newest?q=robot+robotics+drones",
         "config": {"parse_rules": {"summary": "comments_text"}},
         "refresh_interval_seconds": 120,
         "priority": 2,
     },
     {
-        "name": "The Robot Report",
+        "name": "The Robot Report (Google News)",
         "source_type": "rss",
-        "url": "https://www.robotreport.com/feed",
-        "config": {"parse_rules": {"summary": "excerpt"}},
+        "url": "https://news.google.com/rss/search?q=robotics+robots+automation&hl=en-US&gl=US&ceid=US:en",
+        "config": {"parse_rules": {"summary": "description"}},
         "refresh_interval_seconds": 300,
         "priority": 3,
     },
@@ -175,6 +185,7 @@ TECH_ROBOTICS_SOURCES = [
         "config": {"selector": "article", "parse_rules": {"title": "h2.article-title", "summary": "p.excerpt"}},
         "refresh_interval_seconds": 86400,
         "priority": 5,
+        "is_active": False,  # No web_scrape collector
     },
 ]
 
@@ -190,7 +201,7 @@ TECH_EMBEDDED_SOURCES = [
     {
         "name": "Embedded.com",
         "source_type": "rss",
-        "url": "https://www.embedded.com/rss/",
+        "url": "https://www.embedded.com/feed/",
         "config": {"parse_rules": {}},
         "refresh_interval_seconds": 300,
         "priority": 3,
@@ -202,6 +213,7 @@ TECH_EMBEDDED_SOURCES = [
         "config": {"selector": "article", "parse_rules": {"title": "h2.post-title", "summary": "p"}},
         "refresh_interval_seconds": 1800,
         "priority": 4,
+        "is_active": False,  # No web_scrape collector
     },
     {
         "name": "EE Times",
@@ -245,6 +257,7 @@ TECH_SPACE_SOURCES = [
         "config": {"selector": "article", "parse_rules": {"title": "h3.update-title", "summary": "p"}},
         "refresh_interval_seconds": 1800,
         "priority": 3,
+        "is_active": False,  # No web_scrape collector
     },
     {
         "name": "ESA News",
@@ -272,6 +285,7 @@ TECH_CROSS_DOMAIN_SOURCES = [
         "config": {"platform": "reddit", "query": "r/artificial+robotics+embedded+space", "parse_rules": {}},
         "refresh_interval_seconds": 600,
         "priority": 4,
+        "is_active": False,  # No social collector
     },
     {
         "name": "Google News Tech",
@@ -405,7 +419,7 @@ async def seed_default_data():
                         url=src_data["url"],
                         config=src_data["config"],
                         refresh_interval_seconds=src_data["refresh_interval_seconds"],
-                        is_active=True,
+                        is_active=src_data.get("is_active", True),
                         priority=src_data["priority"],
                     )
                 )
@@ -427,7 +441,7 @@ async def seed_default_data():
                         url=src_data["url"],
                         config=src_data["config"],
                         refresh_interval_seconds=src_data["refresh_interval_seconds"],
-                        is_active=True,
+                        is_active=src_data.get("is_active", True),
                         priority=src_data["priority"],
                     )
                 )
@@ -440,6 +454,10 @@ async def seed_default_data():
                 health = SourceHealth(
                     source_id=source.id,
                     status="healthy",
+                    total_fetches_24h=0,
+                    success_count_24h=0,
+                    avg_response_time_ms=0,
+                    consecutive_failures=0,
                 )
                 session.add(health)
 

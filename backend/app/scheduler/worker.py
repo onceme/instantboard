@@ -49,9 +49,7 @@ async def main() -> None:
     logger.info("Scheduler started")
 
     async with async_session_factory() as session:
-        result = await session.execute(
-            select(Source).where(Source.is_active).options(selectinload(Source.category))
-        )
+        result = await session.execute(select(Source).where(Source.is_active).options(selectinload(Source.category)))
         active_sources = result.scalars().all()
         logger.info(f"Found {len(active_sources)} active data sources")
 

@@ -90,12 +90,7 @@ async def list_tenants(
     count_stmt = select(func.count()).select_from(Tenant)
     total = (await db.execute(count_stmt)).scalar() or 0
 
-    stmt = (
-        select(Tenant)
-        .order_by(Tenant.created_at.desc())
-        .offset((page - 1) * page_size)
-        .limit(page_size)
-    )
+    stmt = select(Tenant).order_by(Tenant.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
     rows = (await db.execute(stmt)).scalars().all()
 
     tenants = [_tenant_to_response(t) for t in rows]

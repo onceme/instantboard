@@ -29,8 +29,10 @@ def _mock_redis():
 
 
 class TestGetSystemInfo:
+    @patch("app.services.dashboard.settings")
     @patch("app.services.dashboard.psutil")
-    async def test_get_system_info_success(self, mock_psutil):
+    async def test_get_system_info_success(self, mock_psutil, mock_settings):
+        mock_settings.env = "development"
         mock_psutil.cpu_percent.return_value = 25.0
         mock_psutil.cpu_count.return_value = 4
         mock_psutil.virtual_memory.return_value = MagicMock(total=8 * 1024**3, used=4 * 1024**3)

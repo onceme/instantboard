@@ -10,7 +10,7 @@ from sqlalchemy import Text, event, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.ext.compiler import compiles
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import StaticPool, NullPool
 
 from app.main import app
 from app.models.base import Base
@@ -52,7 +52,9 @@ _is_sqlite = TEST_DATABASE_URL.startswith("sqlite")
 _engine_kwargs = {
     "connect_args": {"check_same_thread": False},
     "poolclass": StaticPool,
-} if _is_sqlite else {}
+} if _is_sqlite else {
+    "poolclass": NullPool,
+}
 
 test_engine = create_async_engine(
     TEST_DATABASE_URL,

@@ -1,43 +1,37 @@
 <script setup lang="ts">
-import { useFinanceStore } from '@/stores/finance'
-import { useResponsive } from '@/composables/useResponsive'
-import { FINANCE_SUB_NAV_ITEMS } from '@/utils/constants'
-import type { FinancePanel } from '@/types'
-import { ChevronDown } from 'lucide-vue-next'
-import { ref } from 'vue'
+import { useFinanceStore } from "@/stores/finance";
+import { useResponsive } from "@/composables/useResponsive";
+import { FINANCE_SUB_NAV_ITEMS } from "@/utils/constants";
+import type { FinancePanel } from "@/types";
+import { ChevronDown } from "lucide-vue-next";
+import { ref } from "vue";
 
-const financeStore = useFinanceStore()
-const { isMobile } = useResponsive()
-const dropdownOpen = ref(false)
+const financeStore = useFinanceStore();
+const { isMobile } = useResponsive();
+const dropdownOpen = ref(false);
 
 function selectPanel(panel: FinancePanel) {
-  financeStore.setCurrentPanel(panel)
-  dropdownOpen.value = false
+  financeStore.setCurrentPanel(panel);
+  dropdownOpen.value = false;
 }
 
 function toggleDropdown() {
-  dropdownOpen.value = !dropdownOpen.value
+  dropdownOpen.value = !dropdownOpen.value;
 }
 </script>
 
 <template>
   <div class="finance-sub-nav">
-    <div
-      v-if="isMobile"
-      class="sub-nav-mobile"
-    >
-      <button
-        class="dropdown-trigger"
-        @click="toggleDropdown"
-      >
-        <span>{{ FINANCE_SUB_NAV_ITEMS.find(i => i.key === financeStore.currentPanel)?.label }}</span>
+    <div v-if="isMobile" class="sub-nav-mobile">
+      <button class="dropdown-trigger" @click="toggleDropdown">
+        <span>{{
+          FINANCE_SUB_NAV_ITEMS.find((i) => i.key === financeStore.currentPanel)
+            ?.label
+        }}</span>
         <ChevronDown :size="16" />
       </button>
       <Transition name="fade">
-        <div
-          v-if="dropdownOpen"
-          class="dropdown-menu"
-        >
+        <div v-if="dropdownOpen" class="dropdown-menu">
           <button
             v-for="item in FINANCE_SUB_NAV_ITEMS"
             :key="item.key"
@@ -51,10 +45,7 @@ function toggleDropdown() {
       </Transition>
     </div>
 
-    <div
-      v-else
-      class="sub-nav-desktop"
-    >
+    <div v-else class="sub-nav-desktop">
       <button
         v-for="item in FINANCE_SUB_NAV_ITEMS"
         :key="item.key"

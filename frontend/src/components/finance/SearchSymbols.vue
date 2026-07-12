@@ -1,58 +1,55 @@
 <script setup lang="ts">
-import { useFinanceStore } from '@/stores/finance'
-import { formatCurrency, formatPercent, getChangeClass } from '@/utils/format'
-import { ref, computed } from 'vue'
-import type { SearchResult } from '@/types'
-import { Search } from 'lucide-vue-next'
-import QuoteCard from './QuoteCard.vue'
+import { useFinanceStore } from "@/stores/finance";
+import { formatCurrency, formatPercent, getChangeClass } from "@/utils/format";
+import { ref, computed } from "vue";
+import type { SearchResult } from "@/types";
+import { Search } from "lucide-vue-next";
+import QuoteCard from "./QuoteCard.vue";
 
-const financeStore = useFinanceStore()
-const searchQuery = ref('')
-const selectedSymbol = ref<string>('')
+const financeStore = useFinanceStore();
+const searchQuery = ref("");
+const selectedSymbol = ref<string>("");
 const selectedQuote = computed(() => {
-  if (!selectedSymbol.value) return null
-  return financeStore.quotesCache.get(selectedSymbol.value) || null
-})
+  if (!selectedSymbol.value) return null;
+  return financeStore.quotesCache.get(selectedSymbol.value) || null;
+});
 
-let timer: ReturnType<typeof setTimeout> | null = null
+let timer: ReturnType<typeof setTimeout> | null = null;
 
 function onInput() {
-  if (timer) clearTimeout(timer)
+  if (timer) clearTimeout(timer);
   timer = setTimeout(() => {
-    financeStore.searchSymbols(searchQuery.value)
-  }, 300)
+    financeStore.searchSymbols(searchQuery.value);
+  }, 300);
 }
 
 function selectResult(result: SearchResult) {
-  selectedSymbol.value = result.symbol
-  financeStore.getQuote(result.symbol)
-  searchQuery.value = ''
-  financeStore.searchSymbols('')
+  selectedSymbol.value = result.symbol;
+  financeStore.getQuote(result.symbol);
+  searchQuery.value = "";
+  financeStore.searchSymbols("");
 }
 
 function changeClass(changePercent?: number): string {
-  if (!changePercent) return ''
-  const cls = getChangeClass(changePercent)
-  if (cls === 'up') return 'change-up'
-  if (cls === 'down') return 'change-down'
-  return 'change-neutral'
+  if (!changePercent) return "";
+  const cls = getChangeClass(changePercent);
+  if (cls === "up") return "change-up";
+  if (cls === "down") return "change-down";
+  return "change-neutral";
 }
 </script>
 
 <template>
   <div class="search-symbols">
     <div class="search-box">
-      <Search
-        :size="16"
-        class="search-icon"
-      />
+      <Search :size="16" class="search-icon" />
       <input
         v-model="searchQuery"
         type="text"
         placeholder="搜索股票、基金、指数..."
         class="search-input"
         @input="onInput"
-      >
+      />
     </div>
 
     <div
@@ -73,32 +70,27 @@ function changeClass(changePercent?: number): string {
           <span class="result-exchange">{{ result.exchange }}</span>
           <span class="result-type">{{ result.type }}</span>
         </div>
-        <div
-          v-if="result.current_price"
-          class="result-price"
-        >
-          <span class="price-value">{{ formatCurrency(result.current_price) }}</span>
+        <div v-if="result.current_price" class="result-price">
+          <span class="price-value">{{
+            formatCurrency(result.current_price)
+          }}</span>
           <span
             :class="changeClass(result.change_percent)"
             class="price-change"
           >
-            {{ result.change_percent ? formatPercent(result.change_percent) : '' }}
+            {{
+              result.change_percent ? formatPercent(result.change_percent) : ""
+            }}
           </span>
         </div>
       </div>
     </div>
 
-    <div
-      v-if="selectedQuote"
-      class="selected-quote"
-    >
+    <div v-if="selectedQuote" class="selected-quote">
       <QuoteCard :quote="selectedQuote" />
     </div>
 
-    <div
-      v-if="!searchQuery.trim() && !selectedSymbol"
-      class="search-empty"
-    >
+    <div v-if="!searchQuery.trim() && !selectedSymbol" class="search-empty">
       输入关键词搜索股票、基金或指数
     </div>
   </div>

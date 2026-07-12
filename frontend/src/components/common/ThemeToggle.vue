@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { useTheme } from '@/composables/useTheme'
-import { Sun, Moon } from 'lucide-vue-next'
+import { useTheme } from "@/composables/useTheme";
+import { Sun, Moon } from "lucide-vue-next";
 
-const { theme, toggleTheme } = useTheme()
+const { theme, toggleTheme } = useTheme();
 </script>
 
 <template>
@@ -11,14 +11,8 @@ const { theme, toggleTheme } = useTheme()
     :title="theme === 'dark' ? '切换亮色' : '切换暗色'"
     @click="toggleTheme"
   >
-    <Sun
-      v-if="theme === 'dark'"
-      :size="18"
-    />
-    <Moon
-      v-else
-      :size="18"
-    />
+    <Sun v-if="theme === 'dark'" :size="18" />
+    <Moon v-else :size="18" />
   </button>
 </template>
 
@@ -31,7 +25,9 @@ const { theme, toggleTheme } = useTheme()
   justify-content: center;
   border-radius: var(--radius-md);
   color: var(--text-secondary);
-  transition: background-color var(--transition-fast), color var(--transition-fast);
+  transition:
+    background-color var(--transition-fast),
+    color var(--transition-fast);
 }
 
 .theme-toggle:hover {

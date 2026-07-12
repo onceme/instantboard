@@ -1,16 +1,16 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import ProfileSettings from '@/components/settings/ProfileSettings.vue'
-import CategoryEditor from '@/components/settings/CategoryEditor.vue'
-import SourceEditor from '@/components/settings/SourceEditor.vue'
+import { ref } from "vue";
+import ProfileSettings from "@/components/settings/ProfileSettings.vue";
+import CategoryEditor from "@/components/settings/CategoryEditor.vue";
+import SourceEditor from "@/components/settings/SourceEditor.vue";
 
-const activeTab = ref<'profile' | 'categories' | 'sources'>('profile')
+const activeTab = ref<"profile" | "categories" | "sources">("profile");
 
 const tabs = [
-  { key: 'profile', label: 'Profile' },
-  { key: 'categories', label: 'Categories' },
-  { key: 'sources', label: 'Sources' },
-]
+  { key: "profile", label: "Profile" },
+  { key: "categories", label: "Categories" },
+  { key: "sources", label: "Sources" },
+];
 </script>
 
 <template>

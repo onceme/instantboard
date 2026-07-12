@@ -1,19 +1,24 @@
 <script setup lang="ts">
-import type { FinanceQuote } from '@/types'
-import { formatCurrency, formatPercent, formatVolume, getChangeClass } from '@/utils/format'
-import { computed } from 'vue'
+import type { FinanceQuote } from "@/types";
+import {
+  formatCurrency,
+  formatPercent,
+  formatVolume,
+  getChangeClass,
+} from "@/utils/format";
+import { computed } from "vue";
 
 const props = defineProps<{
-  quote: FinanceQuote
-  showSparkline?: boolean
-}>()
+  quote: FinanceQuote;
+  showSparkline?: boolean;
+}>();
 
 const changeColorClass = computed(() => {
-  const cls = getChangeClass(props.quote.change_percent)
-  if (cls === 'up') return 'change-up'
-  if (cls === 'down') return 'change-down'
-  return 'change-neutral'
-})
+  const cls = getChangeClass(props.quote.change_percent);
+  if (cls === "up") return "change-up";
+  if (cls === "down") return "change-down";
+  return "change-neutral";
+});
 </script>
 
 <template>
@@ -23,26 +28,19 @@ const changeColorClass = computed(() => {
         <span class="symbol">{{ quote.symbol }}</span>
         <span class="name text-truncate">{{ quote.name }}</span>
       </div>
-      <div
-        v-if="quote.type"
-        class="quote-type"
-      >
+      <div v-if="quote.type" class="quote-type">
         {{ quote.type }}
       </div>
     </div>
 
     <div class="quote-price">
-      <span class="current-price">{{ formatCurrency(quote.current_price, quote.currency || 'USD') }}</span>
-      <span
-        :class="changeColorClass"
-        class="change-value"
-      >
-        {{ formatCurrency(quote.change, quote.currency || 'USD') }}
+      <span class="current-price">{{
+        formatCurrency(quote.current_price, quote.currency || "USD")
+      }}</span>
+      <span :class="changeColorClass" class="change-value">
+        {{ formatCurrency(quote.change, quote.currency || "USD") }}
       </span>
-      <span
-        :class="changeColorClass"
-        class="change-percent"
-      >
+      <span :class="changeColorClass" class="change-percent">
         {{ formatPercent(quote.change_percent) }}
       </span>
     </div>
@@ -51,29 +49,42 @@ const changeColorClass = computed(() => {
       <div class="detail-row">
         <div class="detail-item">
           <span class="detail-label">开盘</span>
-          <span class="detail-value">{{ quote.open ? formatCurrency(quote.open, quote.currency || 'USD') : '--' }}</span>
+          <span class="detail-value">{{
+            quote.open
+              ? formatCurrency(quote.open, quote.currency || "USD")
+              : "--"
+          }}</span>
         </div>
         <div class="detail-item">
           <span class="detail-label">最高</span>
-          <span class="detail-value">{{ quote.high ? formatCurrency(quote.high, quote.currency || 'USD') : '--' }}</span>
+          <span class="detail-value">{{
+            quote.high
+              ? formatCurrency(quote.high, quote.currency || "USD")
+              : "--"
+          }}</span>
         </div>
       </div>
       <div class="detail-row">
         <div class="detail-item">
           <span class="detail-label">最低</span>
-          <span class="detail-value">{{ quote.low ? formatCurrency(quote.low, quote.currency || 'USD') : '--' }}</span>
+          <span class="detail-value">{{
+            quote.low
+              ? formatCurrency(quote.low, quote.currency || "USD")
+              : "--"
+          }}</span>
         </div>
         <div class="detail-item">
           <span class="detail-label">昨收</span>
-          <span class="detail-value">{{ quote.close_previous ? formatCurrency(quote.close_previous, quote.currency || 'USD') : '--' }}</span>
+          <span class="detail-value">{{
+            quote.close_previous
+              ? formatCurrency(quote.close_previous, quote.currency || "USD")
+              : "--"
+          }}</span>
         </div>
       </div>
     </div>
 
-    <div
-      v-if="quote.volume"
-      class="quote-volume"
-    >
+    <div v-if="quote.volume" class="quote-volume">
       <span class="volume-label">成交量</span>
       <span class="volume-value">{{ formatVolume(quote.volume) }}</span>
     </div>

@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { useFinanceStore } from '@/stores/finance'
-import { formatCurrency, formatPercent, getChangeClass } from '@/utils/format'
-import { computed } from 'vue'
-import { X, Star } from 'lucide-vue-next'
-import EmptyState from '@/components/common/EmptyState.vue'
+import { useFinanceStore } from "@/stores/finance";
+import { formatCurrency, formatPercent, getChangeClass } from "@/utils/format";
+import { computed } from "vue";
+import { X, Star } from "lucide-vue-next";
+import EmptyState from "@/components/common/EmptyState.vue";
 
-const financeStore = useFinanceStore()
+const financeStore = useFinanceStore();
 
 const sortedWatchlist = computed(() => {
   return [...financeStore.watchlist]
@@ -14,31 +14,26 @@ const sortedWatchlist = computed(() => {
       ...item,
       quote: financeStore.watchlistQuotes.get(item.symbol),
       order: index + 1,
-    }))
-})
+    }));
+});
 
 function changeClass(changePercent: number): string {
-  const cls = getChangeClass(changePercent)
-  if (cls === 'up') return 'change-up'
-  if (cls === 'down') return 'change-down'
-  return 'change-neutral'
+  const cls = getChangeClass(changePercent);
+  if (cls === "up") return "change-up";
+  if (cls === "down") return "change-down";
+  return "change-neutral";
 }
 
 async function removeItem(itemId: string) {
-  await financeStore.removeFromWatchlist(itemId)
+  await financeStore.removeFromWatchlist(itemId);
 }
 </script>
 
 <template>
   <div class="watchlist">
     <div class="watchlist-header">
-      <h2 class="watchlist-title">
-        我的自选
-      </h2>
-      <Star
-        :size="16"
-        class="header-icon"
-      />
+      <h2 class="watchlist-title">我的自选</h2>
+      <Star :size="16" class="header-icon" />
     </div>
 
     <EmptyState
@@ -48,10 +43,7 @@ async function removeItem(itemId: string) {
       icon="star"
     />
 
-    <div
-      v-else
-      class="watchlist-list"
-    >
+    <div v-else class="watchlist-list">
       <div
         v-for="item in sortedWatchlist"
         :key="item.id"
@@ -60,18 +52,14 @@ async function removeItem(itemId: string) {
         <span class="item-order">{{ item.order }}</span>
         <div class="item-symbol-name">
           <span class="item-symbol">{{ item.symbol }}</span>
-          <span class="item-name text-truncate">{{ item.name || item.symbol }}</span>
+          <span class="item-name text-truncate">{{
+            item.name || item.symbol
+          }}</span>
         </div>
-        <div
-          v-if="item.quote"
-          class="item-price"
-        >
+        <div v-if="item.quote" class="item-price">
           {{ formatCurrency(item.quote.current_price) }}
         </div>
-        <div
-          v-if="item.quote"
-          class="item-change"
-        >
+        <div v-if="item.quote" class="item-change">
           <span :class="changeClass(item.quote.change_percent)">
             {{ formatCurrency(item.quote.change) }}
           </span>
@@ -79,23 +67,9 @@ async function removeItem(itemId: string) {
             {{ formatPercent(item.quote.change_percent) }}
           </span>
         </div>
-        <div
-          v-if="!item.quote"
-          class="item-price"
-        >
-          --
-        </div>
-        <div
-          v-if="!item.quote"
-          class="item-change"
-        >
-          --
-        </div>
-        <button
-          class="remove-btn"
-          title="移除"
-          @click="removeItem(item.id)"
-        >
+        <div v-if="!item.quote" class="item-price">--</div>
+        <div v-if="!item.quote" class="item-change">--</div>
+        <button class="remove-btn" title="移除" @click="removeItem(item.id)">
           <X :size="14" />
         </button>
       </div>

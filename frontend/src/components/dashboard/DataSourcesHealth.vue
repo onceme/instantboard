@@ -1,43 +1,38 @@
 <script setup lang="ts">
-import { useDashboardStore } from '@/stores/dashboard'
-import { formatRelativeTime } from '@/utils/format'
-import { computed, ref } from 'vue'
+import { useDashboardStore } from "@/stores/dashboard";
+import { formatRelativeTime } from "@/utils/format";
+import { computed, ref } from "vue";
 
-import { CheckCircle2, AlertTriangle, XCircle } from 'lucide-vue-next'
+import { CheckCircle2, AlertTriangle, XCircle } from "lucide-vue-next";
 
-const dashboardStore = useDashboardStore()
+const dashboardStore = useDashboardStore();
 
-const summary = computed(() => dashboardStore.dataSources)
+const summary = computed(() => dashboardStore.dataSources);
 
-const expandedRow = ref<string | null>(null)
+const expandedRow = ref<string | null>(null);
 
 function statusIcon(status: string) {
-  if (status === 'healthy') return CheckCircle2
-  if (status === 'degraded') return AlertTriangle
-  return XCircle
+  if (status === "healthy") return CheckCircle2;
+  if (status === "degraded") return AlertTriangle;
+  return XCircle;
 }
 
 function statusColor(status: string): string {
-  if (status === 'healthy') return 'var(--success)'
-  if (status === 'degraded') return 'var(--warning)'
-  return 'var(--danger)'
+  if (status === "healthy") return "var(--success)";
+  if (status === "degraded") return "var(--warning)";
+  return "var(--danger)";
 }
 
 function toggleExpand(id: string) {
-  expandedRow.value = expandedRow.value === id ? null : id
+  expandedRow.value = expandedRow.value === id ? null : id;
 }
 </script>
 
 <template>
   <div class="data-sources-health">
-    <h3 class="health-title">
-      数据源健康
-    </h3>
+    <h3 class="health-title">数据源健康</h3>
 
-    <div
-      v-if="summary"
-      class="summary-cards"
-    >
+    <div v-if="summary" class="summary-cards">
       <div class="summary-card healthy">
         <span class="summary-count">{{ summary.healthy }}</span>
         <span class="summary-label">Healthy</span>
@@ -52,10 +47,7 @@ function toggleExpand(id: string) {
       </div>
     </div>
 
-    <div
-      v-if="summary"
-      class="sources-table"
-    >
+    <div v-if="summary" class="sources-table">
       <table>
         <thead>
           <tr>
@@ -71,7 +63,10 @@ function toggleExpand(id: string) {
           <tr
             v-for="source in summary.sources"
             :key="source.id"
-            :class="{ 'row-down': source.status === 'down', 'row-expanded': expandedRow === source.id }"
+            :class="{
+              'row-down': source.status === 'down',
+              'row-expanded': expandedRow === source.id,
+            }"
             @click="toggleExpand(source.id)"
           >
             <td class="cell-name">
@@ -86,13 +81,28 @@ function toggleExpand(id: string) {
             <td>
               <span
                 class="status-badge"
-                :style="{ backgroundColor: statusColor(source.status), color: 'white' }"
+                :style="{
+                  backgroundColor: statusColor(source.status),
+                  color: 'white',
+                }"
               >
                 {{ source.status }}
               </span>
             </td>
-            <td>{{ source.last_success_at ? formatRelativeTime(source.last_success_at) : '--' }}</td>
-            <td>{{ source.last_failure_at ? formatRelativeTime(source.last_failure_at) : '--' }}</td>
+            <td>
+              {{
+                source.last_success_at
+                  ? formatRelativeTime(source.last_success_at)
+                  : "--"
+              }}
+            </td>
+            <td>
+              {{
+                source.last_failure_at
+                  ? formatRelativeTime(source.last_failure_at)
+                  : "--"
+              }}
+            </td>
             <td>{{ source.avg_response_time_ms }}ms</td>
           </tr>
         </tbody>

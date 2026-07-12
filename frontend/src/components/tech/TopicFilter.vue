@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { useTechStore } from '@/stores/tech'
-import { DOMAIN_CONFIG, SUBCATEGORY_MAP } from '@/types'
-import { computed } from 'vue'
+import { useTechStore } from "@/stores/tech";
+import { DOMAIN_CONFIG, SUBCATEGORY_MAP } from "@/types";
+import { computed } from "vue";
 
-const techStore = useTechStore()
+const techStore = useTechStore();
 
 const allTags = computed(() => {
-  const tags: Array<{ tag: string; domain: string; label: string }> = []
+  const tags: Array<{ tag: string; domain: string; label: string }> = [];
 
   for (const [domainKey, subcats] of Object.entries(SUBCATEGORY_MAP)) {
     for (const sub of subcats) {
@@ -14,42 +14,37 @@ const allTags = computed(() => {
         tag: sub.slug,
         domain: domainKey,
         label: sub.label,
-      })
+      });
     }
   }
 
-  return tags
-})
+  return tags;
+});
 
 function toggleTag(tag: string) {
   if (techStore.currentSubcategory === tag) {
-    techStore.setSubcategory('')
+    techStore.setSubcategory("");
   } else {
-    techStore.setSubcategory(tag)
+    techStore.setSubcategory(tag);
   }
 }
 
 function clearAll() {
-  techStore.setDomain('all')
-  techStore.setSubcategory('')
+  techStore.setDomain("all");
+  techStore.setSubcategory("");
 }
 
 function tagColor(domain: string): string {
   if (DOMAIN_CONFIG[domain]) {
-    return `var(--domain-${domain})`
+    return `var(--domain-${domain})`;
   }
-  return 'var(--accent)'
+  return "var(--accent)";
 }
 </script>
 
 <template>
   <div class="topic-filter">
-    <button
-      class="filter-btn clear-btn"
-      @click="clearAll"
-    >
-      全部
-    </button>
+    <button class="filter-btn clear-btn" @click="clearAll">全部</button>
 
     <div class="filter-scroll">
       <button

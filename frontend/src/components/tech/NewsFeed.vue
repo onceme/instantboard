@@ -1,39 +1,42 @@
 <script setup lang="ts">
-import { useTechStore } from '@/stores/tech'
-import { useInfiniteScroll } from '@/composables/useInfiniteScroll'
-import { computed } from 'vue'
-import NewsCard from './NewsCard.vue'
-import EmptyState from '@/components/common/EmptyState.vue'
-import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
+import { useTechStore } from "@/stores/tech";
+import { useInfiniteScroll } from "@/composables/useInfiniteScroll";
+import { computed } from "vue";
+import NewsCard from "./NewsCard.vue";
+import EmptyState from "@/components/common/EmptyState.vue";
+import LoadingSpinner from "@/components/common/LoadingSpinner.vue";
 
-const techStore = useTechStore()
+const techStore = useTechStore();
 
 const { containerRef, isLoading } = useInfiniteScroll(async () => {
-  await techStore.loadMore()
-})
+  await techStore.loadMore();
+});
 
 const filteredItems = computed(() => {
-  let items = techStore.newsItems
+  let items = techStore.newsItems;
 
-  if (techStore.currentDomain !== 'all') {
+  if (techStore.currentDomain !== "all") {
     items = items.filter((item) =>
-      item.topic_tags.some((tag) => tag === techStore.currentDomain || tag.startsWith(techStore.currentDomain))
-    )
+      item.topic_tags.some(
+        (tag) =>
+          tag === techStore.currentDomain ||
+          tag.startsWith(techStore.currentDomain),
+      ),
+    );
   }
 
   if (techStore.currentSubcategory) {
-    items = items.filter((item) => item.topic_tags.includes(techStore.currentSubcategory))
+    items = items.filter((item) =>
+      item.topic_tags.includes(techStore.currentSubcategory),
+    );
   }
 
-  return items
-})
+  return items;
+});
 </script>
 
 <template>
-  <div
-    ref="containerRef"
-    class="news-feed"
-  >
+  <div ref="containerRef" class="news-feed">
     <EmptyState
       v-if="filteredItems.length === 0 && !techStore.isLoading"
       title="暂无新闻"
@@ -42,17 +45,16 @@ const filteredItems = computed(() => {
     />
 
     <div class="feed-list">
-      <NewsCard
-        v-for="item in filteredItems"
-        :key="item.id"
-        :item="item"
-      />
+      <NewsCard v-for="item in filteredItems" :key="item.id" :item="item" />
     </div>
 
     <LoadingSpinner v-if="isLoading || techStore.isLoading" />
 
     <div
-      v-if="filteredItems.length > 0 && techStore.currentPage >= techStore.totalPages"
+      v-if="
+        filteredItems.length > 0 &&
+        techStore.currentPage >= techStore.totalPages
+      "
       class="feed-end"
     >
       已显示全部内容

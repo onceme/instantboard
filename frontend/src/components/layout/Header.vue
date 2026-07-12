@@ -1,60 +1,61 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import { useRoute } from 'vue-router'
-import { Menu, Wifi, WifiOff } from 'lucide-vue-next'
-import { useAuthStore } from '@/stores/auth'
-import { useFinanceStore } from '@/stores/finance'
-import { useTechStore } from '@/stores/tech'
-import { useDashboardStore } from '@/stores/dashboard'
-import { SSEConnectionState } from '@/types'
-import ThemeToggle from '@/components/common/ThemeToggle.vue'
+import { computed } from "vue";
+import { useRoute } from "vue-router";
+import { Menu, Wifi, WifiOff } from "lucide-vue-next";
+import { useAuthStore } from "@/stores/auth";
+import { useFinanceStore } from "@/stores/finance";
+import { useTechStore } from "@/stores/tech";
+import { useDashboardStore } from "@/stores/dashboard";
+import { SSEConnectionState } from "@/types";
+import ThemeToggle from "@/components/common/ThemeToggle.vue";
 
 const emit = defineEmits<{
-  toggleSidebar: []
-}>()
+  toggleSidebar: [];
+}>();
 
-const route = useRoute()
-const authStore = useAuthStore()
-const financeStore = useFinanceStore()
-const techStore = useTechStore()
-const dashboardStore = useDashboardStore()
+const route = useRoute();
+const authStore = useAuthStore();
+const financeStore = useFinanceStore();
+const techStore = useTechStore();
+const dashboardStore = useDashboardStore();
 
 const pageTitle = computed(() => {
   const titles: Record<string, string> = {
-    finance: '财经',
-    tech: '科技',
-    dashboard: '仪表盘',
-    settings: '设置',
-    login: '登录',
-  }
-  return titles[route.name as string] || 'InstantBoard'
-})
+    finance: "财经",
+    tech: "科技",
+    dashboard: "仪表盘",
+    settings: "设置",
+    login: "登录",
+  };
+  return titles[route.name as string] || "InstantBoard";
+});
 
 const sseState = computed(() => {
-  if (route.path.startsWith('/finance')) return financeStore.sseState
-  if (route.path.startsWith('/tech')) return techStore.sseState
-  if (route.path.startsWith('/dashboard')) return dashboardStore.sseState
-  return SSEConnectionState.DISCONNECTED
-})
+  if (route.path.startsWith("/finance")) return financeStore.sseState;
+  if (route.path.startsWith("/tech")) return techStore.sseState;
+  if (route.path.startsWith("/dashboard")) return dashboardStore.sseState;
+  return SSEConnectionState.DISCONNECTED;
+});
 
 const sseColorClass = computed(() => {
   switch (sseState.value) {
-    case SSEConnectionState.CONNECTED: return 'sse-connected'
-    case SSEConnectionState.RECONNECTING: return 'sse-reconnecting'
-    case SSEConnectionState.CONNECTING: return 'sse-reconnecting'
-    default: return 'sse-disconnected'
+    case SSEConnectionState.CONNECTED:
+      return "sse-connected";
+    case SSEConnectionState.RECONNECTING:
+      return "sse-reconnecting";
+    case SSEConnectionState.CONNECTING:
+      return "sse-reconnecting";
+    default:
+      return "sse-disconnected";
   }
-})
+});
 
-const userName = computed(() => authStore.user?.name || '用户')
+const userName = computed(() => authStore.user?.name || "用户");
 </script>
 
 <template>
   <header class="app-header">
-    <button
-      class="hamburger-btn"
-      @click="emit('toggleSidebar')"
-    >
+    <button class="hamburger-btn" @click="emit('toggleSidebar')">
       <Menu :size="20" />
     </button>
 
@@ -63,18 +64,9 @@ const userName = computed(() => authStore.user?.name || '用户')
     </h1>
 
     <div class="header-actions">
-      <div
-        class="sse-indicator"
-        :class="sseColorClass"
-      >
-        <Wifi
-          v-if="sseState === SSEConnectionState.CONNECTED"
-          :size="16"
-        />
-        <WifiOff
-          v-else
-          :size="16"
-        />
+      <div class="sse-indicator" :class="sseColorClass">
+        <Wifi v-if="sseState === SSEConnectionState.CONNECTED" :size="16" />
+        <WifiOff v-else :size="16" />
       </div>
 
       <ThemeToggle />
@@ -156,8 +148,13 @@ const userName = computed(() => authStore.user?.name || '用户')
 }
 
 @keyframes blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
 }
 
 .user-menu {

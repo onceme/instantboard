@@ -1,30 +1,28 @@
 <script setup lang="ts">
-import { useDashboardStore } from '@/stores/dashboard'
-import { computed } from 'vue'
-import { CheckCircle2, AlertTriangle, XCircle } from 'lucide-vue-next'
+import { useDashboardStore } from "@/stores/dashboard";
+import { computed } from "vue";
+import { CheckCircle2, AlertTriangle, XCircle } from "lucide-vue-next";
 
-const dashboardStore = useDashboardStore()
+const dashboardStore = useDashboardStore();
 
-const services = computed(() => dashboardStore.services)
+const services = computed(() => dashboardStore.services);
 
 function statusIcon(status: string) {
-  if (status === 'healthy') return CheckCircle2
-  if (status === 'degraded') return AlertTriangle
-  return XCircle
+  if (status === "healthy") return CheckCircle2;
+  if (status === "degraded") return AlertTriangle;
+  return XCircle;
 }
 
 function statusColor(status: string): string {
-  if (status === 'healthy') return 'var(--success)'
-  if (status === 'degraded') return 'var(--warning)'
-  return 'var(--danger)'
+  if (status === "healthy") return "var(--success)";
+  if (status === "degraded") return "var(--warning)";
+  return "var(--danger)";
 }
 </script>
 
 <template>
   <div class="services-health">
-    <h3 class="health-title">
-      服务健康
-    </h3>
+    <h3 class="health-title">服务健康</h3>
 
     <div class="services-grid">
       <div
@@ -45,10 +43,7 @@ function statusColor(status: string): string {
             <span class="detail-label">响应时间</span>
             <span class="detail-value">{{ service.response_time_ms }}ms</span>
           </div>
-          <div
-            v-if="service.connection_count"
-            class="detail-item"
-          >
+          <div v-if="service.connection_count" class="detail-item">
             <span class="detail-label">连接数</span>
             <span class="detail-value">{{ service.connection_count }}</span>
           </div>

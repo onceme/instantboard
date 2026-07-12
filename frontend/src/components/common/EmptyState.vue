@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import { Inbox, Star, Link, Newspaper, FolderOpen } from 'lucide-vue-next'
+import { computed } from "vue";
+import { Inbox, Star, Link, Newspaper, FolderOpen } from "lucide-vue-next";
 
 const props = defineProps<{
-  title: string
-  description?: string
-  icon?: string
-}>()
+  title: string;
+  description?: string;
+  icon?: string;
+}>();
 
 const iconComponent = computed(() => {
   const iconMap: Record<string, typeof Inbox> = {
@@ -15,25 +15,18 @@ const iconComponent = computed(() => {
     link: Link,
     news: Newspaper,
     folder: FolderOpen,
-  }
-  return iconMap[props.icon || 'inbox'] || Inbox
-})
+  };
+  return iconMap[props.icon || "inbox"] || Inbox;
+});
 </script>
 
 <template>
   <div class="empty-state">
-    <component
-      :is="iconComponent"
-      :size="48"
-      class="empty-icon"
-    />
+    <component :is="iconComponent" :size="48" class="empty-icon" />
     <h3 class="empty-title">
       {{ title }}
     </h3>
-    <p
-      v-if="description"
-      class="empty-desc"
-    >
+    <p v-if="description" class="empty-desc">
       {{ description }}
     </p>
   </div>

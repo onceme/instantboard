@@ -1,23 +1,22 @@
 <script setup lang="ts">
-import { DOMAIN_CONFIG } from '@/types'
-import { computed } from 'vue'
+import { DOMAIN_CONFIG } from "@/types";
+import { computed } from "vue";
 
 const props = defineProps<{
-  tag: string
-  domain: string
-}>()
+  tag: string;
+  domain: string;
+}>();
 
 const emit = defineEmits<{
-  click: [tag: string]
-}>()
+  click: [tag: string];
+}>();
 
 const domainColorVar = computed(() => {
   if (DOMAIN_CONFIG[props.domain]) {
-    return `var(--domain-${props.domain})`
+    return `var(--domain-${props.domain})`;
   }
-  return 'var(--accent)'
-})
-
+  return "var(--accent)";
+});
 </script>
 
 <template>

@@ -1,18 +1,18 @@
 <script setup lang="ts">
-import { useResponsive } from '@/composables/useResponsive'
-import Sidebar from './Sidebar.vue'
-import Header from './Header.vue'
-import { ref } from 'vue'
+import { useResponsive } from "@/composables/useResponsive";
+import Sidebar from "./Sidebar.vue";
+import Header from "./Header.vue";
+import { ref } from "vue";
 
-const { isMobile, sidebarCollapsed } = useResponsive()
-const sidebarVisible = ref(false)
+const { isMobile, sidebarCollapsed } = useResponsive();
+const sidebarVisible = ref(false);
 
 function toggleSidebar() {
-  sidebarVisible.value = !sidebarVisible.value
+  sidebarVisible.value = !sidebarVisible.value;
 }
 
 function closeSidebar() {
-  sidebarVisible.value = false
+  sidebarVisible.value = false;
 }
 </script>
 

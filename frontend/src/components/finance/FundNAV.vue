@@ -1,85 +1,79 @@
 <script setup lang="ts">
-import { useFinanceStore } from '@/stores/finance'
-import { formatCurrency, formatPercent, getChangeClass } from '@/utils/format'
-import { computed, ref } from 'vue'
-import type { FundNAV } from '@/types'
-import { Search } from 'lucide-vue-next'
+import { useFinanceStore } from "@/stores/finance";
+import { formatCurrency, formatPercent, getChangeClass } from "@/utils/format";
+import { computed, ref } from "vue";
+import type { FundNAV } from "@/types";
+import { Search } from "lucide-vue-next";
 
-const financeStore = useFinanceStore()
-const searchQuery = ref('')
-const searchResults = ref<FundNAV[]>([])
-const selectedFund = ref<FundNAV | null>(null)
-const isSearching = ref(false)
+const financeStore = useFinanceStore();
+const searchQuery = ref("");
+const searchResults = ref<FundNAV[]>([]);
+const selectedFund = ref<FundNAV | null>(null);
+const isSearching = ref(false);
 
 async function searchFunds() {
   if (!searchQuery.value.trim()) {
-    searchResults.value = []
-    return
+    searchResults.value = [];
+    return;
   }
-  isSearching.value = true
+  isSearching.value = true;
   try {
-    await financeStore.searchSymbols(searchQuery.value, 'fund')
-    const fundResults = financeStore.searchResults.filter(r => r.type === 'fund')
-    searchResults.value = []
+    await financeStore.searchSymbols(searchQuery.value, "fund");
+    const fundResults = financeStore.searchResults.filter(
+      (r) => r.type === "fund",
+    );
+    searchResults.value = [];
     for (const r of fundResults) {
-      const navData = await financeStore.getFundNAV(r.symbol)
-      searchResults.value.push(navData)
+      const navData = await financeStore.getFundNAV(r.symbol);
+      searchResults.value.push(navData);
     }
   } finally {
-    isSearching.value = false
+    isSearching.value = false;
   }
 }
 
 function selectFund(fund: FundNAV) {
-  selectedFund.value = fund
-  searchResults.value = []
-  searchQuery.value = ''
+  selectedFund.value = fund;
+  searchResults.value = [];
+  searchQuery.value = "";
 }
 
 function clearSelection() {
-  selectedFund.value = null
+  selectedFund.value = null;
 }
 
-let timer: ReturnType<typeof setTimeout> | null = null
+let timer: ReturnType<typeof setTimeout> | null = null;
 
 function onInput() {
-  if (timer) clearTimeout(timer)
-  timer = setTimeout(searchFunds, 300)
+  if (timer) clearTimeout(timer);
+  timer = setTimeout(searchFunds, 300);
 }
 
 const deviationClass = computed(() => {
-  if (!selectedFund.value?.nav_estimate_deviation_percent) return ''
-  const cls = getChangeClass(selectedFund.value.nav_estimate_deviation_percent)
-  if (cls === 'up') return 'change-up'
-  if (cls === 'down') return 'change-down'
-  return 'change-neutral'
-})
+  if (!selectedFund.value?.nav_estimate_deviation_percent) return "";
+  const cls = getChangeClass(selectedFund.value.nav_estimate_deviation_percent);
+  if (cls === "up") return "change-up";
+  if (cls === "down") return "change-down";
+  return "change-neutral";
+});
 </script>
 
 <template>
   <div class="fund-nav">
-    <h2 class="nav-title">
-      基金NAV估值
-    </h2>
+    <h2 class="nav-title">基金NAV估值</h2>
 
     <div class="search-box">
-      <Search
-        :size="16"
-        class="search-icon"
-      />
+      <Search :size="16" class="search-icon" />
       <input
         v-model="searchQuery"
         type="text"
         placeholder="输入基金代码或名称..."
         class="search-input"
         @input="onInput"
-      >
+      />
     </div>
 
-    <div
-      v-if="searchResults.length > 0"
-      class="search-results"
-    >
+    <div v-if="searchResults.length > 0" class="search-results">
       <div
         v-for="fund in searchResults"
         :key="fund.symbol"
@@ -91,53 +85,37 @@ const deviationClass = computed(() => {
       </div>
     </div>
 
-    <div
-      v-if="selectedFund"
-      class="nav-detail"
-    >
+    <div v-if="selectedFund" class="nav-detail">
       <div class="nav-header">
         <span class="fund-symbol">{{ selectedFund.symbol }}</span>
         <span class="fund-name">{{ selectedFund.name }}</span>
-        <button
-          class="close-btn"
-          @click="clearSelection"
-        >
-          ×
-        </button>
+        <button class="close-btn" @click="clearSelection">×</button>
       </div>
 
       <div class="nav-values">
         <div class="nav-row">
           <span class="nav-label">官方NAV</span>
-          <span class="nav-official">{{ formatCurrency(selectedFund.nav_official, 'CNY') }}</span>
+          <span class="nav-official">{{
+            formatCurrency(selectedFund.nav_official, "CNY")
+          }}</span>
           <span class="nav-date">{{ selectedFund.nav_official_date }}</span>
         </div>
 
-        <div
-          v-if="selectedFund.nav_estimate"
-          class="nav-row"
-        >
+        <div v-if="selectedFund.nav_estimate" class="nav-row">
           <span class="nav-label">估值NAV</span>
-          <span class="nav-estimate">{{ formatCurrency(selectedFund.nav_estimate, 'CNY') }}</span>
+          <span class="nav-estimate">{{
+            formatCurrency(selectedFund.nav_estimate, "CNY")
+          }}</span>
         </div>
 
-        <div
-          v-if="selectedFund.nav_estimate_deviation_percent"
-          class="nav-row"
-        >
+        <div v-if="selectedFund.nav_estimate_deviation_percent" class="nav-row">
           <span class="nav-label">估值偏差</span>
-          <span
-            :class="deviationClass"
-            class="nav-deviation"
-          >
+          <span :class="deviationClass" class="nav-deviation">
             {{ formatPercent(selectedFund.nav_estimate_deviation_percent) }}
           </span>
         </div>
 
-        <div
-          v-if="selectedFund.underlying_index"
-          class="nav-row"
-        >
+        <div v-if="selectedFund.underlying_index" class="nav-row">
           <span class="nav-label">跟踪指数</span>
           <span class="index-info">
             {{ selectedFund.underlying_index.name }}
@@ -145,24 +123,20 @@ const deviationClass = computed(() => {
           </span>
         </div>
 
-        <div
-          v-if="selectedFund.estimate_method"
-          class="nav-row"
-        >
+        <div v-if="selectedFund.estimate_method" class="nav-row">
           <span class="nav-label">估值方法</span>
-          <span class="estimate-method">{{ selectedFund.estimate_method === 'index_tracking' ? '指数跟踪法' : selectedFund.estimate_method }}</span>
+          <span class="estimate-method">{{
+            selectedFund.estimate_method === "index_tracking"
+              ? "指数跟踪法"
+              : selectedFund.estimate_method
+          }}</span>
         </div>
 
-        <div class="nav-disclaimer">
-          估值仅供参考，不构成投资建议
-        </div>
+        <div class="nav-disclaimer">估值仅供参考，不构成投资建议</div>
       </div>
     </div>
 
-    <div
-      v-else-if="!isSearching && searchQuery.trim()"
-      class="nav-placeholder"
-    >
+    <div v-else-if="!isSearching && searchQuery.trim()" class="nav-placeholder">
       请搜索基金代码查看NAV估值
     </div>
   </div>

@@ -1,48 +1,45 @@
 <script setup lang="ts">
-import { useTechStore } from '@/stores/tech'
-import { useResponsive } from '@/composables/useResponsive'
-import { DOMAIN_CONFIG } from '@/types'
-import type { TechDomain, TechSort } from '@/types'
-import { ChevronDown } from 'lucide-vue-next'
-import { ref, computed } from 'vue'
+import { useTechStore } from "@/stores/tech";
+import { useResponsive } from "@/composables/useResponsive";
+import { DOMAIN_CONFIG } from "@/types";
+import type { TechDomain, TechSort } from "@/types";
+import { ChevronDown } from "lucide-vue-next";
+import { ref, computed } from "vue";
 
-const techStore = useTechStore()
-const { isMobile } = useResponsive()
-const domainDropdownOpen = ref(false)
-const sortDropdownOpen = ref(false)
+const techStore = useTechStore();
+const { isMobile } = useResponsive();
+const domainDropdownOpen = ref(false);
+const sortDropdownOpen = ref(false);
 
 const domainButtons = computed(() => [
-  { key: 'all', label: 'All', color: '' },
+  { key: "all", label: "All", color: "" },
   ...Object.entries(DOMAIN_CONFIG).map(([key, config]) => ({
     key,
     label: config.label,
     color: config.color,
   })),
-])
+]);
 
 const sortButtons = [
-  { key: 'hot', label: 'Hot' },
-  { key: 'time', label: 'Time' },
-  { key: 'relevance', label: 'Relevance' },
-]
+  { key: "hot", label: "Hot" },
+  { key: "time", label: "Time" },
+  { key: "relevance", label: "Relevance" },
+];
 
 function selectDomain(domain: TechDomain) {
-  techStore.setDomain(domain)
-  domainDropdownOpen.value = false
+  techStore.setDomain(domain);
+  domainDropdownOpen.value = false;
 }
 
 function selectSort(sort: TechSort) {
-  techStore.setSort(sort)
-  sortDropdownOpen.value = false
+  techStore.setSort(sort);
+  sortDropdownOpen.value = false;
 }
 </script>
 
 <template>
   <div class="tech-sub-nav">
-    <div
-      v-if="isMobile"
-      class="sub-nav-mobile"
-    >
+    <div v-if="isMobile" class="sub-nav-mobile">
       <div class="mobile-selectors">
         <button
           class="dropdown-trigger"
@@ -50,24 +47,29 @@ function selectSort(sort: TechSort) {
         >
           <span
             class="domain-indicator"
-            :style="{ backgroundColor: DOMAIN_CONFIG[techStore.currentDomain]?.color || 'var(--accent)' }"
+            :style="{
+              backgroundColor:
+                DOMAIN_CONFIG[techStore.currentDomain]?.color ||
+                'var(--accent)',
+            }"
           />
-          <span>{{ domainButtons.find(d => d.key === techStore.currentDomain)?.label }}</span>
+          <span>{{
+            domainButtons.find((d) => d.key === techStore.currentDomain)?.label
+          }}</span>
           <ChevronDown :size="16" />
         </button>
         <button
           class="dropdown-trigger"
           @click="sortDropdownOpen = !sortDropdownOpen"
         >
-          <span>{{ sortButtons.find(s => s.key === techStore.currentSort)?.label }}</span>
+          <span>{{
+            sortButtons.find((s) => s.key === techStore.currentSort)?.label
+          }}</span>
           <ChevronDown :size="16" />
         </button>
       </div>
       <Transition name="fade">
-        <div
-          v-if="domainDropdownOpen"
-          class="dropdown-menu"
-        >
+        <div v-if="domainDropdownOpen" class="dropdown-menu">
           <button
             v-for="item in domainButtons"
             :key="item.key"
@@ -85,10 +87,7 @@ function selectSort(sort: TechSort) {
         </div>
       </Transition>
       <Transition name="fade">
-        <div
-          v-if="sortDropdownOpen"
-          class="dropdown-menu"
-        >
+        <div v-if="sortDropdownOpen" class="dropdown-menu">
           <button
             v-for="item in sortButtons"
             :key="item.key"
@@ -102,10 +101,7 @@ function selectSort(sort: TechSort) {
       </Transition>
     </div>
 
-    <div
-      v-else
-      class="sub-nav-desktop"
-    >
+    <div v-else class="sub-nav-desktop">
       <div class="domain-group">
         <button
           v-for="item in domainButtons"

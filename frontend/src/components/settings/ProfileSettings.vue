@@ -1,24 +1,26 @@
 <script setup lang="ts">
-import { useAuthStore } from '@/stores/auth'
-import { useTheme } from '@/composables/useTheme'
-import { computed } from 'vue'
-import { Sun, Moon, Palette, Wifi, WifiOff } from 'lucide-vue-next'
-import { SSEConnectionState } from '@/types'
+import { useAuthStore } from "@/stores/auth";
+import { useTheme } from "@/composables/useTheme";
+import { computed } from "vue";
+import { Sun, Moon, Palette, Wifi, WifiOff } from "lucide-vue-next";
+import { SSEConnectionState } from "@/types";
 
-const authStore = useAuthStore()
-const { theme, colorScheme, toggleTheme, toggleColorScheme } = useTheme()
+const authStore = useAuthStore();
+const { theme, colorScheme, toggleTheme, toggleColorScheme } = useTheme();
 
-const userName = computed(() => authStore.user?.name || '未登录')
-const userEmail = computed(() => authStore.user?.email || '')
-const userRole = computed(() => authStore.user?.role || '')
+const userName = computed(() => authStore.user?.name || "未登录");
+const userEmail = computed(() => authStore.user?.email || "");
+const userRole = computed(() => authStore.user?.role || "");
 
 const colorSchemeLabel = computed(() =>
-  colorScheme.value === 'chinese' ? '中国配色 (红涨绿跌)' : '国际配色 (绿涨红跌)'
-)
+  colorScheme.value === "chinese"
+    ? "中国配色 (红涨绿跌)"
+    : "国际配色 (绿涨红跌)",
+);
 
 const sseStatus = computed(() => {
-  return SSEConnectionState.CONNECTED
-})
+  return SSEConnectionState.CONNECTED;
+});
 </script>
 
 <template>
@@ -36,23 +38,14 @@ const sseStatus = computed(() => {
 
     <div class="setting-item">
       <div class="setting-header">
-        <Sun
-          v-if="theme === 'dark'"
-          :size="18"
-        />
-        <Moon
-          v-else
-          :size="18"
-        />
+        <Sun v-if="theme === 'dark'" :size="18" />
+        <Moon v-else :size="18" />
         <span class="setting-label">主题</span>
       </div>
-      <span class="setting-value">{{ theme === 'dark' ? '暗色' : '亮色' }}</span>
-      <button
-        class="toggle-btn"
-        @click="toggleTheme"
-      >
-        切换
-      </button>
+      <span class="setting-value">{{
+        theme === "dark" ? "暗色" : "亮色"
+      }}</span>
+      <button class="toggle-btn" @click="toggleTheme">切换</button>
     </div>
 
     <div class="setting-item">
@@ -61,31 +54,24 @@ const sseStatus = computed(() => {
         <span class="setting-label">涨跌配色</span>
       </div>
       <span class="setting-value">{{ colorSchemeLabel }}</span>
-      <button
-        class="toggle-btn"
-        @click="toggleColorScheme"
-      >
-        切换
-      </button>
+      <button class="toggle-btn" @click="toggleColorScheme">切换</button>
     </div>
 
     <div class="setting-item">
       <div class="setting-header">
-        <Wifi
-          v-if="sseStatus === SSEConnectionState.CONNECTED"
-          :size="18"
-        />
-        <WifiOff
-          v-else
-          :size="18"
-        />
+        <Wifi v-if="sseStatus === SSEConnectionState.CONNECTED" :size="18" />
+        <WifiOff v-else :size="18" />
         <span class="setting-label">SSE连接</span>
       </div>
       <span
         class="setting-value"
-        :class="sseStatus === SSEConnectionState.CONNECTED ? 'sse-connected' : 'sse-disconnected'"
+        :class="
+          sseStatus === SSEConnectionState.CONNECTED
+            ? 'sse-connected'
+            : 'sse-disconnected'
+        "
       >
-        {{ sseStatus === SSEConnectionState.CONNECTED ? '已连接' : '未连接' }}
+        {{ sseStatus === SSEConnectionState.CONNECTED ? "已连接" : "未连接" }}
       </span>
     </div>
   </div>

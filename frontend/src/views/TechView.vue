@@ -1,30 +1,30 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, computed } from 'vue'
-import { useTechStore } from '@/stores/tech'
-import TechSubNav from '@/components/tech/TechSubNav.vue'
-import CategoryPanel from '@/components/tech/CategoryPanel.vue'
-import NewsFeed from '@/components/tech/NewsFeed.vue'
-import TopicFilter from '@/components/tech/TopicFilter.vue'
+import { onMounted, onUnmounted, computed } from "vue";
+import { useTechStore } from "@/stores/tech";
+import TechSubNav from "@/components/tech/TechSubNav.vue";
+import CategoryPanel from "@/components/tech/CategoryPanel.vue";
+import NewsFeed from "@/components/tech/NewsFeed.vue";
+import TopicFilter from "@/components/tech/TopicFilter.vue";
 
-const techStore = useTechStore()
+const techStore = useTechStore();
 
-const domains = ['robotics', 'ai', 'embedded', 'space']
-const isFeedMode = computed(() => techStore.isFeedMode)
+const domains = ["robotics", "ai", "embedded", "space"];
+const isFeedMode = computed(() => techStore.isFeedMode);
 
 onMounted(() => {
-  techStore.init()
-})
+  techStore.init();
+});
 
 onUnmounted(() => {
-  techStore.cleanup()
-})
+  techStore.cleanup();
+});
 
 function switchToFeedMode() {
-  techStore.setFeedMode(true)
+  techStore.setFeedMode(true);
 }
 
 function switchToGridMode() {
-  techStore.setFeedMode(false)
+  techStore.setFeedMode(false);
 }
 </script>
 
@@ -50,21 +50,11 @@ function switchToGridMode() {
       </button>
     </div>
 
-    <div
-      v-if="!isFeedMode"
-      class="category-grid"
-    >
-      <CategoryPanel
-        v-for="domain in domains"
-        :key="domain"
-        :domain="domain"
-      />
+    <div v-if="!isFeedMode" class="category-grid">
+      <CategoryPanel v-for="domain in domains" :key="domain" :domain="domain" />
     </div>
 
-    <div
-      v-else
-      class="feed-mode"
-    >
+    <div v-else class="feed-mode">
       <NewsFeed />
     </div>
   </div>

@@ -1,11 +1,15 @@
 import logging
 import time
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
 
 import httpx
 from jose import jwt
 
 from app.config import settings
+
+if TYPE_CHECKING:
+    from app.config import Settings
 
 logger = logging.getLogger(__name__)
 
@@ -425,7 +429,11 @@ class SSOHandlerFactory:
     }
 
     @classmethod
-    def create(cls, provider: str) -> BaseSSOHandler:
+    def create(cls, provider: str, settings: "Settings | None" = None) -> BaseSSOHandler:
+        if settings is not None:
+            enabled = cls.get_enabled_providers(settings)
+            if provider not in enabled:
+                raise ValueError(f"SSO provider '{provider}' is not enabled")
         handler_class = cls._handlers.get(provider)
         if handler_class is None:
             raise ValueError(f"Unsupported SSO provider: {provider}")
@@ -434,3 +442,7 @@ class SSOHandlerFactory:
     @classmethod
     def get_supported_providers(cls) -> list[str]:
         return list(cls._handlers.keys())
+
+    @classmethod
+    def get_enabled_providers(cls, settings: "Settings") -> list[str]:
+        return [p for p in settings.enabled_sso_providers if p in SUPPORTED_PROVIDERS]

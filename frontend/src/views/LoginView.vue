@@ -1,11 +1,23 @@
 <script setup lang="ts">
 import { useAuth } from '@/composables/useAuth'
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { SSO_PROVIDERS } from '@/utils/constants'
+import { apiGet } from '@/utils/api'
 import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
 
 const { loginWithSSO } = useAuth()
 const loadingProvider = ref<string | null>(null)
+const enabledProviders = ref<string[]>([])
+
+onMounted(async () => {
+  try {
+    const response = await apiGet<{ enabled_providers: string[] }>('/auth/sso/providers')
+    enabledProviders.value = response.data.enabled_providers
+  } catch (error) {
+    console.error('Failed to fetch SSO providers:', error)
+    enabledProviders.value = ['google', 'github']
+  }
+})
 
 async function handleLogin(provider: string) {
   loadingProvider.value = provider
@@ -41,18 +53,19 @@ const providerIcons: Record<string, string> = {
       </div>
 
       <div class="sso-buttons">
-        <button
-          v-for="provider in SSO_PROVIDERS"
-          :key="provider.slug"
-          class="sso-btn"
-          :style="{ '--btn-color': provider.brand_color }"
-          :disabled="loadingProvider === provider.slug"
-          @click="handleLogin(provider.slug)"
-        >
-          <span class="sso-icon">{{ providerIcons[provider.slug] }}</span>
-          <span class="sso-label">使用 {{ provider.name }} 登录</span>
-          <LoadingSpinner v-if="loadingProvider === provider.slug" />
-        </button>
+        <template v-for="provider in SSO_PROVIDERS" :key="provider.slug">
+          <button
+            v-if="enabledProviders.includes(provider.slug)"
+            class="sso-btn"
+            :style="{ '--btn-color': provider.brand_color }"
+            :disabled="loadingProvider === provider.slug"
+            @click="handleLogin(provider.slug)"
+          >
+            <span class="sso-icon">{{ providerIcons[provider.slug] }}</span>
+            <span class="sso-label">使用 {{ provider.name }} 登录</span>
+            <LoadingSpinner v-if="loadingProvider === provider.slug" />
+          </button>
+        </template>
       </div>
     </div>
   </div>

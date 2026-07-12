@@ -123,7 +123,44 @@ IP_BLACKLIST_REDIS_KEY = "ip_blacklist"
 | L3: 黑名单 | Redis Set + 中间件 | 恶意IP | IP级 |
 | L4: 请求验证 | Header检查 | 异常请求 | 请求级 |
 
-### 3.4 SSO 集成设计 (5种最主流)
+### 3.4 SSO 集成设计 (5种提供商，默认启用 Google + GitHub)
+
+#### 提供商启用/禁用机制
+
+InstantBoard 支持 5 种 SSO 提供商，但**默认只启用 Google 和 GitHub**。
+
+**配置驱动**：通过环境变量 `ENABLED_SSO_PROVIDERS`（逗号分隔）控制启用的提供商列表。
+
+```python
+# config.py
+ENABLED_SSO_PROVIDERS: list[str] = ["google", "github"]  # 默认值
+
+# 应用启动时读取环境变量：
+# ENABLED_SSO_PROVIDERS=google,github            → 仅启用 Google 和 GitHub
+# ENABLED_SSO_PROVIDERS=google,github,azure_ad    → 额外启用 Azure AD
+# ENABLED_SSO_PROVIDERS=google,github,azure_ad,apple,facebook → 全部启用
+```
+
+**启用检查**：
+
+```mermaid
+graph LR
+    A["前端加载"] -->|"GET /api/v1/auth/sso/providers"| B["后端返回<br/>enabled_providers"]
+    B --> C["前端动态渲染<br/>只显示启用的登录按钮"]
+    D["用户点击登录"] -->|"POST /api/v1/auth/sso/{provider}"| E{"provider 在<br/>ENABLED_SSO_PROVIDERS 中?"}
+    E -->|"否"| F["返回 400<br/>PROVIDER_NOT_ENABLED"]
+    E -->|"是"| G["执行 OAuth2 流程"]
+
+    style E fill:#fff3e0,stroke:#ef6c00,color:#000
+    style F fill:#fce4ec,stroke:#c62828,color:#000
+    style G fill:#e8f5e9,stroke:#2e7d32,color:#000
+```
+
+**设计原则**：
+- **代码保留**：所有 5 种提供商的实现代码均保留，不删除任何 handler
+- **配置驱动**：仅通过 `ENABLED_SSO_PROVIDERS` 环境变量控制启用/禁用
+- **向后兼容**：数据库 CHECK 约束包含所有 5 个提供商值，应用层单独控制启用逻辑
+- **新增错误码**：`PROVIDER_NOT_ENABLED (400)` — 用户尝试使用未启用的提供商时返回
 
 #### 统一OAuth2 流程架构
 
@@ -133,17 +170,21 @@ sequenceDiagram
     participant BE as Backend
     participant SSO as SSO Provider
 
-    FE->>BE: 1. GET /api/v1/auth/sso/{provider}/authorize
+    FE->>BE: 0. GET /api/v1/auth/sso/providers
+    BE-->>FE: 返回 enabled_providers 列表
+    FE->>FE: 1. 动态渲染登录按钮（仅显示已启用提供商）
+    FE->>BE: 2. GET /api/v1/auth/sso/{provider}/authorize
+    BE->>BE: 2a. 检查 provider 是否在 enabled_providers 中
     BE-->>FE: 返回授权URL
-    FE->>SSO: 2. 重定向到SSO提供商授权页面
-    SSO-->>FE: 3. 用户授权 → 回调到InstantBoard callback URL
-    FE->>BE: 4. POST /api/v1/auth/sso/{provider} 发送code
-    BE->>SSO: 5a. code → access_token 提供商
-    SSO-->>BE: 5b. 返回access_token
-    BE->>BE: 5c. access_token → 用户信息 → 创建/查找user → 生成JWT
-    BE-->>FE: 6. 返回 JWT access_token + refresh_token
+    FE->>SSO: 3. 重定向到SSO提供商授权页面
+    SSO-->>FE: 4. 用户授权 → 回调到InstantBoard callback URL
+    FE->>BE: 5. POST /api/v1/auth/sso/{provider} 发送code
+    BE->>SSO: 6a. code → access_token 提供商
+    SSO-->>BE: 6b. 返回access_token
+    BE->>BE: 6c. access_token → 用户信息 → 创建/查找user → 生成JWT
+    BE-->>FE: 7. 返回 JWT access_token + refresh_token
 
-    Note over BE: 内部实现差异仅在Step 5的<br/>"code → access_token → 用户信息"部分
+    Note over BE: 内部实现差异仅在Step 6的<br/>"code → access_token → 用户信息"部分
 ```
 
 #### Google OAuth2
@@ -236,9 +277,9 @@ SCOPE = "email public_profile"
 ```python
 # auth/sso.py
 class SSOHandlerFactory:
-    """统一入口，根据 provider 创建对应 handler"""
+    """统一入口，根据 provider 创建对应 handler（支持配置驱动启用/禁用）"""
     
-    handlers = {
+    all_handlers = {
         "google": GoogleOAuthHandler,
         "azure_ad": AzureADHandler,
         "github": GitHubOAuthHandler,
@@ -246,8 +287,16 @@ class SSOHandlerFactory:
         "facebook": FacebookLoginHandler,
     }
     
+    def get_enabled_providers() -> list[str]:
+        """从 ENABLED_SSO_PROVIDERS 环境变量读取已启用列表"""
+        return settings.ENABLED_SSO_PROVIDERS  # 默认 ["google", "github"]
+    
     def create(provider: str) -> BaseSSOHandler:
-        return handlers[provider](settings)
+        """创建 handler，若 provider 未启用则抛出 ValueError"""
+        enabled = settings.ENABLED_SSO_PROVIDERS
+        if provider not in enabled:
+            raise ValueError(f"Provider '{provider}' is not enabled. Enabled: {enabled}")
+        return all_handlers[provider](settings)
 
 class BaseSSOHandler:
     """所有 SSO handler 的抽象基类"""
@@ -387,6 +436,7 @@ app.add_middleware(
 
 ## 5. 边界情况
 
+- **未启用的SSO提供商**: 返回 `PROVIDER_NOT_ENABLED (400)`，前端通过 `GET /api/v1/auth/sso/providers` 预检查避免此情况
 - **SSO提供商宕机**: 返回 `SSO_PROVIDER_ERROR (401)`，前端提示用户尝试其他SSO或稍后重试
 - **JWT密钥泄露**: 管理API支持立即更换 `SECRET_KEY`，所有旧token自动失效
 - **Redis限流不可用**: 降级为 Nginx 层限流 (粗粒度但有效)

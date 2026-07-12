@@ -78,6 +78,8 @@ async def setup_database():
     stripped = _strip_pg_server_defaults() if _is_sqlite else []
     try:
         async with test_engine.begin() as conn:
+            await conn.run_sync(Base.metadata.drop_all)
+        async with test_engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
     finally:
         if stripped:

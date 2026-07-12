@@ -113,7 +113,10 @@ services:
       context: ../frontend
       dockerfile: Dockerfile
       target: prod
-    volumes:
+    command: !reset null
+    ports: !override
+      - "3000:80"
+    volumes: !override
       - frontend_static:/usr/share/nginx/html
     depends_on:
       api:

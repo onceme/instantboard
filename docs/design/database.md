@@ -63,6 +63,12 @@ CREATE TABLE users (
 CREATE INDEX idx_users_tenant ON users(tenant_id);
 CREATE INDEX idx_users_sso ON users(sso_provider, sso_provider_id);
 
+-- 注意: sso_provider 的 CHECK 约束包含所有 5 个提供商值
+-- (google, azure_ad, github, apple, facebook)，
+-- 但应用层通过 ENABLED_SSO_PROVIDERS 环境变量控制哪些提供商可被使用。
+-- 数据库约束保留全部值以确保向后兼容，
+-- 未来若有需要可通过 Alembic 迁移添加 enabled 标志列。
+
 -- ============================================
 -- 分类与数据源
 -- ============================================

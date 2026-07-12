@@ -19,6 +19,15 @@ from app.core.sso_handlers import (
 )
 
 
+def create_mock_settings(enabled_providers: list[str] | None = None) -> MagicMock:
+    """Create a mock settings object with specified enabled SSO providers."""
+    if enabled_providers is None:
+        enabled_providers = ["google", "github"]
+    mock_settings = MagicMock()
+    mock_settings.enabled_sso_providers = enabled_providers
+    return mock_settings
+
+
 def _make_mock_client():
     mock_client = MagicMock(spec=httpx.AsyncClient)
     mock_client.is_closed = False
@@ -169,6 +178,83 @@ class TestSSOHandlerFactory:
         assert "github" in providers
         assert "apple" in providers
         assert "facebook" in providers
+
+    # -- New tests for settings-aware create() --
+
+    def test_create_with_settings_enabled_provider(self):
+        """Creating a handler for an enabled provider should succeed."""
+        mock_settings = create_mock_settings(["google", "github"])
+        handler = SSOHandlerFactory.create("google", settings=mock_settings)
+        assert isinstance(handler, GoogleSSOHandler)
+
+    def test_create_with_settings_disabled_provider_raises(self):
+        """Creating a handler for a supported but disabled provider should raise ValueError."""
+        mock_settings = create_mock_settings(["google", "github"])
+        with pytest.raises(ValueError, match="SSO provider 'apple' is not enabled"):
+            SSOHandlerFactory.create("apple", settings=mock_settings)
+
+    def test_create_with_settings_unsupported_provider_raises(self):
+        """Unsupported provider raises ValueError even if listed in enabled providers config."""
+        mock_settings = create_mock_settings(["google", "github", "totally_invalid"])
+        with pytest.raises(ValueError, match="SSO provider 'totally_invalid' is not enabled"):
+            SSOHandlerFactory.create("totally_invalid", settings=mock_settings)
+
+    def test_create_without_settings_allows_any_supported(self):
+        """Without settings, create() allows any supported provider (legacy behavior)."""
+        handler = SSOHandlerFactory.create("apple")
+        assert isinstance(handler, AppleSSOHandler)
+
+    def test_create_with_settings_empty_enabled_list(self):
+        """With an empty enabled list, all supported providers should fail."""
+        mock_settings = create_mock_settings([])
+        for provider in SSOHandlerFactory.get_supported_providers():
+            with pytest.raises(ValueError, match="is not enabled"):
+                SSOHandlerFactory.create(provider, settings=mock_settings)
+
+    # -- Tests for get_enabled_providers() --
+
+    def test_get_enabled_providers_default_config(self):
+        """Default config (google + github) returns exactly those two providers."""
+        mock_settings = create_mock_settings(["google", "github"])
+        result = SSOHandlerFactory.get_enabled_providers(mock_settings)
+        assert result == ["google", "github"]
+
+    def test_get_enabled_providers_with_azure_ad(self):
+        """Config including azure_ad returns google, github, and azure_ad."""
+        mock_settings = create_mock_settings(["google", "github", "azure_ad"])
+        result = SSOHandlerFactory.get_enabled_providers(mock_settings)
+        assert "google" in result
+        assert "github" in result
+        assert "azure_ad" in result
+        assert len(result) == 3
+
+    def test_get_enabled_providers_all_providers(self):
+        """Config with all supported providers returns all five providers."""
+        all_providers = list(SUPPORTED_PROVIDERS)
+        mock_settings = create_mock_settings(all_providers)
+        result = SSOHandlerFactory.get_enabled_providers(mock_settings)
+        assert set(result) == set(all_providers)
+        assert len(result) == len(all_providers)
+
+    def test_get_enabled_providers_empty_config(self):
+        """Empty config returns an empty list."""
+        mock_settings = create_mock_settings([])
+        result = SSOHandlerFactory.get_enabled_providers(mock_settings)
+        assert result == []
+
+    def test_get_enabled_providers_filters_invalid_names(self):
+        """Invalid provider names in config are silently filtered out."""
+        mock_settings = create_mock_settings(["google", "invalid_xyz", "github", "bogus"])
+        result = SSOHandlerFactory.get_enabled_providers(mock_settings)
+        assert result == ["google", "github"]
+        assert "invalid_xyz" not in result
+        assert "bogus" not in result
+
+    def test_get_enabled_providers_preserves_order(self):
+        """Returned providers preserve the order from the config."""
+        mock_settings = create_mock_settings(["facebook", "google", "azure_ad"])
+        result = SSOHandlerFactory.get_enabled_providers(mock_settings)
+        assert result == ["facebook", "google", "azure_ad"]
 
 
 class TestGoogleSSOHandler:

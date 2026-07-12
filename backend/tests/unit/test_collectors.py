@@ -690,6 +690,7 @@ class TestRSSCollector:
         assert result is None
 
     async def test_fetch_data_not_200(self):
+        """非 200 响应应抛出 RuntimeError"""
         c = RSSCollector()
         source = _make_source(url="https://x.com")
         mock_response = MagicMock()
@@ -699,8 +700,8 @@ class TestRSSCollector:
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
         with patch("httpx.AsyncClient", return_value=mock_client):
-            result = await c.fetch_data(source)
-        assert result is None
+            with pytest.raises(RuntimeError, match="HTTP 500"):
+                await c.fetch_data(source)
 
     async def test_parse_data_entries(self):
         import time as _t
@@ -1331,12 +1332,12 @@ class TestRSSCollectorExtended:
     """Tests covering missing lines in rss_collector.py."""
 
     async def test_fetch_data_timeout(self):
-        """Line 31-33: httpx.TimeoutException caught."""
+        """httpx.TimeoutException is re-raised by fetch_data."""
         import httpx as _httpx
         c = RSSCollector()
         source = _make_source(url="https://slow.com/rss")
 
-        async def mock_get(url):
+        async def mock_get(url, **kwargs):
             raise _httpx.TimeoutException("timed out")
 
         mock_client = AsyncMock()
@@ -1345,16 +1346,16 @@ class TestRSSCollectorExtended:
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
         with patch("httpx.AsyncClient", return_value=mock_client):
-            result = await c.fetch_data(source)
-        assert result is None
+            with pytest.raises(_httpx.TimeoutException):
+                await c.fetch_data(source)
 
     async def test_fetch_data_http_error(self):
-        """Line 34-36: httpx.HTTPError (non-timeout) caught."""
+        """httpx.HTTPError (non-timeout) is re-raised by fetch_data."""
         import httpx as _httpx
         c = RSSCollector()
         source = _make_source(url="https://broken.com/rss")
 
-        async def mock_get(url):
+        async def mock_get(url, **kwargs):
             raise _httpx.HTTPError("connection refused")
 
         mock_client = AsyncMock()
@@ -1363,8 +1364,8 @@ class TestRSSCollectorExtended:
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
         with patch("httpx.AsyncClient", return_value=mock_client):
-            result = await c.fetch_data(source)
-        assert result is None
+            with pytest.raises(_httpx.HTTPError):
+                await c.fetch_data(source)
 
     async def test_parse_data_feedparser_exception(self):
         """Lines 44-46: feedparser raises exception."""

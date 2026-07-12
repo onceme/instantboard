@@ -6,8 +6,9 @@ from pydantic import BaseModel
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.core.exceptions import ValidationError
-from app.core.sso_handlers import SSOHandlerFactory
+from app.core.sso_handlers import SUPPORTED_PROVIDERS, SSOHandlerFactory
 from app.dependencies import get_current_user, get_db, get_raw_token, get_redis
 from app.schemas.auth import (
     LogoutResponse,
@@ -24,12 +25,20 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-SUPPORTED_PROVIDERS = ("google", "azure_ad", "github", "apple", "facebook")
-
 
 class SSOAuthorizeResponse(BaseModel):
     authorize_url: str
     state: str
+
+
+class EnabledProvidersResponse(BaseModel):
+    enabled_providers: list[str]
+
+
+@router.get("/sso/providers", response_model=SuccessResponse[EnabledProvidersResponse])
+async def get_enabled_providers():
+    enabled_providers = SSOHandlerFactory.get_enabled_providers(settings)
+    return SuccessResponse(data=EnabledProvidersResponse(enabled_providers=enabled_providers))
 
 
 @router.get("/sso/{provider}/authorize", response_model=SuccessResponse[SSOAuthorizeResponse])
@@ -42,7 +51,13 @@ async def sso_authorize(
             message=f"Unsupported SSO provider: {provider}",
             details=[{"field": "provider", "message": f"Must be one of: {', '.join(SUPPORTED_PROVIDERS)}"}],
         )
-    handler = SSOHandlerFactory.create(provider)
+    try:
+        handler = SSOHandlerFactory.create(provider, settings)
+    except ValueError as e:
+        raise ValidationError(
+            message=str(e),
+            details=[{"field": "provider", "message": str(e)}],
+        )
     state = secrets.token_urlsafe(32)
     authorize_url = handler.get_authorize_url(state=state, redirect_uri=redirect_uri)
     return SuccessResponse(data=SSOAuthorizeResponse(authorize_url=authorize_url, state=state))

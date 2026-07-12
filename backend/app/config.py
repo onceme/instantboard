@@ -56,6 +56,12 @@ class Settings(BaseSettings):
     jwt_access_token_expire_minutes: int = Field(default=60, alias="JWT_ACCESS_TOKEN_EXPIRE_MINUTES")
     jwt_refresh_token_expire_days: int = Field(default=7, alias="JWT_REFRESH_TOKEN_EXPIRE_DAYS")
 
+    # SSO Enabled Providers
+    enabled_sso_providers: Annotated[list[str], NoDecode] = Field(
+        default=["google", "github"],
+        alias="ENABLED_SSO_PROVIDERS",
+    )
+
     # SSO - Google
     google_oauth_client_id: str | None = Field(default=None, alias="GOOGLE_OAUTH_CLIENT_ID")
     google_oauth_client_secret: str | None = Field(default=None, alias="GOOGLE_OAUTH_CLIENT_SECRET")
@@ -91,7 +97,7 @@ class Settings(BaseSettings):
         alias="CORS_ORIGINS",
     )
 
-    @field_validator("finnhub_api_keys", "cors_origins", mode="before")
+    @field_validator("finnhub_api_keys", "cors_origins", "enabled_sso_providers", mode="before")
     @classmethod
     def parse_list_env_var(cls, v: object) -> list[str]:
         return _parse_list_str(v)

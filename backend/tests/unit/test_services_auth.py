@@ -116,6 +116,30 @@ class TestSSOLogin:
             await service.sso_login("invalid_provider", "code", "https://redirect.example.com")
 
     @patch("app.services.auth.SSOHandlerFactory")
+    async def test_sso_login_disabled_provider_raises_validation_error(self, mock_factory):
+        """When a supported provider is not enabled in settings, factory raises ValueError
+        and the service translates it to a ValidationError (HTTP 400)."""
+        db, _ = _mock_db_session()
+        redis = _mock_redis()
+        # azure_ad is supported but not in the default enabled list; factory raises ValueError
+        mock_factory.create.side_effect = ValueError("SSO provider 'azure_ad' is not enabled")
+
+        service = AuthService(db, redis)
+        with pytest.raises(ValidationError, match="is not enabled"):
+            await service.sso_login("azure_ad", "code", "https://redirect.example.com")
+
+    @patch("app.services.auth.SSOHandlerFactory")
+    async def test_sso_login_disabled_apple_provider_raises_validation_error(self, mock_factory):
+        """Apple is supported but not enabled by default; login must fail with ValidationError."""
+        db, _ = _mock_db_session()
+        redis = _mock_redis()
+        mock_factory.create.side_effect = ValueError("SSO provider 'apple' is not enabled")
+
+        service = AuthService(db, redis)
+        with pytest.raises(ValidationError, match="SSO provider 'apple' is not enabled"):
+            await service.sso_login("apple", "code", "https://redirect.example.com")
+
+    @patch("app.services.auth.SSOHandlerFactory")
     async def test_sso_login_auth_failure_value_error(self, mock_factory):
         db, _ = _mock_db_session()
         redis = _mock_redis()

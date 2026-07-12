@@ -164,3 +164,38 @@ class TestSettings:
     def test_default_database_pool_recycle(self):
         settings = Settings()
         assert settings.database_pool_recycle == 3600
+
+    # --- ENABLED_SSO_PROVIDERS tests ---
+
+    def test_enabled_sso_providers_default(self):
+        """Default enabled_sso_providers includes only google and github."""
+        settings = Settings()
+        assert settings.enabled_sso_providers == ["google", "github"]
+
+    def test_enabled_sso_providers_custom_comma_separated(self):
+        """ENABLED_SSO_PROVIDERS parsed from a comma-separated string."""
+        s = Settings(ENABLED_SSO_PROVIDERS="google,github,azure_ad", _env_file=None)
+        assert s.enabled_sso_providers == ["google", "github", "azure_ad"]
+
+    def test_enabled_sso_providers_custom_with_all(self):
+        """All five supported providers can be enabled."""
+        s = Settings(
+            ENABLED_SSO_PROVIDERS="google,azure_ad,github,apple,facebook",
+            _env_file=None,
+        )
+        assert s.enabled_sso_providers == ["google", "azure_ad", "github", "apple", "facebook"]
+
+    def test_enabled_sso_providers_empty_string(self):
+        """Empty string produces an empty list (all providers disabled)."""
+        s = Settings(ENABLED_SSO_PROVIDERS="", _env_file=None)
+        assert s.enabled_sso_providers == []
+
+    def test_enabled_sso_providers_with_spaces(self):
+        """Whitespace around provider names is stripped."""
+        s = Settings(ENABLED_SSO_PROVIDERS=" google , github , azure_ad ", _env_file=None)
+        assert s.enabled_sso_providers == ["google", "github", "azure_ad"]
+
+    def test_enabled_sso_providers_json_array(self):
+        """ENABLED_SSO_PROVIDERS can be a JSON array string."""
+        s = Settings(ENABLED_SSO_PROVIDERS='["google","apple"]', _env_file=None)
+        assert s.enabled_sso_providers == ["google", "apple"]

@@ -1,21 +1,23 @@
 <script setup lang="ts">
-import { useDashboardStore } from '@/stores/dashboard'
-import { formatPercent, formatUptime } from '@/utils/format'
-import { computed } from 'vue'
+import { useDashboardStore } from "@/stores/dashboard";
+import { formatPercent, formatUptime } from "@/utils/format";
+import { computed } from "vue";
 
-const dashboardStore = useDashboardStore()
+const dashboardStore = useDashboardStore();
 
-const systemInfo = computed(() => dashboardStore.systemInfo)
+const systemInfo = computed(() => dashboardStore.systemInfo);
 
-const cpuPercent = computed(() => systemInfo.value?.cpu_usage_percent ?? 0)
+const cpuPercent = computed(() => systemInfo.value?.cpu_usage_percent ?? 0);
 const memoryPercent = computed(() => {
-  if (!systemInfo.value) return 0
-  return ((systemInfo.value.memory_used_mb / systemInfo.value.memory_total_mb) * 100)
-})
+  if (!systemInfo.value) return 0;
+  return (
+    (systemInfo.value.memory_used_mb / systemInfo.value.memory_total_mb) * 100
+  );
+});
 const diskPercent = computed(() => {
-  if (!systemInfo.value) return 0
-  return ((systemInfo.value.disk_used_gb / systemInfo.value.disk_total_gb) * 100)
-})
+  if (!systemInfo.value) return 0;
+  return (systemInfo.value.disk_used_gb / systemInfo.value.disk_total_gb) * 100;
+});
 </script>
 
 <template>
@@ -52,25 +54,37 @@ const diskPercent = computed(() => {
       </div>
     </div>
 
-    <div class="network-row" v-if="systemInfo">
+    <div v-if="systemInfo" class="network-row">
       <div class="network-item">
         <span class="network-label">发送</span>
-        <span class="network-value">{{ systemInfo.network_out_kbps ? `${systemInfo.network_out_kbps} KB/s` : '--' }}</span>
+        <span class="network-value">{{
+          systemInfo.network_out_kbps
+            ? `${systemInfo.network_out_kbps} KB/s`
+            : "--"
+        }}</span>
       </div>
       <div class="network-item">
         <span class="network-label">接收</span>
-        <span class="network-value">{{ systemInfo.network_in_kbps ? `${systemInfo.network_in_kbps} KB/s` : '--' }}</span>
+        <span class="network-value">{{
+          systemInfo.network_in_kbps
+            ? `${systemInfo.network_in_kbps} KB/s`
+            : "--"
+        }}</span>
       </div>
     </div>
 
-    <div class="system-meta" v-if="systemInfo">
+    <div v-if="systemInfo" class="system-meta">
       <div class="meta-item">
         <span class="meta-label">API版本</span>
-        <span class="meta-value">{{ systemInfo.api_version || systemInfo.version }}</span>
+        <span class="meta-value">{{
+          systemInfo.api_version || systemInfo.version
+        }}</span>
       </div>
       <div class="meta-item">
         <span class="meta-label">运行时长</span>
-        <span class="meta-value">{{ formatUptime(systemInfo.uptime_seconds) }}</span>
+        <span class="meta-value">{{
+          formatUptime(systemInfo.uptime_seconds)
+        }}</span>
       </div>
       <div class="meta-item">
         <span class="meta-label">环境</span>

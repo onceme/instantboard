@@ -10,18 +10,18 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- Create pgcrypto extension for hashing (used by RLS)
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
--- Ensure the database exists (should already be created by POSTGRES_DB env var)
--- This is a safety check for manual setups
+-- Grant permissions on the current database (determined by POSTGRES_DB env var).
+-- The Docker entrypoint runs init scripts in the context of POSTGRES_DB,
+-- so current_database() returns the correct name for both dev and prod.
 DO $$
+DECLARE
+    db_name text;
 BEGIN
-    IF NOT EXISTS (SELECT FROM pg_database WHERE datname = 'instantboard_dev') THEN
-        PERFORM dblink_exec('dbname=postgres', 'CREATE DATABASE instantboard_dev');
-    END IF;
+    db_name := current_database();
+    EXECUTE format('GRANT ALL PRIVILEGES ON DATABASE %I TO instantboard', db_name);
+    RAISE NOTICE 'Granted all privileges on database % to instantboard', db_name;
 END
 $$;
-
--- Grant permissions
-GRANT ALL PRIVILEGES ON DATABASE instantboard_dev TO instantboard;
 
 -- Note: Row Level Security (RLS) policies will be created via Alembic migrations
 -- after the application tables are created.

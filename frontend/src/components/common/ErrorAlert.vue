@@ -1,16 +1,16 @@
 <script setup lang="ts">
-import { XCircle, X } from 'lucide-vue-next'
-import { ref } from 'vue'
+import { XCircle, X } from "lucide-vue-next";
+import { ref } from "vue";
 
-const props = defineProps<{
-  message: string
-  code?: string
-}>()
+defineProps<{
+  message: string;
+  code?: string;
+}>();
 
-const visible = ref(true)
+const visible = ref(true);
 
 function close() {
-  visible.value = false
+  visible.value = false;
 }
 </script>
 

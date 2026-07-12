@@ -1,21 +1,21 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted } from 'vue'
-import { useDashboardStore } from '@/stores/dashboard'
-import HealthPanel from '@/components/dashboard/HealthPanel.vue'
-import SystemStatus from '@/components/dashboard/SystemStatus.vue'
-import ServicesHealth from '@/components/dashboard/ServicesHealth.vue'
-import DataSourcesHealth from '@/components/dashboard/DataSourcesHealth.vue'
-import SSEStats from '@/components/dashboard/SSEStats.vue'
+import { onMounted, onUnmounted } from "vue";
+import { useDashboardStore } from "@/stores/dashboard";
+import HealthPanel from "@/components/dashboard/HealthPanel.vue";
+import SystemStatus from "@/components/dashboard/SystemStatus.vue";
+import ServicesHealth from "@/components/dashboard/ServicesHealth.vue";
+import DataSourcesHealth from "@/components/dashboard/DataSourcesHealth.vue";
+import SSEStats from "@/components/dashboard/SSEStats.vue";
 
-const dashboardStore = useDashboardStore()
+const dashboardStore = useDashboardStore();
 
 onMounted(() => {
-  dashboardStore.init()
-})
+  dashboardStore.init();
+});
 
 onUnmounted(() => {
-  dashboardStore.cleanup()
-})
+  dashboardStore.cleanup();
+});
 </script>
 
 <template>

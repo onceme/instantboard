@@ -1,79 +1,93 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
-import type { Category } from '@/types'
-import { apiGet, apiPost, apiPut, apiDelete } from '@/utils/api'
-import { Plus, Pencil, Trash2 } from 'lucide-vue-next'
-import EmptyState from '@/components/common/EmptyState.vue'
+import { ref, computed } from "vue";
+import type { Category } from "@/types";
+import { apiGet, apiPost, apiPut, apiDelete } from "@/utils/api";
+import { Plus, Pencil, Trash2 } from "lucide-vue-next";
+import EmptyState from "@/components/common/EmptyState.vue";
 
-const categories = ref<Category[]>([])
-const loading = ref(false)
-const editingId = ref<string | null>(null)
-const newName = ref('')
-const newDescription = ref('')
+const categories = ref<Category[]>([]);
+const loading = ref(false);
+const editingId = ref<string | null>(null);
+const newName = ref("");
+const newDescription = ref("");
 
-const customCategories = computed(() => categories.value.filter(c => c.type === 'custom'))
-const predefinedCategories = computed(() => categories.value.filter(c => c.type !== 'custom'))
+const customCategories = computed(() =>
+  categories.value.filter((c) => c.type === "custom"),
+);
+const predefinedCategories = computed(() =>
+  categories.value.filter((c) => c.type !== "custom"),
+);
 
 async function fetchCategories() {
-  loading.value = true
+  loading.value = true;
   try {
-    const response = await apiGet<Category[]>('/categories')
-    categories.value = response.data
+    const response = await apiGet<Category[]>("/categories");
+    categories.value = response.data;
   } finally {
-    loading.value = false
+    loading.value = false;
   }
 }
 
 async function addCategory() {
-  if (!newName.value.trim()) return
-  await apiPost<Category>('/categories', {
+  if (!newName.value.trim()) return;
+  await apiPost<Category>("/categories", {
     name: newName.value,
     description: newDescription.value,
-    type: 'custom',
-  })
-  newName.value = ''
-  newDescription.value = ''
-  await fetchCategories()
+    type: "custom",
+  });
+  newName.value = "";
+  newDescription.value = "";
+  await fetchCategories();
 }
 
 async function updateCategory(id: string) {
-  if (!newName.value.trim()) return
+  if (!newName.value.trim()) return;
   await apiPut<Category>(`/categories/${id}`, {
     name: newName.value,
     description: newDescription.value,
-  })
-  editingId.value = null
-  newName.value = ''
-  newDescription.value = ''
-  await fetchCategories()
+  });
+  editingId.value = null;
+  newName.value = "";
+  newDescription.value = "";
+  await fetchCategories();
 }
 
 async function deleteCategory(id: string) {
-  await apiDelete(`/categories/${id}`)
-  await fetchCategories()
+  await apiDelete(`/categories/${id}`);
+  await fetchCategories();
 }
 
 function startEdit(category: Category) {
-  editingId.value = category.id
-  newName.value = category.name
-  newDescription.value = category.description || ''
+  editingId.value = category.id;
+  newName.value = category.name;
+  newDescription.value = category.description || "";
 }
 
 function cancelEdit() {
-  editingId.value = null
-  newName.value = ''
-  newDescription.value = ''
+  editingId.value = null;
+  newName.value = "";
+  newDescription.value = "";
 }
 
-fetchCategories()
+fetchCategories();
 </script>
 
 <template>
   <div class="category-editor">
     <div class="add-section">
-      <input v-model="newName" type="text" placeholder="新分类名称" class="input-name" />
-      <input v-model="newDescription" type="text" placeholder="描述(可选)" class="input-desc" />
-      <button class="add-btn" @click="addCategory" :disabled="!newName.trim()">
+      <input
+        v-model="newName"
+        type="text"
+        placeholder="新分类名称"
+        class="input-name"
+      />
+      <input
+        v-model="newDescription"
+        type="text"
+        placeholder="描述(可选)"
+        class="input-desc"
+      />
+      <button class="add-btn" :disabled="!newName.trim()" @click="addCategory">
         <Plus :size="16" />
         添加
       </button>
@@ -81,7 +95,11 @@ fetchCategories()
 
     <div class="category-list">
       <h4 class="list-label">预定义分类</h4>
-      <div v-for="cat in predefinedCategories" :key="cat.id" class="category-item predefined">
+      <div
+        v-for="cat in predefinedCategories"
+        :key="cat.id"
+        class="category-item predefined"
+      >
         <span class="cat-name">{{ cat.name }}</span>
         <span class="cat-type">{{ cat.type }}</span>
         <span class="cat-slug">{{ cat.slug }}</span>
@@ -94,7 +112,11 @@ fetchCategories()
         description="点击上方添加按钮创建"
         icon="folder"
       />
-      <div v-for="cat in customCategories" :key="cat.id" class="category-item custom">
+      <div
+        v-for="cat in customCategories"
+        :key="cat.id"
+        class="category-item custom"
+      >
         <div v-if="editingId === cat.id" class="edit-row">
           <input v-model="newName" type="text" class="input-name" />
           <input v-model="newDescription" type="text" class="input-desc" />
@@ -104,8 +126,12 @@ fetchCategories()
         <div v-else class="display-row">
           <span class="cat-name">{{ cat.name }}</span>
           <span class="cat-desc">{{ cat.description }}</span>
-          <button class="edit-btn" @click="startEdit(cat)"><Pencil :size="14" /></button>
-          <button class="delete-btn" @click="deleteCategory(cat.id)"><Trash2 :size="14" /></button>
+          <button class="edit-btn" @click="startEdit(cat)">
+            <Pencil :size="14" />
+          </button>
+          <button class="delete-btn" @click="deleteCategory(cat.id)">
+            <Trash2 :size="14" />
+          </button>
         </div>
       </div>
     </div>
@@ -232,7 +258,8 @@ fetchCategories()
   background-color: transparent;
 }
 
-.edit-btn, .delete-btn {
+.edit-btn,
+.delete-btn {
   width: 28px;
   height: 28px;
   display: flex;

@@ -1,16 +1,16 @@
 <script setup lang="ts">
-import AppLayout from '@/components/layout/AppLayout.vue'
-import { useAuthStore } from '@/stores/auth'
-import { onMounted } from 'vue'
+import AppLayout from "@/components/layout/AppLayout.vue";
+import { useAuthStore } from "@/stores/auth";
+import { onMounted } from "vue";
 
-const authStore = useAuthStore()
+const authStore = useAuthStore();
 
 onMounted(() => {
-  authStore.initTheme()
+  authStore.initTheme();
   if (authStore.isAuthenticated) {
-    authStore.fetchCurrentUser()
+    authStore.fetchCurrentUser();
   }
-})
+});
 </script>
 
 <template>
@@ -19,5 +19,4 @@ onMounted(() => {
   </AppLayout>
 </template>
 
-<style scoped>
-</style>
+<style scoped></style>

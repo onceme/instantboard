@@ -1,40 +1,46 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import { useRoute } from 'vue-router'
-import { TrendingUp, Code, Activity, Settings, ChevronLeft, ChevronRight, LogOut } from 'lucide-vue-next'
-import { useAuthStore } from '@/stores/auth'
-import ThemeToggle from '@/components/common/ThemeToggle.vue'
+import { computed } from "vue";
+import { useRoute } from "vue-router";
+import { TrendingUp, Code, Activity, Settings, LogOut } from "lucide-vue-next";
+import { useAuthStore } from "@/stores/auth";
+import ThemeToggle from "@/components/common/ThemeToggle.vue";
 
 const props = defineProps<{
-  collapsed: boolean
-  mobileVisible: boolean
-}>()
+  collapsed: boolean;
+  mobileVisible: boolean;
+}>();
 
 const emit = defineEmits<{
-  close: []
-}>()
+  close: [];
+}>();
 
-const route = useRoute()
-const authStore = useAuthStore()
+const route = useRoute();
+const authStore = useAuthStore();
 
 const navItems = [
-  { path: '/finance', name: '财经', icon: TrendingUp },
-  { path: '/tech', name: '科技', icon: Code },
-  { path: '/dashboard', name: '仪表盘', icon: Activity },
-  { path: '/settings', name: '设置', icon: Settings },
-]
+  { path: "/finance", name: "财经", icon: TrendingUp },
+  { path: "/tech", name: "科技", icon: Code },
+  { path: "/dashboard", name: "仪表盘", icon: Activity },
+  { path: "/settings", name: "设置", icon: Settings },
+];
 
-const currentPath = computed(() => route.path)
+const currentPath = computed(() => route.path);
 
 function handleLogout() {
-  authStore.logout()
+  authStore.logout();
 }
 
-const userName = computed(() => authStore.user?.name || '用户')
+const userName = computed(() => authStore.user?.name || "用户");
 </script>
 
 <template>
-  <aside class="sidebar" :class="{ collapsed: props.collapsed, 'mobile-visible': props.mobileVisible }">
+  <aside
+    class="sidebar"
+    :class="{
+      collapsed: props.collapsed,
+      'mobile-visible': props.mobileVisible,
+    }"
+  >
     <div class="sidebar-header">
       <div class="brand-logo">IB</div>
       <span v-if="!props.collapsed" class="brand-name">InstantBoard</span>
@@ -46,7 +52,11 @@ const userName = computed(() => authStore.user?.name || '用户')
         :key="item.path"
         :to="item.path"
         class="nav-item"
-        :class="{ active: currentPath === item.path || currentPath.startsWith(item.path + '/') }"
+        :class="{
+          active:
+            currentPath === item.path ||
+            currentPath.startsWith(item.path + '/'),
+        }"
         @click="emit('close')"
       >
         <component :is="item.icon" class="nav-icon" :size="20" />
@@ -56,12 +66,14 @@ const userName = computed(() => authStore.user?.name || '用户')
 
     <div class="sidebar-footer">
       <ThemeToggle v-if="!props.collapsed" />
-      <div class="user-section" v-if="!props.collapsed">
+      <div v-if="!props.collapsed" class="user-section">
         <div class="user-info">
-          <div class="user-avatar">{{ userName.charAt(0) }}</div>
+          <div class="user-avatar">
+            {{ userName.charAt(0) }}
+          </div>
           <span class="user-name">{{ userName }}</span>
         </div>
-        <button class="logout-btn" @click="handleLogout" title="登出">
+        <button class="logout-btn" title="登出" @click="handleLogout">
           <LogOut :size="16" />
         </button>
       </div>
@@ -138,7 +150,9 @@ const userName = computed(() => authStore.user?.name || '用户')
   border-radius: var(--radius-md);
   color: var(--sidebar-text);
   text-decoration: none;
-  transition: background-color var(--transition-fast), color var(--transition-fast);
+  transition:
+    background-color var(--transition-fast),
+    color var(--transition-fast);
   white-space: nowrap;
 }
 
@@ -211,7 +225,7 @@ const userName = computed(() => authStore.user?.name || '用户')
 
 .logout-btn:hover {
   background-color: rgba(239, 68, 68, 0.15);
-  color: #F87171;
+  color: #f87171;
 }
 
 @media (max-width: 767px) {

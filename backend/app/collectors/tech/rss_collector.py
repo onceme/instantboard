@@ -11,9 +11,11 @@ logger = logging.getLogger(__name__)
 
 
 class RSSCollector(BaseCollector):
-    timeout_seconds = 15
+    timeout_seconds = 30
     max_retries = 3
     retry_base_delay_seconds = 1.0
+
+    USER_AGENT = "Mozilla/5.0 (compatible; InstantBoard/1.0; +https://instantboard.github.io)"
 
     async def fetch_data(self, source: Any) -> Any:
         url = getattr(source, "url", "")
@@ -21,19 +23,24 @@ class RSSCollector(BaseCollector):
             logger.warning(f"No URL configured for source {getattr(source, 'name', 'unknown')}")
             return None
 
+        headers = {
+            "User-Agent": self.USER_AGENT,
+            "Accept": "application/rss+xml, application/xml, application/atom+xml, text/xml, */*",
+        }
+
         async with httpx.AsyncClient(timeout=self.timeout_seconds, follow_redirects=True) as client:
             try:
-                response = await client.get(url)
+                response = await client.get(url, headers=headers)
                 if response.status_code != 200:
                     logger.warning(f"RSS fetch returned {response.status_code} for {url}")
-                    return None
+                    raise RuntimeError(f"HTTP {response.status_code} for {url}")
                 return response.text
             except httpx.TimeoutException:
                 logger.warning(f"RSS timeout for {url}")
-                return None
+                raise
             except httpx.HTTPError as e:
                 logger.warning(f"RSS HTTP error for {url}: {e}")
-                return None
+                raise
 
     async def parse_data(self, raw_data: Any, source: Any) -> list[dict]:
         if not raw_data:

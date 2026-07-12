@@ -227,6 +227,10 @@ class SourceService:
         health = SourceHealth(
             source_id=source.id,
             status="healthy",
+            total_fetches_24h=0,
+            success_count_24h=0,
+            avg_response_time_ms=0,
+            consecutive_failures=0,
         )
         self.db.add(health)
         await self.db.flush()
@@ -398,6 +402,10 @@ class SourceService:
             health = SourceHealth(
                 source_id=source_id,
                 status="healthy",
+                total_fetches_24h=0,
+                success_count_24h=0,
+                avg_response_time_ms=0,
+                consecutive_failures=0,
             )
             self.db.add(health)
             await self.db.flush()
@@ -451,7 +459,7 @@ class SourceService:
         )
 
         if health.status != previous_status:
-            source_stmt = select(Source).where(Source.id == source_id)
+            source_stmt = select(Source).where(Source.id == source_id).options(selectinload(Source.category))
             source = (await self.db.execute(source_stmt)).scalar_one_or_none()
             category_slug = source.category.slug if source and source.category else "unknown"
             await redis_publish(

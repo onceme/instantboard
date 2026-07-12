@@ -5,6 +5,7 @@ from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from sqlalchemy.orm import selectinload
 
 from app.core.sse_router import event_router
 from app.models.source import Source, SourceHealth
@@ -111,7 +112,7 @@ class AsyncSchedulerManager:
             self.scheduler.remove_job(job_id)
             self._original_intervals.pop(job_id, None)
             self._adaptive_multipliers.pop(job_id, None)
-            self._source_category_cache.pop(job_id.replace("collect_", ""), None)
+            _source_category_cache.pop(job_id.replace("collect_", ""), None)
             logger.info(f"Job {job_id} removed")
 
     async def pause_job(self, job_id: str) -> None:
@@ -494,7 +495,5 @@ class AsyncSchedulerManager:
         except Exception as e:
             logger.warning(f"Failed to update health for source {source.id}: {e}")
 
-
-from sqlalchemy.orm import selectinload  # noqa: E402
 
 scheduler_manager = AsyncSchedulerManager()

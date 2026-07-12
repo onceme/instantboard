@@ -26,6 +26,7 @@ jobs:
           cd backend
           pip install --upgrade pip
           pip install -r requirements/dev.txt
+          pip install -e .
 
       - name: Ruff lint
         run: cd backend && ruff check app/
@@ -43,10 +44,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node 18
+      - name: Setup Node 24
         uses: actions/setup-node@v4
         with:
-          node-version: "18"
+          node-version: "24"
           cache: npm
           cache-dependency-path: frontend/package.json
 
@@ -104,6 +105,7 @@ jobs:
           cd backend
           pip install --upgrade pip
           pip install -r requirements/dev.txt
+          pip install -e .
 
       - name: Run backend tests
         env:
@@ -131,10 +133,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node 18
+      - name: Setup Node 24
         uses: actions/setup-node@v4
         with:
-          node-version: "18"
+          node-version: "24"
           cache: npm
           cache-dependency-path: frontend/package.json
 
@@ -152,10 +154,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node 18
+      - name: Setup Node 24
         uses: actions/setup-node@v4
         with:
-          node-version: "18"
+          node-version: "24"
           cache: npm
           cache-dependency-path: frontend/package.json
 

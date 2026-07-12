@@ -1,30 +1,30 @@
 <script setup lang="ts">
-import type { TechNewsItem } from '@/types'
-import { DOMAIN_CONFIG } from '@/types'
-import { formatRelativeTime } from '@/utils/format'
-import { computed } from 'vue'
-import TopicTag from './TopicTag.vue'
-import { ExternalLink } from 'lucide-vue-next'
+import type { TechNewsItem } from "@/types";
+import { DOMAIN_CONFIG } from "@/types";
+import { formatRelativeTime } from "@/utils/format";
+import { computed } from "vue";
+import TopicTag from "./TopicTag.vue";
+import { ExternalLink } from "lucide-vue-next";
 
 const props = defineProps<{
-  item: TechNewsItem
-}>()
+  item: TechNewsItem;
+}>();
 
 const primaryDomain = computed(() => {
   for (const tag of props.item.topic_tags) {
-    if (DOMAIN_CONFIG[tag]) return tag
+    if (DOMAIN_CONFIG[tag]) return tag;
   }
-  return props.item.topic_tags[0] || ''
-})
+  return props.item.topic_tags[0] || "";
+});
 
 const domainColorVar = computed(() => {
   if (primaryDomain.value && DOMAIN_CONFIG[primaryDomain.value]) {
-    return `var(--domain-${primaryDomain.value})`
+    return `var(--domain-${primaryDomain.value})`;
   }
-  return 'var(--accent)'
-})
+  return "var(--accent)";
+});
 
-const visibleTags = computed(() => props.item.topic_tags.slice(0, 3))
+const visibleTags = computed(() => props.item.topic_tags.slice(0, 3));
 </script>
 
 <template>
@@ -41,20 +41,34 @@ const visibleTags = computed(() => props.item.topic_tags.slice(0, 3))
         >
           {{ item.title }}
         </a>
-        <a :href="item.url" target="_blank" rel="noopener noreferrer" class="ext-link">
+        <a
+          :href="item.url"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="ext-link"
+        >
           <ExternalLink :size="14" />
         </a>
       </div>
 
-      <p v-if="item.summary" class="card-summary line-clamp-2">{{ item.summary }}</p>
+      <p v-if="item.summary" class="card-summary line-clamp-2">
+        {{ item.summary }}
+      </p>
 
       <div class="card-tags">
-        <TopicTag v-for="tag in visibleTags" :key="tag" :tag="tag" :domain="primaryDomain" />
+        <TopicTag
+          v-for="tag in visibleTags"
+          :key="tag"
+          :tag="tag"
+          :domain="primaryDomain"
+        />
       </div>
 
       <div class="card-footer">
         <span class="card-source">{{ item.source_name }}</span>
-        <span class="card-time">{{ formatRelativeTime(item.published_at) }}</span>
+        <span class="card-time">{{
+          formatRelativeTime(item.published_at)
+        }}</span>
       </div>
     </div>
   </div>

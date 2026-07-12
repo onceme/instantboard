@@ -1,52 +1,64 @@
 <script setup lang="ts">
-import { useDashboardStore } from '@/stores/dashboard'
-import { computed } from 'vue'
-import { CheckCircle2, AlertTriangle, XCircle } from 'lucide-vue-next'
+import { useDashboardStore } from "@/stores/dashboard";
+import { computed } from "vue";
+import { CheckCircle2, AlertTriangle, XCircle } from "lucide-vue-next";
 
-const dashboardStore = useDashboardStore()
+const dashboardStore = useDashboardStore();
 
 const overallStatus = computed(() => {
-  const services = dashboardStore.services
-  if (services.length === 0) return 'unknown'
+  const services = dashboardStore.services;
+  if (services.length === 0) return "unknown";
 
-  const hasDown = services.some(s => s.status === 'down')
-  const hasDegraded = services.some(s => s.status === 'degraded')
+  const hasDown = services.some((s) => s.status === "down");
+  const hasDegraded = services.some((s) => s.status === "degraded");
 
-  if (hasDown) return 'down'
-  if (hasDegraded) return 'degraded'
-  return 'healthy'
-})
+  if (hasDown) return "down";
+  if (hasDegraded) return "degraded";
+  return "healthy";
+});
 
 const statusLabel = computed(() => {
   switch (overallStatus.value) {
-    case 'healthy': return '系统正常运行'
-    case 'degraded': return '部分服务降级'
-    case 'down': return '系统异常'
-    default: return '未知'
+    case "healthy":
+      return "系统正常运行";
+    case "degraded":
+      return "部分服务降级";
+    case "down":
+      return "系统异常";
+    default:
+      return "未知";
   }
-})
+});
 
-const activeConnections = computed(() => dashboardStore.sseStats?.total_connections ?? 0)
-const healthySources = computed(() => dashboardStore.dataSources?.healthy ?? 0)
-const totalSources = computed(() => dashboardStore.dataSources?.total_sources ?? 0)
+const activeConnections = computed(
+  () => dashboardStore.sseStats?.total_connections ?? 0,
+);
+const healthySources = computed(() => dashboardStore.dataSources?.healthy ?? 0);
+const totalSources = computed(
+  () => dashboardStore.dataSources?.total_sources ?? 0,
+);
 
 function statusIcon() {
-  if (overallStatus.value === 'healthy') return CheckCircle2
-  if (overallStatus.value === 'degraded') return AlertTriangle
-  return XCircle
+  if (overallStatus.value === "healthy") return CheckCircle2;
+  if (overallStatus.value === "degraded") return AlertTriangle;
+  return XCircle;
 }
 
 function statusColor(): string {
-  if (overallStatus.value === 'healthy') return 'var(--success)'
-  if (overallStatus.value === 'degraded') return 'var(--warning)'
-  return 'var(--danger)'
+  if (overallStatus.value === "healthy") return "var(--success)";
+  if (overallStatus.value === "degraded") return "var(--warning)";
+  return "var(--danger)";
 }
 </script>
 
 <template>
   <div class="health-panel">
     <div class="overall-status" :style="{ '--status-color': statusColor() }">
-      <component :is="statusIcon()" :size="28" :style="{ color: statusColor() }" />
+      <component
+        :is="statusIcon()"
+        :size="28"
+        :style="{ color: statusColor() }"
+      />
       <span class="overall-label">{{ statusLabel }}</span>
     </div>
 
@@ -60,7 +72,9 @@ function statusColor(): string {
         <span class="key-label">数据源</span>
       </div>
       <div class="key-card">
-        <span class="key-value">{{ dashboardStore.sseStats?.events_pushed_24h ?? '--' }}</span>
+        <span class="key-value">{{
+          dashboardStore.sseStats?.events_pushed_24h ?? "--"
+        }}</span>
         <span class="key-label">24h事件</span>
       </div>
     </div>

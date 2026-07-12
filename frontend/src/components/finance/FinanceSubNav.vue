@@ -1,22 +1,22 @@
 <script setup lang="ts">
-import { useFinanceStore } from '@/stores/finance'
-import { useResponsive } from '@/composables/useResponsive'
-import { FINANCE_SUB_NAV_ITEMS } from '@/utils/constants'
-import type { FinancePanel } from '@/types'
-import { ChevronDown } from 'lucide-vue-next'
-import { ref } from 'vue'
+import { useFinanceStore } from "@/stores/finance";
+import { useResponsive } from "@/composables/useResponsive";
+import { FINANCE_SUB_NAV_ITEMS } from "@/utils/constants";
+import type { FinancePanel } from "@/types";
+import { ChevronDown } from "lucide-vue-next";
+import { ref } from "vue";
 
-const financeStore = useFinanceStore()
-const { isMobile } = useResponsive()
-const dropdownOpen = ref(false)
+const financeStore = useFinanceStore();
+const { isMobile } = useResponsive();
+const dropdownOpen = ref(false);
 
 function selectPanel(panel: FinancePanel) {
-  financeStore.setCurrentPanel(panel)
-  dropdownOpen.value = false
+  financeStore.setCurrentPanel(panel);
+  dropdownOpen.value = false;
 }
 
 function toggleDropdown() {
-  dropdownOpen.value = !dropdownOpen.value
+  dropdownOpen.value = !dropdownOpen.value;
 }
 </script>
 
@@ -24,7 +24,10 @@ function toggleDropdown() {
   <div class="finance-sub-nav">
     <div v-if="isMobile" class="sub-nav-mobile">
       <button class="dropdown-trigger" @click="toggleDropdown">
-        <span>{{ FINANCE_SUB_NAV_ITEMS.find(i => i.key === financeStore.currentPanel)?.label }}</span>
+        <span>{{
+          FINANCE_SUB_NAV_ITEMS.find((i) => i.key === financeStore.currentPanel)
+            ?.label
+        }}</span>
         <ChevronDown :size="16" />
       </button>
       <Transition name="fade">

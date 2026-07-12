@@ -1,4 +1,4 @@
-from sqlalchemy import CheckConstraint, Column, DateTime, ForeignKey, Index, String, Text, UniqueConstraint
+from sqlalchemy import CheckConstraint, Column, DateTime, ForeignKey, Index, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
 
@@ -24,7 +24,7 @@ class User(BaseModel):
         default="member",
         server_default="member",
     )
-    preferences = Column(JSONB, nullable=False, default=dict, server_default="'{}'")
+    preferences = Column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
     last_login_at = Column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
@@ -42,6 +42,6 @@ class User(BaseModel):
         Index("idx_users_sso", "sso_provider", "sso_provider_id"),
     )
 
-    tenant = relationship("Tenant", back_populates="users")
-    watchlist_items = relationship("WatchlistItem", back_populates="user", cascade="all, delete-orphan")
-    sse_connections = relationship("SSEConnection", back_populates="user", cascade="all, delete-orphan")
+    tenant = relationship("Tenant", back_populates="users", lazy="selectin")
+    watchlist_items = relationship("WatchlistItem", back_populates="user", cascade="all, delete-orphan", lazy="noload")
+    sse_connections = relationship("SSEConnection", back_populates="user", cascade="all, delete-orphan", lazy="noload")

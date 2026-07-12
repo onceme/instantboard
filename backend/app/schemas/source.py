@@ -30,7 +30,7 @@ class SourceResponse(BaseModel):
     source_type: str
     url: str
     config: dict
-    refresh_interval_seconds: int | None
+    refresh_interval_seconds: int | None = None
     is_active: bool
     priority: int
     health_status: str | None = None
@@ -45,8 +45,8 @@ class SourceHealthResponse(BaseModel):
     status: str
     success_rate_24h: float | None = None
     avg_response_time_ms: int | None = None
-    last_success_at: datetime | None
-    last_failure_at: datetime | None
+    last_success_at: datetime | None = None
+    last_failure_at: datetime | None = None
     consecutive_failures: int
     total_fetches_24h: int
     last_error: str | None = None

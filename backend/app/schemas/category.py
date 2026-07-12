@@ -32,7 +32,7 @@ class CategoryResponse(BaseModel):
     id: str
     name: str
     slug: str
-    description: str | None
+    description: str | None = None
     icon: str
     color: str
     type: str
@@ -47,7 +47,7 @@ class CategoryWithSourcesResponse(BaseModel):
     id: str
     name: str
     slug: str
-    description: str | None
+    description: str | None = None
     icon: str
     color: str
     type: str

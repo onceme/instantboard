@@ -1,30 +1,30 @@
 <script setup lang="ts">
-import { useDashboardStore } from '@/stores/dashboard'
-import { formatRelativeTime } from '@/utils/format'
-import { computed, ref } from 'vue'
+import { useDashboardStore } from "@/stores/dashboard";
+import { formatRelativeTime } from "@/utils/format";
+import { computed, ref } from "vue";
 
-import { CheckCircle2, AlertTriangle, XCircle } from 'lucide-vue-next'
+import { CheckCircle2, AlertTriangle, XCircle } from "lucide-vue-next";
 
-const dashboardStore = useDashboardStore()
+const dashboardStore = useDashboardStore();
 
-const summary = computed(() => dashboardStore.dataSources)
+const summary = computed(() => dashboardStore.dataSources);
 
-const expandedRow = ref<string | null>(null)
+const expandedRow = ref<string | null>(null);
 
 function statusIcon(status: string) {
-  if (status === 'healthy') return CheckCircle2
-  if (status === 'degraded') return AlertTriangle
-  return XCircle
+  if (status === "healthy") return CheckCircle2;
+  if (status === "degraded") return AlertTriangle;
+  return XCircle;
 }
 
 function statusColor(status: string): string {
-  if (status === 'healthy') return 'var(--success)'
-  if (status === 'degraded') return 'var(--warning)'
-  return 'var(--danger)'
+  if (status === "healthy") return "var(--success)";
+  if (status === "degraded") return "var(--warning)";
+  return "var(--danger)";
 }
 
 function toggleExpand(id: string) {
-  expandedRow.value = expandedRow.value === id ? null : id
+  expandedRow.value = expandedRow.value === id ? null : id;
 }
 </script>
 
@@ -47,7 +47,7 @@ function toggleExpand(id: string) {
       </div>
     </div>
 
-    <div class="sources-table" v-if="summary">
+    <div v-if="summary" class="sources-table">
       <table>
         <thead>
           <tr>
@@ -63,21 +63,46 @@ function toggleExpand(id: string) {
           <tr
             v-for="source in summary.sources"
             :key="source.id"
-            :class="{ 'row-down': source.status === 'down', 'row-expanded': expandedRow === source.id }"
+            :class="{
+              'row-down': source.status === 'down',
+              'row-expanded': expandedRow === source.id,
+            }"
             @click="toggleExpand(source.id)"
           >
             <td class="cell-name">
-              <component :is="statusIcon(source.status)" :size="14" :style="{ color: statusColor(source.status) }" />
+              <component
+                :is="statusIcon(source.status)"
+                :size="14"
+                :style="{ color: statusColor(source.status) }"
+              />
               {{ source.name }}
             </td>
             <td>{{ source.id }}</td>
             <td>
-              <span class="status-badge" :style="{ backgroundColor: statusColor(source.status), color: 'white' }">
+              <span
+                class="status-badge"
+                :style="{
+                  backgroundColor: statusColor(source.status),
+                  color: 'white',
+                }"
+              >
                 {{ source.status }}
               </span>
             </td>
-            <td>{{ source.last_success_at ? formatRelativeTime(source.last_success_at) : '--' }}</td>
-            <td>{{ source.last_failure_at ? formatRelativeTime(source.last_failure_at) : '--' }}</td>
+            <td>
+              {{
+                source.last_success_at
+                  ? formatRelativeTime(source.last_success_at)
+                  : "--"
+              }}
+            </td>
+            <td>
+              {{
+                source.last_failure_at
+                  ? formatRelativeTime(source.last_failure_at)
+                  : "--"
+              }}
+            </td>
             <td>{{ source.avg_response_time_ms }}ms</td>
           </tr>
         </tbody>

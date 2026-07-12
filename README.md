@@ -61,7 +61,7 @@ InstantBoard 是一个**实时信息聚合消息板**服务，采用前后端分
 - 🛢️ **大宗商品** — 黄金、原油、白银、天然气等 7+ 期货品种
 - 🏷️ **话题标签过滤** — 三级标签体系（领域→子分类→话题），支持跨领域筛选
 - 📡 **20+ 数据源** — RSS/API/网页抓取三种采集方式，自动故障转移
-- 🔐 **5 种 SSO 登录** — Google / Azure AD / GitHub / Apple / Facebook
+- 🔐 **5 种 SSO 登录** — 默认启用 Google / GitHub，可按需启用 Azure AD / Apple / Facebook
 - 🏢 **多租户架构** — PostgreSQL 行级隔离 (RLS)，租户独立配置
 - 🛡️ **多层安全** — JWT 双 Token + Nginx 限流 + CSP + CORS
 - 📱 **响应式设计** — Tailwind CSS 适配桌面/平板/手机
@@ -247,13 +247,36 @@ cp .env.example .env
 
 #### SSO OAuth（按需配置）
 
+InstantBoard 支持 5 种 SSO 提供商，**默认只启用 Google 和 GitHub**。
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `ENABLED_SSO_PROVIDERS` | `google,github` | 启用的 SSO 提供商（逗号分隔） |
+
+**启用提供商配置示例**：
+
+```bash
+# 默认启用 Google 和 GitHub
+ENABLED_SSO_PROVIDERS=google,github
+
+# 额外启用 Azure AD
+ENABLED_SSO_PROVIDERS=google,github,azure_ad
+
+# 启用所有提供商
+ENABLED_SSO_PROVIDERS=google,github,azure_ad,apple,facebook
+```
+
+**各提供商凭据配置**：
+
 | 变量组 | 说明 |
 |--------|------|
 | `GOOGLE_OAUTH_CLIENT_ID/SECRET` | Google OAuth 2.0 |
-| `AZURE_AD_CLIENT_ID/SECRET` | Microsoft Azure AD |
-| `GITHUB_OAUTH_CLIENT_ID/SECRET` | GitHub OAuth |
-| `APPLE_CLIENT_ID/TEAM_ID/KEY_ID` | Apple Sign-In |
+| `GITHUB_OAUTH_CLIENT_ID/SECRET` | GitHub OAuth *(默认启用)* |
+| `AZURE_AD_CLIENT_ID/SECRET/TENANT_ID` | Microsoft Azure AD |
+| `APPLE_CLIENT_ID/TEAM_ID/KEY_ID/Private_KEY_PATH` | Apple Sign-In |
 | `FACEBOOK_APP_ID/SECRET` | Facebook Login |
+
+> 💡 只有被 `ENABLED_SSO_PROVIDERS` 启用的提供商才会出现在前端登录页面，未配置的提供商会自动隐藏。
 
 #### 财经数据 API
 
@@ -476,15 +499,38 @@ NAV_estimate = NAV_official × (1 + 跟踪指数涨跌幅 × 跟踪比率)
 
 ### SSO 认证
 
-支持 5 种主流单点登录方式：
+支持 5 种主流单点登录方式，**默认仅启用 Google 和 GitHub**，其他提供商可通过环境变量按需启用。
 
-| 提供商 | 协议 | 配置要求 |
-|--------|------|---------|
-| **Google** | OAuth 2.0 | Google Cloud Console 创建 OAuth Client |
-| **Azure AD** | OpenID Connect | Azure Portal 注册应用 |
-| **GitHub** | OAuth 2.0 | GitHub Settings → Developer → OAuth App |
-| **Apple** | Sign-In with Apple | Apple Developer 创建 Service ID + ES256 密钥 |
-| **Facebook** | OAuth 2.0 | Facebook App Dashboard 创建应用 |
+| 提供商 | 协议 | 默认启用 | 配置要求 |
+|--------|------|:--------:|---------|
+| **Google** | OAuth 2.0 | ✅ | Google Cloud Console 创建 OAuth Client |
+| **GitHub** | OAuth 2.0 | ✅ | GitHub Settings → Developer → OAuth App |
+| **Azure AD** | OpenID Connect | ❌ | Azure Portal 注册应用 |
+| **Apple** | Sign-In with Apple | ❌ | Apple Developer 创建 Service ID + ES256 密钥 |
+| **Facebook** | OAuth 2.0 | ❌ | Facebook App Dashboard 创建应用 |
+
+> 所有提供商的代码实现均已保留，通过 `ENABLED_SSO_PROVIDERS` 环境变量控制启用/禁用，这是**配置驱动**而非代码删除。
+
+**SSO 配置示例**：
+
+```bash
+# .env 文件
+# 默认只启用 Google 和 GitHub
+ENABLED_SSO_PROVIDERS=google,github
+
+# 启用 Azure AD
+ENABLED_SSO_PROVIDERS=google,github,azure_ad
+
+# 启用所有提供商
+ENABLED_SSO_PROVIDERS=google,github,azure_ad,apple,facebook
+```
+
+**查询已启用的提供商**（前端可用此接口动态显示登录按钮）：
+
+```bash
+curl http://localhost:8000/api/v1/auth/sso/providers
+# {"enabled_providers": ["google", "github"]}
+```
 
 **认证架构**：
 - JWT 双 Token 方案：Access Token (1h) + Refresh Token (7d)
@@ -539,6 +585,7 @@ NAV_estimate = NAV_official × (1 + 跟踪指数涨跌幅 × 跟踪比率)
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | `GET` | `/api/v1/health` | 健康检查 |
+| `GET` | `/api/v1/auth/sso/providers` | 获取已启用的 SSO 提供商 *(无需认证)* |
 | `POST` | `/api/v1/auth/sso/{provider}` | SSO 登录 |
 | `POST` | `/api/v1/auth/refresh` | 刷新 Token |
 | `GET` | `/api/v1/auth/me` | 当前用户信息 |
@@ -775,7 +822,7 @@ cd docker && docker compose --profile mongodb up -d
 ```
 
 ### Q: 如何只使用部分 SSO？
-只需在 `.env` 中配置对应提供商的 OAuth 凭据。未配置的 SSO 按钮会在前端自动隐藏。
+通过 `.env` 中的 `ENABLED_SSO_PROVIDERS` 环境变量控制启用哪些提供商（默认 `google,github`）。前端可通过 `GET /api/v1/auth/sso/providers` 接口动态获取已启用的提供商列表，只显示对应的登录按钮。未启用的提供商无需配置凭据。
 
 ### Q: yfinance 被限流了怎么办？
 系统会自动故障转移到 Alpha Vantage。建议配置 `ALPHA_VANTAGE_API_KEY` 作为备用。

@@ -1,18 +1,18 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted } from 'vue'
-import { useFinanceStore } from '@/stores/finance'
-import FinanceSubNav from '@/components/finance/FinanceSubNav.vue'
-import FinanceGrid from '@/components/finance/FinanceGrid.vue'
+import { onMounted, onUnmounted } from "vue";
+import { useFinanceStore } from "@/stores/finance";
+import FinanceSubNav from "@/components/finance/FinanceSubNav.vue";
+import FinanceGrid from "@/components/finance/FinanceGrid.vue";
 
-const financeStore = useFinanceStore()
+const financeStore = useFinanceStore();
 
 onMounted(() => {
-  financeStore.init()
-})
+  financeStore.init();
+});
 
 onUnmounted(() => {
-  financeStore.cleanup()
-})
+  financeStore.cleanup();
+});
 </script>
 
 <template>

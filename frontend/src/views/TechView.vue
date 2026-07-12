@@ -1,30 +1,30 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, computed } from 'vue'
-import { useTechStore } from '@/stores/tech'
-import TechSubNav from '@/components/tech/TechSubNav.vue'
-import CategoryPanel from '@/components/tech/CategoryPanel.vue'
-import NewsFeed from '@/components/tech/NewsFeed.vue'
-import TopicFilter from '@/components/tech/TopicFilter.vue'
+import { onMounted, onUnmounted, computed } from "vue";
+import { useTechStore } from "@/stores/tech";
+import TechSubNav from "@/components/tech/TechSubNav.vue";
+import CategoryPanel from "@/components/tech/CategoryPanel.vue";
+import NewsFeed from "@/components/tech/NewsFeed.vue";
+import TopicFilter from "@/components/tech/TopicFilter.vue";
 
-const techStore = useTechStore()
+const techStore = useTechStore();
 
-const domains = ['robotics', 'ai', 'embedded', 'space']
-const isFeedMode = computed(() => techStore.isFeedMode)
+const domains = ["robotics", "ai", "embedded", "space"];
+const isFeedMode = computed(() => techStore.isFeedMode);
 
 onMounted(() => {
-  techStore.init()
-})
+  techStore.init();
+});
 
 onUnmounted(() => {
-  techStore.cleanup()
-})
+  techStore.cleanup();
+});
 
 function switchToFeedMode() {
-  techStore.setFeedMode(true)
+  techStore.setFeedMode(true);
 }
 
 function switchToGridMode() {
-  techStore.setFeedMode(false)
+  techStore.setFeedMode(false);
 }
 </script>
 
@@ -34,10 +34,18 @@ function switchToGridMode() {
     <TopicFilter />
 
     <div class="mode-switch">
-      <button class="mode-btn" :class="{ active: !isFeedMode }" @click="switchToGridMode">
+      <button
+        class="mode-btn"
+        :class="{ active: !isFeedMode }"
+        @click="switchToGridMode"
+      >
         面板模式
       </button>
-      <button class="mode-btn" :class="{ active: isFeedMode }" @click="switchToFeedMode">
+      <button
+        class="mode-btn"
+        :class="{ active: isFeedMode }"
+        @click="switchToFeedMode"
+      >
         合并流
       </button>
     </div>

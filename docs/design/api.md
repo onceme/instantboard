@@ -60,9 +60,45 @@ cross_refs: [architecture.md, database.md, frontend.md, security.md, data-flow.m
 
 ### 3.2 认证与授权 API
 
+#### GET `/api/v1/auth/sso/providers` — 获取已启用的 SSO 提供商
+
+**描述:** 返回当前配置中启用的 SSO 提供商列表。前端可用此接口动态显示登录按钮。
+
+**认证:** 不需要（公开端点）
+
+```
+Response 200:
+  {
+    "success": true,
+    "data": {
+      "enabled_providers": ["google", "github"]
+    }
+  }
+```
+
+**配置驱动：**
+通过 `ENABLED_SSO_PROVIDERS` 环境变量控制，支持以下值：
+- `google` — Google OAuth 2.0
+- `github` — GitHub OAuth *(默认启用)*
+- `azure_ad` — Azure Active Directory
+- `apple` — Apple Sign In
+- `facebook` — Facebook Login
+
+**默认值:** `google,github`
+
+**配置示例:**
+```bash
+# .env
+ENABLED_SSO_PROVIDERS=google,github                     # 默认
+ENABLED_SSO_PROVIDERS=google,github,azure_ad             # 额外启用 Azure AD
+ENABLED_SSO_PROVIDERS=google,github,azure_ad,apple,facebook  # 全部启用
+```
+
 #### POST `/api/v1/auth/sso/{provider}` — SSO 登录
 
 **provider**: `google` | `azure_ad` | `github` | `apple` | `facebook`
+
+> ⚠️ 仅启用列表中的 provider 可被调用，若 provider 未在 `ENABLED_SSO_PROVIDERS` 中，返回 `400 PROVIDER_NOT_ENABLED`。
 
 ```
 Request:
@@ -700,6 +736,7 @@ GET /api/v1/health — 服务健康检查 (不需要认证)
 | AUTH_REQUIRED | 401 | 需要认证 |
 | INVALID_TOKEN | 401 | JWT Token 无效或过期 |
 | INVALID_REFRESH_TOKEN | 401 | Refresh Token 无效 |
+| PROVIDER_NOT_ENABLED | 400 | SSO 提供商未启用（不在 ENABLED_SSO_PROVIDERS 中） |
 | SSO_PROVIDER_ERROR | 401 | SSO 提供商返回错误 |
 | FORBIDDEN | 403 | 权限不足 |
 | CATEGORY_NOT_FOUND | 404 | 分类不存在 |

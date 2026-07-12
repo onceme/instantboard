@@ -1,24 +1,18 @@
 <script setup lang="ts">
-import { useFinanceStore } from '@/stores/finance'
-import { useResponsive } from '@/composables/useResponsive'
-import { computed } from 'vue'
-import type { FinancePanel } from '@/types'
-import WatchlistMini from './WatchlistMini.vue'
-import MarketIndices from './MarketIndices.vue'
-import Commodities from './Commodities.vue'
-import Watchlist from './Watchlist.vue'
-import SearchSymbols from './SearchSymbols.vue'
-import FundNAV from './FundNAV.vue'
+import { useFinanceStore } from "@/stores/finance";
+import { useResponsive } from "@/composables/useResponsive";
+import { computed } from "vue";
+import WatchlistMini from "./WatchlistMini.vue";
+import MarketIndices from "./MarketIndices.vue";
+import Commodities from "./Commodities.vue";
+import Watchlist from "./Watchlist.vue";
+import SearchSymbols from "./SearchSymbols.vue";
+import FundNAV from "./FundNAV.vue";
 
-const financeStore = useFinanceStore()
-const { showRightPanel } = useResponsive()
+const financeStore = useFinanceStore();
+const { showRightPanel } = useResponsive();
 
-const currentPanel = computed(() => financeStore.currentPanel)
-
-const overviewContent = computed(() => {
-  const topIndices = financeStore.marketIndices.slice(0, 5)
-  return topIndices
-})
+const currentPanel = computed(() => financeStore.currentPanel);
 </script>
 
 <template>

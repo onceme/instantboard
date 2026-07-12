@@ -1,43 +1,47 @@
 <script setup lang="ts">
-import { useTechStore } from '@/stores/tech'
-import { DOMAIN_CONFIG, SUBCATEGORY_MAP } from '@/types'
-import { computed, ref } from 'vue'
-import NewsCard from './NewsCard.vue'
-import { ChevronDown, ChevronUp } from 'lucide-vue-next'
+import { useTechStore } from "@/stores/tech";
+import { DOMAIN_CONFIG, SUBCATEGORY_MAP } from "@/types";
+import { computed, ref } from "vue";
+import NewsCard from "./NewsCard.vue";
+import { ChevronDown, ChevronUp } from "lucide-vue-next";
 
 const props = defineProps<{
-  domain: string
-}>()
+  domain: string;
+}>();
 
-const techStore = useTechStore()
-const expanded = ref(true)
-const activeSubcategory = ref('')
+const techStore = useTechStore();
+const expanded = ref(true);
+const activeSubcategory = ref("");
 
-const config = computed(() => DOMAIN_CONFIG[props.domain])
-const subcategories = computed(() => SUBCATEGORY_MAP[props.domain] || [])
+const config = computed(() => DOMAIN_CONFIG[props.domain]);
+const subcategories = computed(() => SUBCATEGORY_MAP[props.domain] || []);
 
 const domainNews = computed(() => {
   let items = techStore.newsItems.filter((item) => {
-    return item.topic_tags.some((tag) => tag === props.domain || tag.startsWith(props.domain))
-  })
+    return item.topic_tags.some(
+      (tag) => tag === props.domain || tag.startsWith(props.domain),
+    );
+  });
 
   if (activeSubcategory.value) {
-    items = items.filter((item) => item.topic_tags.includes(activeSubcategory.value))
+    items = items.filter((item) =>
+      item.topic_tags.includes(activeSubcategory.value),
+    );
   }
 
-  return items.slice(0, expanded.value ? 10 : 5)
-})
+  return items.slice(0, expanded.value ? 10 : 5);
+});
 
 function toggleExpand() {
-  expanded.value = !expanded.value
+  expanded.value = !expanded.value;
 }
 
 function selectSubcategory(slug: string) {
-  activeSubcategory.value = activeSubcategory.value === slug ? '' : slug
-  techStore.setSubcategory(slug)
+  activeSubcategory.value = activeSubcategory.value === slug ? "" : slug;
+  techStore.setSubcategory(slug);
 }
 
-const domainColorVar = computed(() => `var(--domain-${props.domain})`)
+const domainColorVar = computed(() => `var(--domain-${props.domain})`);
 </script>
 
 <template>
@@ -46,7 +50,9 @@ const domainColorVar = computed(() => `var(--domain-${props.domain})`)
 
     <div class="panel-header">
       <span class="domain-icon">{{ config?.icon }}</span>
-      <h3 class="domain-title">{{ config?.label }}</h3>
+      <h3 class="domain-title">
+        {{ config?.label }}
+      </h3>
       <button class="expand-btn" @click="toggleExpand">
         <ChevronUp v-if="expanded" :size="16" />
         <ChevronDown v-else :size="16" />
@@ -66,7 +72,7 @@ const domainColorVar = computed(() => `var(--domain-${props.domain})`)
       </button>
     </div>
 
-    <div class="news-list" v-if="domainNews.length > 0">
+    <div v-if="domainNews.length > 0" class="news-list">
       <NewsCard v-for="item in domainNews" :key="item.id" :item="item" />
     </div>
 
@@ -74,7 +80,11 @@ const domainColorVar = computed(() => `var(--domain-${props.domain})`)
       <p class="no-news-text">暂无新闻</p>
     </div>
 
-    <button v-if="domainNews.length > 0" class="more-btn" @click="techStore.setDomain(props.domain as any)">
+    <button
+      v-if="domainNews.length > 0"
+      class="more-btn"
+      @click="techStore.setDomain(props.domain as any)"
+    >
       查看更多
     </button>
   </div>

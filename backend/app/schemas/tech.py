@@ -6,26 +6,26 @@ from pydantic import BaseModel, Field
 class TechNewsResponse(BaseModel):
     id: str
     title: str
-    summary: str | None
+    summary: str | None = None
     url: str
-    source_name: str | None
+    source_name: str | None = None
     source_id: str
     category_id: str
     topic_tags: list[str]
-    domain_tag: str | None
+    domain_tag: str | None = None
     published_at: datetime
     fetched_at: datetime
-    image_url: str | None
+    image_url: str | None = None
     priority: int
-    extra_data: dict | None
-    hot_score: float | None
+    extra_data: dict | None = None
+    hot_score: float | None = None
 
 
 class TechTopicResponse(BaseModel):
     tag: str
-    label: str | None
+    label: str | None = None
     count: int
-    last_active_at: datetime | None
+    last_active_at: datetime | None = None
 
 
 class TechNewsParams(BaseModel):

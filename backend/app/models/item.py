@@ -15,7 +15,7 @@ class Item(Base):
         UUID(as_uuid=True),
         primary_key=True,
         default=uuid.uuid4,
-        server_default="gen_random_uuid()",
+        server_default=text("gen_random_uuid()"),
     )
     tenant_id = Column(
         UUID(as_uuid=True),
@@ -42,8 +42,8 @@ class Item(Base):
         nullable=False,
         server_default=text("NOW()"),
     )
-    topic_tags = Column(JSONB, default=list, server_default="'[]'")
-    extra_data = Column(JSONB, default=dict, server_default="'{}'")
+    topic_tags = Column(JSONB, default=list, server_default=text("'[]'::jsonb"))
+    extra_data = Column(JSONB, default=dict, server_default=text("'{}'::jsonb"))
     priority = Column(Integer, nullable=False, default=5, server_default="5")
     is_processed = Column(Boolean, nullable=False, default=True, server_default="true")
     created_at = Column(
@@ -68,6 +68,6 @@ class Item(Base):
         Index("idx_items_source", "source_id"),
     )
 
-    tenant = relationship("Tenant")
-    category = relationship("Category", back_populates="items")
-    source = relationship("Source", back_populates="items")
+    tenant = relationship("Tenant", lazy="selectin")
+    category = relationship("Category", back_populates="items", lazy="selectin")
+    source = relationship("Source", back_populates="items", lazy="selectin")

@@ -43,7 +43,13 @@ class AuthService:
                 details=[{"field": "provider", "message": f"Must be one of: {', '.join(SUPPORTED_PROVIDERS)}"}],
             )
 
-        handler = SSOHandlerFactory.create(provider)
+        try:
+            handler = SSOHandlerFactory.create(provider, settings)
+        except ValueError as e:
+            raise ValidationError(
+                message=str(e),
+                details=[{"field": "provider", "message": str(e)}],
+            ) from e
         try:
             user_info = await handler.authenticate(code, redirect_uri)
         except ValueError as e:

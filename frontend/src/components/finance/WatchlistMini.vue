@@ -1,21 +1,21 @@
 <script setup lang="ts">
-import { useFinanceStore } from '@/stores/finance'
-import { formatCurrency, formatPercent, getChangeClass } from '@/utils/format'
-import { computed } from 'vue'
+import { useFinanceStore } from "@/stores/finance";
+import { formatCurrency, formatPercent, getChangeClass } from "@/utils/format";
+import { computed } from "vue";
 
-const financeStore = useFinanceStore()
+const financeStore = useFinanceStore();
 
-const items = computed(() => financeStore.watchlistTop5)
+const items = computed(() => financeStore.watchlistTop5);
 
 function goToWatchlist() {
-  financeStore.setCurrentPanel('watchlist')
+  financeStore.setCurrentPanel("watchlist");
 }
 
 function changeClass(changePercent: number): string {
-  const cls = getChangeClass(changePercent)
-  if (cls === 'up') return 'change-up'
-  if (cls === 'down') return 'change-down'
-  return 'change-neutral'
+  const cls = getChangeClass(changePercent);
+  if (cls === "up") return "change-up";
+  if (cls === "down") return "change-down";
+  return "change-neutral";
 }
 </script>
 
@@ -31,20 +31,25 @@ function changeClass(changePercent: number): string {
 
     <div v-else class="mini-list">
       <div v-for="item in items" :key="item.id" class="mini-item">
-        <div class="item-symbol">{{ item.symbol }}</div>
-        <div class="item-name text-truncate">{{ item.name || item.symbol }}</div>
-        <div class="item-price">
-          {{ item.quote ? formatCurrency(item.quote.current_price) : '--' }}
+        <div class="item-symbol">
+          {{ item.symbol }}
         </div>
-        <div class="item-change" :class="item.quote ? changeClass(item.quote.change_percent) : ''">
-          {{ item.quote ? formatPercent(item.quote.change_percent) : '--' }}
+        <div class="item-name text-truncate">
+          {{ item.name || item.symbol }}
+        </div>
+        <div class="item-price">
+          {{ item.quote ? formatCurrency(item.quote.current_price) : "--" }}
+        </div>
+        <div
+          class="item-change"
+          :class="item.quote ? changeClass(item.quote.change_percent) : ''"
+        >
+          {{ item.quote ? formatPercent(item.quote.change_percent) : "--" }}
         </div>
       </div>
     </div>
 
-    <button class="view-all-btn" @click="goToWatchlist">
-      查看全部
-    </button>
+    <button class="view-all-btn" @click="goToWatchlist">查看全部</button>
   </div>
 </template>
 

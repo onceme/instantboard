@@ -8,29 +8,29 @@ class FinanceSearchResult(BaseModel):
     name: str
     type: str
     market: str
-    exchange: str | None
-    current_price: float | None
-    change_percent: float | None
+    exchange: str | None = None
+    current_price: float | None = None
+    change_percent: float | None = None
     currency: str
 
 
 class FinanceQuoteResponse(BaseModel):
     symbol: str
     name: str
-    current_price: float | None
-    open: float | None
-    high: float | None
-    low: float | None
-    close_previous: float | None
-    volume: int | None
-    change: float | None
-    change_percent: float | None
-    market_cap: int | None
-    pe_ratio: float | None
-    week_high_52: float | None = Field(validation_alias="52_week_high")
-    week_low_52: float | None = Field(validation_alias="52_week_low")
-    timestamp: datetime | None
-    source: str | None
+    current_price: float | None = None
+    open: float | None = None
+    high: float | None = None
+    low: float | None = None
+    close_previous: float | None = None
+    volume: int | None = None
+    change: float | None = None
+    change_percent: float | None = None
+    market_cap: int | None = None
+    pe_ratio: float | None = None
+    week_high_52: float | None = Field(default=None, validation_alias="52_week_high")
+    week_low_52: float | None = Field(default=None, validation_alias="52_week_low")
+    timestamp: datetime | None = None
+    source: str | None = None
 
     model_config = {"populate_by_name": True}
 
@@ -38,41 +38,41 @@ class FinanceQuoteResponse(BaseModel):
 class MarketIndexResponse(BaseModel):
     symbol: str
     name: str
-    value: float | None
-    change: float | None
-    change_percent: float | None
-    market_status: str | None
+    value: float | None = None
+    change: float | None = None
+    change_percent: float | None = None
+    market_status: str | None = None
     region: str
-    timestamp: datetime | None
+    timestamp: datetime | None = None
 
 
 class CommodityResponse(BaseModel):
     symbol: str
     name: str
-    value: float | None
-    change: float | None
-    change_percent: float | None
-    unit: str | None
-    timestamp: datetime | None
+    value: float | None = None
+    change: float | None = None
+    change_percent: float | None = None
+    unit: str | None = None
+    timestamp: datetime | None = None
 
 
 class UnderlyingIndexInfo(BaseModel):
     symbol: str
     name: str
-    current_value: float | None
-    change_percent: float | None
+    current_value: float | None = None
+    change_percent: float | None = None
 
 
 class FundNAVResponse(BaseModel):
     symbol: str
     name: str
-    nav_official: float | None
-    nav_official_date: str | None
-    nav_estimate: float | None
-    nav_estimate_deviation_percent: float | None
-    estimate_method: str | None
-    estimate_timestamp: datetime | None
-    underlying_index: UnderlyingIndexInfo | None
+    nav_official: float | None = None
+    nav_official_date: str | None = None
+    nav_estimate: float | None = None
+    nav_estimate_deviation_percent: float | None = None
+    estimate_method: str | None = None
+    estimate_timestamp: datetime | None = None
+    underlying_index: UnderlyingIndexInfo | None = None
 
 
 class WatchlistItemCreate(BaseModel):
@@ -94,30 +94,30 @@ class WatchlistReorderRequest(BaseModel):
 class WatchlistItemResponse(BaseModel):
     id: str
     symbol_id: str
-    symbol: str | None
-    name: str | None
+    symbol: str | None = None
+    name: str | None = None
     display_order: int
-    notes: str | None
-    alert_threshold_percent: float | None
-    current_price: float | None
-    change: float | None
-    change_percent: float | None
+    notes: str | None = None
+    alert_threshold_percent: float | None = None
+    current_price: float | None = None
+    change: float | None = None
+    change_percent: float | None = None
 
 
 class QuoteDetailResponse(BaseModel):
     symbol: str
     name: str
-    current_price: float | None
-    open: float | None
-    high: float | None
-    low: float | None
-    close_previous: float | None
-    volume: int | None
-    change: float | None
-    change_percent: float | None
-    market_cap: int | None
-    pe_ratio: float | None
-    week_high_52: float | None
-    week_low_52: float | None
-    timestamp: datetime | None
-    source: str | None
+    current_price: float | None = None
+    open: float | None = None
+    high: float | None = None
+    low: float | None = None
+    close_previous: float | None = None
+    volume: int | None = None
+    change: float | None = None
+    change_percent: float | None = None
+    market_cap: int | None = None
+    pe_ratio: float | None = None
+    week_high_52: float | None = None
+    week_low_52: float | None = None
+    timestamp: datetime | None = None
+    source: str | None = None

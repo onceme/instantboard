@@ -20,43 +20,48 @@ echo "Waiting for Redis..."
 REDIS_HOST="${REDISHOST:-${REDIS_HOST:-redis}}"
 REDIS_PORT="${REDISPORT:-6379}"
 
-until redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" ping > /dev/null 2>&1; do
+if [ -n "$REDIS_PASSWORD" ]; then
+  REDIS_AUTH_ARGS="-a $REDIS_PASSWORD"
+else
+  REDIS_AUTH_ARGS=""
+fi
+
+until redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" $REDIS_AUTH_ARGS ping > /dev/null 2>&1; do
   echo "Redis not ready yet... waiting"
   sleep 1
 done
 echo "Redis is ready at $REDIS_HOST:$REDIS_PORT"
 
-# --- Run Alembic migrations ---
-echo "Running Alembic migrations..."
-if [ -f "app/alembic/alembic.ini" ]; then
-  alembic -c app/alembic/alembic.ini upgrade head || \
-    python -c "from app.db.init_db import init_db; import asyncio; asyncio.run(init_db())"
+# --- Run database migrations / create tables ---
+echo "Setting up database schema..."
+ALEMBIC_VERSIONS="app/alembic/versions"
+ALEMBIC_HAS_MIGRATIONS=false
+
+if [ -d "$ALEMBIC_VERSIONS" ] && [ "$(find "$ALEMBIC_VERSIONS" -maxdepth 1 -name '*.py' -not -name '__init__.py' 2>/dev/null | head -n 1)" ]; then
+  ALEMBIC_HAS_MIGRATIONS=true
+fi
+
+if [ "$ALEMBIC_HAS_MIGRATIONS" = "true" ] && [ -f "app/alembic/alembic.ini" ]; then
+  echo "Running Alembic migrations..."
+  alembic -c app/alembic/alembic.ini upgrade head || {
+    echo "Alembic migration failed, falling back to create_all..."
+    python -c "from app.db.init_db import create_tables; import asyncio; asyncio.run(create_tables())"
+  }
 else
-  echo "No alembic.ini found, running init_db directly..."
-  python -c "from app.db.init_db import init_db; import asyncio; asyncio.run(init_db())"
+  echo "No Alembic migrations found (empty versions directory), creating tables via SQLAlchemy..."
+  python -c "from app.db.init_db import create_tables; import asyncio; asyncio.run(create_tables())"
 fi
 
 # --- Initialize seed data ---
 echo "Initializing seed data..."
-python -c "from app.db.init_db import init_db; import asyncio; asyncio.run(init_db())" || true
+python -c "from app.db.init_db import seed_default_data; import asyncio; asyncio.run(seed_default_data())" || true
 
-# --- Determine startup command ---
-echo "Starting application..."
+# --- Run the provided command ---
+echo "Starting application: $*"
 
-if [ "${ENV}" = "production" ] || [ "${APP_ENV}" = "production" ]; then
-  # Production: use gunicorn with uvicorn workers
-  exec gunicorn app.main:app \
-    --bind "${UVICORN_HOST:-0.0.0.0}:${UVICORN_PORT:-8000}" \
-    --workers "${UVICORN_WORKERS:-4}" \
-    --worker-class uvicorn.workers.UvicornWorker \
-    --timeout 120 \
-    --graceful_timeout 30 \
-    --access-logfile - \
-    --error-logfile -
+if [ $# -gt 0 ]; then
+  exec "$@"
 else
-  # Development: use uvicorn with reload
-  exec uvicorn app.main:app \
-    --host "${UVICORN_HOST:-0.0.0.0}" \
-    --port "${UVICORN_PORT:-8000}" \
-    --reload
+  echo "No command specified. Please provide a command via CMD."
+  exit 1
 fi

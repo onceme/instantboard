@@ -1,46 +1,58 @@
 <script setup lang="ts">
-import { useFinanceStore } from '@/stores/finance'
-import { formatNumber, formatPercent, getChangeClass } from '@/utils/format'
-import { computed, ref } from 'vue'
-import { MARKET_REGION_GROUPS } from '@/types'
-import { RefreshCw } from 'lucide-vue-next'
+import { useFinanceStore } from "@/stores/finance";
+import { formatNumber, formatPercent, getChangeClass } from "@/utils/format";
+import { computed, ref } from "vue";
+import { MARKET_REGION_GROUPS } from "@/types";
+import { RefreshCw } from "lucide-vue-next";
 
-const financeStore = useFinanceStore()
-const refreshing = ref(false)
+const financeStore = useFinanceStore();
+const refreshing = ref(false);
 
 const groupedIndices = computed(() => {
-  const groups: Record<string, Array<{ symbol: string; name: string; value: number; change_percent: number; market_status: string; region: string }>> = {}
+  const groups: Record<
+    string,
+    Array<{
+      symbol: string;
+      name: string;
+      value: number;
+      change_percent: number;
+      market_status: string;
+      region: string;
+    }>
+  > = {};
 
   for (const [key, config] of Object.entries(MARKET_REGION_GROUPS)) {
-    groups[key] = financeStore.marketIndices.filter((i) => config.regions.includes(i.region))
+    groups[key] = financeStore.marketIndices.filter((i) =>
+      config.regions.includes(i.region),
+    );
   }
 
-  return groups
-})
+  return groups;
+});
 
 function changeClass(changePercent: number): string {
-  const cls = getChangeClass(changePercent)
-  if (cls === 'up') return 'change-up'
-  if (cls === 'down') return 'change-down'
-  return 'change-neutral'
+  const cls = getChangeClass(changePercent);
+  if (cls === "up") return "change-up";
+  if (cls === "down") return "change-down";
+  return "change-neutral";
 }
 
 function marketStatusLabel(status: string): string {
   const labels: Record<string, string> = {
-    open: '开盘',
-    closed: '休市',
-    pre_market: '盘前',
-    post_market: '盘后',
-  }
-  return labels[status] || status
+    open: "开盘",
+    closed: "休市",
+    pre_market: "盘前",
+    post_market: "盘后",
+  };
+  return labels[status] || status;
 }
 
 async function refresh() {
-  refreshing.value = true
+  refreshing.value = true;
   try {
-    await financeStore.getMarketIndices()
+    await financeStore.getMarketIndices();
   } finally {
-    refreshing.value = false
+    refreshing.value = false;
   }
 }
 </script>
@@ -49,22 +61,33 @@ async function refresh() {
   <div class="market-indices">
     <div class="indices-header">
       <h2 class="indices-title">市场指数</h2>
-      <button class="refresh-btn" @click="refresh" :disabled="refreshing">
+      <button class="refresh-btn" :disabled="refreshing" @click="refresh">
         <RefreshCw :size="16" :class="{ spinning: refreshing }" />
       </button>
     </div>
 
-    <div v-for="[groupKey, group] in Object.entries(groupedIndices)" :key="groupKey" class="region-group">
-      <h3 class="region-label">{{ MARKET_REGION_GROUPS[groupKey]?.label || groupKey }}</h3>
+    <div
+      v-for="[groupKey, group] in Object.entries(groupedIndices)"
+      :key="groupKey"
+      class="region-group"
+    >
+      <h3 class="region-label">
+        {{ MARKET_REGION_GROUPS[groupKey]?.label || groupKey }}
+      </h3>
       <div class="indices-list">
         <div v-for="index in group" :key="index.symbol" class="index-row">
           <div class="index-info">
             <span class="index-name">{{ index.name }}</span>
-            <span class="index-status">{{ marketStatusLabel(index.market_status) }}</span>
+            <span class="index-status">{{
+              marketStatusLabel(index.market_status)
+            }}</span>
           </div>
           <div class="index-data">
             <span class="index-value">{{ formatNumber(index.value, 2) }}</span>
-            <span :class="changeClass(index.change_percent)" class="index-change">
+            <span
+              :class="changeClass(index.change_percent)"
+              class="index-change"
+            >
               {{ formatPercent(index.change_percent) }}
             </span>
           </div>
@@ -119,7 +142,9 @@ async function refresh() {
 }
 
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .region-group {

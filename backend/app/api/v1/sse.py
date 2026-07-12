@@ -19,6 +19,46 @@ router = APIRouter()
 sse_service = SSEService()
 
 
+@router.get("/status")
+async def sse_status(
+    user: dict = Depends(get_optional_token),
+):
+    if user is None:
+        return SuccessResponse(
+            data={
+                "active_channels": [],
+                "connection_id": None,
+                "connected_since": None,
+            }
+        )
+
+    user_id = user.get("user_id", "anonymous")
+    tenant_id = user.get("tenant_id", "default")
+
+    active_channels = []
+    connected_since = None
+    prefix = f"{tenant_id}:{user_id}"
+    for client_id, conn in event_router._connections.items():
+        if client_id.startswith(prefix) and conn.is_active:
+            active_channels.extend(conn.categories)
+            if connected_since is None:
+                connected_since = conn.connected_at.isoformat()
+
+    return SuccessResponse(
+        data={
+            "active_channels": active_channels,
+            "connection_id": prefix,
+            "connected_since": connected_since,
+        }
+    )
+
+
+@router.get("/stats")
+async def sse_stats():
+    stats = await sse_service.get_sse_stats()
+    return SuccessResponse(data=stats)
+
+
 @router.get("/{category}")
 async def sse_stream(
     category: str,
@@ -83,43 +123,3 @@ async def sse_stream(
             "Access-Control-Allow-Origin": "*",
         },
     )
-
-
-@router.get("/status")
-async def sse_status(
-    user: dict = Depends(get_optional_token),
-):
-    if user is None:
-        return SuccessResponse(
-            data={
-                "active_channels": [],
-                "connection_id": None,
-                "connected_since": None,
-            }
-        )
-
-    user_id = user.get("user_id", "anonymous")
-    tenant_id = user.get("tenant_id", "default")
-
-    active_channels = []
-    connected_since = None
-    prefix = f"{tenant_id}:{user_id}"
-    for client_id, conn in event_router._connections.items():
-        if client_id.startswith(prefix) and conn.is_active:
-            active_channels.extend(conn.categories)
-            if connected_since is None:
-                connected_since = conn.connected_at.isoformat()
-
-    return SuccessResponse(
-        data={
-            "active_channels": active_channels,
-            "connection_id": prefix,
-            "connected_since": connected_since,
-        }
-    )
-
-
-@router.get("/stats")
-async def sse_stats():
-    stats = await sse_service.get_sse_stats()
-    return SuccessResponse(data=stats)

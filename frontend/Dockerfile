@@ -1,4 +1,4 @@
-FROM node:18-alpine AS dev
+FROM node:24-alpine AS dev
 
 WORKDIR /app
 
@@ -9,7 +9,7 @@ EXPOSE 3000
 
 CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "3000"]
 
-FROM node:18-alpine AS builder
+FROM node:24-alpine AS builder
 
 WORKDIR /app
 
@@ -21,10 +21,13 @@ RUN npm run build
 
 FROM nginx:1.25-alpine AS prod
 
-COPY --from=builder /app/dist /usr/share/nginx/html
+COPY --from=builder /app/dist /app/dist
 
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
 EXPOSE 80
 
-CMD ["nginx", "-g", "daemon off;"]
+ENTRYPOINT ["/entrypoint.sh"]

@@ -14,7 +14,7 @@ class DashboardSnapshot(Base):
         UUID(as_uuid=True),
         primary_key=True,
         default=uuid.uuid4,
-        server_default="gen_random_uuid()",
+        server_default=text("gen_random_uuid()"),
     )
     tenant_id = Column(
         UUID(as_uuid=True),
@@ -40,4 +40,4 @@ class DashboardSnapshot(Base):
 
     __table_args__ = (Index("idx_dashboard_snapshots_time", "tenant_id", "timestamp"),)
 
-    tenant = relationship("Tenant")
+    tenant = relationship("Tenant", lazy="selectin")

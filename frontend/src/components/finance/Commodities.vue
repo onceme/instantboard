@@ -1,39 +1,44 @@
 <script setup lang="ts">
-import { useFinanceStore } from '@/stores/finance'
-import { formatCurrency, formatPercent, getChangeClass } from '@/utils/format'
-import { computed, ref } from 'vue'
-import { COMMODITY_GROUPS } from '@/types'
-import { RefreshCw } from 'lucide-vue-next'
+import { useFinanceStore } from "@/stores/finance";
+import { formatCurrency, formatPercent, getChangeClass } from "@/utils/format";
+import { computed, ref } from "vue";
+import { COMMODITY_GROUPS } from "@/types";
+import { RefreshCw } from "lucide-vue-next";
 
-const financeStore = useFinanceStore()
-const refreshing = ref(false)
+const financeStore = useFinanceStore();
+const refreshing = ref(false);
 
 const groupedCommodities = computed(() => {
-  const groups: Record<string, { label: string; items: typeof financeStore.commodities }> = {}
+  const groups: Record<
+    string,
+    { label: string; items: typeof financeStore.commodities }
+  > = {};
 
   for (const [key, config] of Object.entries(COMMODITY_GROUPS)) {
     groups[key] = {
       label: config.label,
-      items: financeStore.commodities.filter((c) => c.category === config.category),
-    }
+      items: financeStore.commodities.filter(
+        (c) => c.category === config.category,
+      ),
+    };
   }
 
-  return groups
-})
+  return groups;
+});
 
 function changeClass(changePercent: number): string {
-  const cls = getChangeClass(changePercent)
-  if (cls === 'up') return 'change-up'
-  if (cls === 'down') return 'change-down'
-  return 'change-neutral'
+  const cls = getChangeClass(changePercent);
+  if (cls === "up") return "change-up";
+  if (cls === "down") return "change-down";
+  return "change-neutral";
 }
 
 async function refresh() {
-  refreshing.value = true
+  refreshing.value = true;
   try {
-    await financeStore.getCommodities()
+    await financeStore.getCommodities();
   } finally {
-    refreshing.value = false
+    refreshing.value = false;
   }
 }
 </script>
@@ -42,22 +47,37 @@ async function refresh() {
   <div class="commodities">
     <div class="commodities-header">
       <h2 class="commodities-title">大宗商品</h2>
-      <button class="refresh-btn" @click="refresh" :disabled="refreshing">
+      <button class="refresh-btn" :disabled="refreshing" @click="refresh">
         <RefreshCw :size="16" :class="{ spinning: refreshing }" />
       </button>
     </div>
 
-    <div v-for="[groupKey, group] in Object.entries(groupedCommodities)" :key="groupKey" class="commodity-group">
-      <h3 class="group-label">{{ group.label }}</h3>
+    <div
+      v-for="[groupKey, group] in Object.entries(groupedCommodities)"
+      :key="groupKey"
+      class="commodity-group"
+    >
+      <h3 class="group-label">
+        {{ group.label }}
+      </h3>
       <div class="commodity-list">
-        <div v-for="item in group.items" :key="item.symbol" class="commodity-row">
+        <div
+          v-for="item in group.items"
+          :key="item.symbol"
+          class="commodity-row"
+        >
           <div class="commodity-info">
             <span class="commodity-name">{{ item.name }}</span>
             <span class="commodity-unit">{{ item.unit }}</span>
           </div>
           <div class="commodity-data">
-            <span class="commodity-price">{{ formatCurrency(item.value) }}</span>
-            <span :class="changeClass(item.change_percent)" class="commodity-change">
+            <span class="commodity-price">{{
+              formatCurrency(item.value)
+            }}</span>
+            <span
+              :class="changeClass(item.change_percent)"
+              class="commodity-change"
+            >
               {{ formatPercent(item.change_percent) }}
             </span>
           </div>
@@ -112,7 +132,9 @@ async function refresh() {
 }
 
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .commodity-group {

@@ -6,10 +6,10 @@ from pydantic import BaseModel
 class ItemResponse(BaseModel):
     id: str
     title: str
-    summary: str | None
+    summary: str | None = None
     url: str
-    image_url: str | None
-    source_name: str | None
+    image_url: str | None = None
+    source_name: str | None = None
     source_id: str
     category_id: str
     topic_tags: list[str]

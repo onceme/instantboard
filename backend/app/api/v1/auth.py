@@ -57,7 +57,7 @@ async def sso_authorize(
         raise ValidationError(
             message=str(e),
             details=[{"field": "provider", "message": str(e)}],
-        )
+        ) from e
     state = secrets.token_urlsafe(32)
     authorize_url = handler.get_authorize_url(state=state, redirect_uri=redirect_uri)
     return SuccessResponse(data=SSOAuthorizeResponse(authorize_url=authorize_url, state=state))

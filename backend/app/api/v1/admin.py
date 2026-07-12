@@ -118,16 +118,17 @@ async def get_tenant(
     try:
         tid = uuid.UUID(tenant_id)
     except ValueError:
-        raise ValidationError(message=f"Invalid tenant ID: {tenant_id}")
+        raise ValidationError(message=f"Invalid tenant ID: {tenant_id}") from None
 
     stmt = select(Tenant).where(Tenant.id == tid)
     result = await db.execute(stmt)
     tenant = result.scalar_one_or_none()
 
     if tenant is None:
+        from fastapi import status
+
         from app.core.exceptions import AppException
         from app.schemas.base import ErrorCode
-        from fastapi import status
 
         raise AppException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -150,16 +151,17 @@ async def update_tenant(
     try:
         tid = uuid.UUID(tenant_id)
     except ValueError:
-        raise ValidationError(message=f"Invalid tenant ID: {tenant_id}")
+        raise ValidationError(message=f"Invalid tenant ID: {tenant_id}") from None
 
     stmt = select(Tenant).where(Tenant.id == tid)
     result = await db.execute(stmt)
     tenant = result.scalar_one_or_none()
 
     if tenant is None:
+        from fastapi import status
+
         from app.core.exceptions import AppException
         from app.schemas.base import ErrorCode
-        from fastapi import status
 
         raise AppException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -200,16 +202,17 @@ async def delete_tenant(
     try:
         tid = uuid.UUID(tenant_id)
     except ValueError:
-        raise ValidationError(message=f"Invalid tenant ID: {tenant_id}")
+        raise ValidationError(message=f"Invalid tenant ID: {tenant_id}") from None
 
     stmt = select(Tenant).where(Tenant.id == tid)
     result = await db.execute(stmt)
     tenant = result.scalar_one_or_none()
 
     if tenant is None:
+        from fastapi import status
+
         from app.core.exceptions import AppException
         from app.schemas.base import ErrorCode
-        from fastapi import status
 
         raise AppException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -237,16 +240,17 @@ async def get_tenant_stats(
     try:
         tid = uuid.UUID(tenant_id)
     except ValueError:
-        raise ValidationError(message=f"Invalid tenant ID: {tenant_id}")
+        raise ValidationError(message=f"Invalid tenant ID: {tenant_id}") from None
 
     stmt = select(Tenant).where(Tenant.id == tid)
     result = await db.execute(stmt)
     tenant = result.scalar_one_or_none()
 
     if tenant is None:
+        from fastapi import status
+
         from app.core.exceptions import AppException
         from app.schemas.base import ErrorCode
-        from fastapi import status
 
         raise AppException(
             status_code=status.HTTP_404_NOT_FOUND,

@@ -49,7 +49,7 @@ class AuthService:
             raise ValidationError(
                 message=str(e),
                 details=[{"field": "provider", "message": str(e)}],
-            )
+            ) from e
         try:
             user_info = await handler.authenticate(code, redirect_uri)
         except ValueError as e:

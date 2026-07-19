@@ -320,8 +320,8 @@ CREATE INDEX idx_dashboard_snapshots_time ON dashboard_snapshots(tenant_id, time
 
 **Redis 配置要点**:
 - `maxmemory-policy: allkeys-lru` — 内存满时淘汰最久未使用的 key
-- `maxmemory: 512mb` (开发) / `2gb` (生产)
-- `appendonly: yes` — 持久化 (AOF)
+- `maxmemory: 512mb` (开发/生产统一)
+- `appendonly: no` — 默认关闭 AOF，仅 RDB 快照持久化
 - `requirepass` — 生产环境密码认证
 
 ### 3.3 MongoDB 使用场景

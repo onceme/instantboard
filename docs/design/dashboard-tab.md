@@ -111,7 +111,7 @@ graph TD
 | PostgreSQL 连接池状态 | SQLAlchemy pool检查 (pool.status()) | 30s | 数字: "12/20活跃连接" |
 | PostgreSQL 数据库大小 | `pg_database_size()` 查询 | 5min | "500MB" |
 | PostgreSQL 活跃查询数 | `pg_stat_activity` 查询 | 30s | 数字 |
-| Redis 内存使用 | `INFO memory` 命令 | 30s | "128MB / 512MB (25%)" |
+| Redis 内存使用 | `INFO memory` 命令 | 30s | "64MB / 256MB (25%)" |
 | Redis 连接客户端数 | `INFO clients` 命令 | 30s | 数字 |
 | Redis Key总数 | `DBSIZE` 命令 | 5min | 数字 |
 | MongoDB 状态 (如启用) | `db.serverStatus()` | 30s | 状态灯 + 存储大小 |

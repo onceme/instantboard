@@ -506,7 +506,7 @@ services:
       - "6379:6379"
     volumes:
       - redis_dev_data:/data
-    command: redis-server --appendonly yes
+    command: redis-server /usr/local/etc/redis/redis.conf
   
   mongodb:
     image: mongo:6
@@ -594,7 +594,7 @@ services:
 
   redis:
     ports: []  # 不对外暴露
-    command: redis-server --appendonly yes --requirepass ${PROD_REDIS_PASSWORD}
+    command: redis-server /usr/local/etc/redis/redis.conf --requirepass ${PROD_REDIS_PASSWORD}
     restart: always
 
   mongodb:
@@ -613,7 +613,7 @@ services:
 | 热重载 | volume mount + --reload | 无，构建后静态 |
 | Worker | 集成在 API 进程 (APScheduler) | 独立 Celery worker |
 | Nginx | 不使用 | 必须使用 (SSL + rate-limit) |
-| MongoDB | 默认启动 | 按需 profile 启动 |
+| MongoDB | 按需 profile 启动 | 按需 profile 启动 |
 | Health check | 无 | 必须 |
 | Restart policy | 无 | always |
 | 密码 | 开发固定密码 | .env.production 读取 |

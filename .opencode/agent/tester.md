@@ -3,13 +3,7 @@ description: 测试 agent，为 InstantBoard 服务编写和运行单元测试�
 mode: subagent
 permission:
   edit: allow
-  bash:
-    pytest *: allow
-    npm *: allow
-    pip *: allow
-    python *: allow
-    curl *: allow
-    "*": ask
+  bash: allow
 steps: 20
 color: warning
 ---

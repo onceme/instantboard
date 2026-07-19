@@ -2,6 +2,9 @@
   "$schema": "https://opencode.ai/config.json",
   "default_agent": "orchestrator",
   "instructions": ["AGENTS.md"],
+  "permission": {
+    "external_directory": { "/tmp/**": "allow", "*": "ask" }
+  },
   "agent": {
     "orchestrator": {
       "description": "总管 agent，分析用户意图并调度 designer/coder/tester subagent 完成任务",
@@ -24,10 +27,7 @@
     "tester": {
       "description": "测试 agent，为 InstantBoard 服务编写和运行单元测试、集成测试与端到端测试",
       "mode": "subagent",
-      "permission": {
-        "edit": "allow",
-        "bash": { "pytest *": "allow", "npm *": "allow", "pip *": "allow", "python *": "allow", "*": "ask" }
-      },
+      "permission": { "edit": "allow", "bash": "allow" },
       "steps": 20
     }
   }

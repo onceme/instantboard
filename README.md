@@ -710,8 +710,8 @@ make prod-up
 | `nginx` | 反向代理 + SSL + 限流 | 0.5 CPU / 256M |
 | `api` | FastAPI + Gunicorn | 1.0 CPU / 512M |
 | `worker` | 后台任务处理 | 0.5 CPU / 256M |
-| `postgres` | PostgreSQL 15 | 1.0 CPU / 1G |
-| `redis` | Redis 7 (密码保护) | 0.5 CPU / 512M |
+| `postgres` | PostgreSQL 15 | 1.0 CPU / 768M |
+| `redis` | Redis 7 (密码保护) | 0.5 CPU / 256M |
 | `frontend` | 静态资源 (build 产物) | 0.25 CPU / 128M |
 
 ### 开发 vs 生产差异

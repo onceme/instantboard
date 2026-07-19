@@ -469,8 +469,8 @@ graph TD
 
 **Redis全局策略** (见[database.md](database.md) §3.2):
 - `maxmemory-policy: allkeys-lru` — 内存满时LRU淘汰
-- `maxmemory: 512mb (开发) / 2gb (生产)`
-- `appendonly: yes` — AOF持久化
+- `maxmemory: 512mb (开发/生产统一)`
+- `appendonly: no` — 默认关闭 AOF, 仅 RDB 快照持久化
 
 ### 3.7 错误处理与重试机制
 

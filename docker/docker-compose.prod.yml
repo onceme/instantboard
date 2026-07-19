@@ -45,7 +45,7 @@ services:
     command: >-
       gunicorn app.main:app
       --bind 0.0.0.0:8000
-      --workers 2
+      --workers 1
       --worker-class uvicorn.workers.UvicornWorker
       --timeout 120
       --graceful-timeout 30
@@ -68,10 +68,10 @@ services:
       resources:
         limits:
           cpus: "1.0"
-          memory: 768M
+          memory: 512M
         reservations:
           cpus: "0.5"
-          memory: 256M
+          memory: 128M
     restart: always
 
   worker:
@@ -148,10 +148,10 @@ services:
       resources:
         limits:
           cpus: "1.0"
-          memory: 1G
+          memory: 768M
         reservations:
           cpus: "0.5"
-          memory: 512M
+          memory: 256M
     restart: always
 
   redis:
@@ -160,7 +160,7 @@ services:
     volumes:
       - redis_prod_data:/data
       - ./redis/redis.conf:/usr/local/etc/redis/redis.conf
-    command: redis-server /usr/local/etc/redis/redis.conf --appendonly yes --requirepass ${PROD_REDIS_PASSWORD:-prodredis123}
+    command: redis-server /usr/local/etc/redis/redis.conf --requirepass ${PROD_REDIS_PASSWORD:-prodredis123}
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${PROD_REDIS_PASSWORD:-prodredis123}", "ping"]
       interval: 10s
@@ -170,10 +170,10 @@ services:
       resources:
         limits:
           cpus: "0.5"
-          memory: 512M
+          memory: 256M
         reservations:
           cpus: "0.25"
-          memory: 256M
+          memory: 128M
     restart: always
 
   mongodb:

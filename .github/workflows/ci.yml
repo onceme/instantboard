@@ -120,9 +120,9 @@ jobs:
           pytest --cov=app --cov-report=xml --cov-report=term-missing -v
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
-          file: backend/coverage.xml
+          files: backend/coverage.xml
           flags: backend
           fail_ci_if_error: false
 

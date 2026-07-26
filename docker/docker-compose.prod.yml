@@ -113,10 +113,10 @@ services:
       context: ../frontend
       dockerfile: Dockerfile
       target: prod
-    command: !reset null
-    ports: !override
+    command: ["/entrypoint.sh"]
+    ports:
       - "3000:80"
-    volumes: !override
+    volumes:
       - frontend_static:/usr/share/nginx/html
     depends_on:
       api:

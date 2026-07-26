@@ -6,15 +6,25 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 cd "$PROJECT_ROOT"
 
+# Auto-detect Docker Compose version
+if docker compose version >/dev/null 2>&1; then
+  DOCKER_COMPOSE="docker compose"
+elif docker-compose version >/dev/null 2>&1; then
+  DOCKER_COMPOSE="docker-compose"
+else
+  echo "ERROR: Neither 'docker compose' nor 'docker-compose' is installed."
+  exit 1
+fi
+
 echo "=== InstantBoard Development Environment Setup ==="
 echo "Project root: $PROJECT_ROOT"
 
 echo "Checking prerequisites..."
 
 command -v docker >/dev/null 2>&1 || { echo "ERROR: Docker is not installed. Please install Docker Engine 24+."; exit 1; }
-docker compose version >/dev/null 2>&1 || { echo "ERROR: Docker Compose V2 is not installed."; exit 1; }
 command -v git >/dev/null 2>&1 || { echo "ERROR: Git is not installed."; exit 1; }
 
+echo "Using: $DOCKER_COMPOSE"
 echo "Prerequisites OK."
 
 if [ ! -f "$PROJECT_ROOT/.env" ]; then
@@ -26,7 +36,7 @@ else
 fi
 
 echo "Building and starting development environment..."
-cd "$PROJECT_ROOT/docker" && docker compose up -d --build
+cd "$PROJECT_ROOT/docker" && $DOCKER_COMPOSE up -d --build
 
 echo ""
 echo "=== Setup Complete ==="

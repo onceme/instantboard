@@ -80,8 +80,10 @@ jobs:
           key: ${{ secrets.STAGING_SSH_KEY }}
           script: |
             cd /opt/instantboard
-            docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml pull
-            docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up -d --remove-orphans
+            # Auto-detect Docker Compose (V2 plugin) or docker-compose (V1 standalone)
+            if docker compose version >/dev/null 2>&1; then DC="docker compose"; else DC="docker-compose"; fi
+            $DC -f docker/docker-compose.yml -f docker/docker-compose.prod.yml pull
+            $DC -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up -d --remove-orphans
 
       - name: Smoke test
         run: |

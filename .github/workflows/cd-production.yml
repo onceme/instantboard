@@ -92,10 +92,12 @@ jobs:
           key: ${{ secrets.PROD_SSH_KEY }}
           script: |
             cd /opt/instantboard
+            # Auto-detect Docker Compose (V2 plugin) or docker-compose (V1 standalone)
+            if docker compose version >/dev/null 2>&1; then DC="docker compose"; else DC="docker-compose"; fi
             # Pull latest images
-            docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml pull api worker
+            $DC -f docker/docker-compose.yml -f docker/docker-compose.prod.yml pull api worker
             # Rolling deploy: backend first
-            docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up -d --no-deps api worker
+            $DC -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up -d --no-deps api worker
             # Wait for backend health check
             echo "Waiting for API health check..."
             for i in $(seq 1 30); do
@@ -115,9 +117,11 @@ jobs:
           key: ${{ secrets.PROD_SSH_KEY }}
           script: |
             cd /opt/instantboard
+            # Auto-detect Docker Compose (V2 plugin) or docker-compose (V1 standalone)
+            if docker compose version >/dev/null 2>&1; then DC="docker compose"; else DC="docker-compose"; fi
             # Pull and deploy frontend + nginx
-            docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml pull frontend nginx
-            docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up -d --no-deps frontend nginx
+            $DC -f docker/docker-compose.yml -f docker/docker-compose.prod.yml pull frontend nginx
+            $DC -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up -d --no-deps frontend nginx
 
       - name: Health check
         run: |
@@ -138,7 +142,9 @@ jobs:
           key: ${{ secrets.PROD_SSH_KEY }}
           script: |
             cd /opt/instantboard
+            # Auto-detect Docker Compose (V2 plugin) or docker-compose (V1 standalone)
+            if docker compose version >/dev/null 2>&1; then DC="docker compose"; else DC="docker-compose"; fi
             # Rollback to previous known-good images
-            docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml down
-            docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up -d
+            $DC -f docker/docker-compose.yml -f docker/docker-compose.prod.yml down
+            $DC -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up -d
             echo "Rollback attempted"

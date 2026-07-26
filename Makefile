@@ -13,8 +13,9 @@
 # ========================================
 
 COMPOSE_DIR := docker
-COMPOSE := cd $(COMPOSE_DIR) && docker compose
-COMPOSE_PROD := cd $(COMPOSE_DIR) && docker compose -f docker-compose.yml -f docker-compose.prod.yml
+DOCKER_COMPOSE := $(shell docker compose version >/dev/null 2>&1 && echo "docker compose" || echo "docker-compose")
+COMPOSE := cd $(COMPOSE_DIR) && $(DOCKER_COMPOSE)
+COMPOSE_PROD := cd $(COMPOSE_DIR) && $(DOCKER_COMPOSE) -f docker-compose.yml -f docker-compose.prod.yml
 
 # Default target
 help:           ## 显示所有可用命令

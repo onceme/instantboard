@@ -79,6 +79,9 @@ jobs:
           username: ${{ secrets.STAGING_USER }}
           key: ${{ secrets.STAGING_SSH_KEY }}
           script: |
+            export IMAGE_REGISTRY="${{ env.REGISTRY }}"
+            export IMAGE_PREFIX="${{ env.IMAGE_PREFIX }}"
+            export IMAGE_TAG="staging-latest"
             cd /opt/instantboard
             # Auto-detect Docker Compose (V2 plugin) or docker-compose (V1 standalone)
             if docker compose version >/dev/null 2>&1; then DC="docker compose"; else DC="docker-compose"; fi

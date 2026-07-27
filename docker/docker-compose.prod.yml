@@ -24,12 +24,12 @@ services:
           cpus: "0.5"
           memory: 256M
         reservations:
-          cpus: "0.25"
           memory: 128M
     restart: always
 
   # --- 应用服务 ---
   api:
+    image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_PREFIX:-onceme/instantboard}-api:${IMAGE_TAG:-latest}
     build:
       context: ../backend
       dockerfile: Dockerfile
@@ -70,11 +70,11 @@ services:
           cpus: "1.0"
           memory: 512M
         reservations:
-          cpus: "0.5"
           memory: 128M
     restart: always
 
   worker:
+    image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_PREFIX:-onceme/instantboard}-api:${IMAGE_TAG:-latest}
     build:
       context: ../backend
       dockerfile: Dockerfile
@@ -104,11 +104,11 @@ services:
           cpus: "0.5"
           memory: 256M
         reservations:
-          cpus: "0.25"
           memory: 128M
     restart: always
 
   frontend:
+    image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_PREFIX:-onceme/instantboard}-frontend:${IMAGE_TAG:-latest}
     build:
       context: ../frontend
       dockerfile: Dockerfile
@@ -150,7 +150,6 @@ services:
           cpus: "1.0"
           memory: 768M
         reservations:
-          cpus: "0.5"
           memory: 256M
     restart: always
 
@@ -172,7 +171,6 @@ services:
           cpus: "0.5"
           memory: 256M
         reservations:
-          cpus: "0.25"
           memory: 128M
     restart: always
 

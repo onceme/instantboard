@@ -137,3 +137,53 @@ make dev
 make build-prod
 make prod-up
 ```
+
+Makefile 和所有 shell 脚本均自动检测 `docker compose`（V2 插件）与 `docker-compose`（V1 独立版），两者均可使用，无需手动配置。
+
+### 架构支持
+
+项目 CI 同时构建 `linux/amd64` 和 `linux/arm/v7` 镜像，支持部署到：
+
+- x86_64 服务器（amd64）
+- ARM 32 位设备（如树莓派 3/4 装 32 位系统）
+
+CI 使用 QEMU + buildx 构建多架构 manifest list 并推送至 GHCR，部署服务器 `docker pull` 时自动选择匹配架构。
+
+> **注意**：`mongo:6` 镜像不提供 arm/v7 版本。若服务器为 arm/v7 架构，请勿启用 `--profile mongodb`。
+
+## 多架构部署
+
+### 支持的架构
+
+| 架构 | 说明 |
+|------|------|
+| `linux/amd64` | x86_64 服务器、VM、工作站 |
+| `linux/arm/v7` | ARM 32 位设备（如树莓派 3/4 装 32 位系统） |
+
+### 手动部署时指定镜像标签
+
+`docker-compose.prod.yml` 中镜像地址支持以下环境变量覆盖：
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `IMAGE_REGISTRY` | `ghcr.io` | 镜像仓库地址 |
+| `IMAGE_PREFIX` | `onceme/instantboard` | 镜像名前缀 |
+| `IMAGE_TAG` | `latest` | 镜像标签 |
+
+手动部署示例：
+
+```bash
+IMAGE_TAG=v1.2.3 docker compose -f docker-compose.prod.yml pull
+IMAGE_TAG=v1.2.3 docker compose -f docker-compose.prod.yml up -d
+```
+
+CI 工作流会在每个 SSH 部署步骤中自动设置这些环境变量，通常无需手动干预。
+
+### 验证部署架构
+
+确认容器运行的架构是否正确：
+
+```bash
+docker inspect <container_name> | grep Architecture
+# 预期输出: "amd64" 或 "arm"
+```

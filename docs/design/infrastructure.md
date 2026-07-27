@@ -618,6 +618,29 @@ services:
 | Restart policy | 无 | always |
 | 密码 | 开发固定密码 | .env.production 读取 |
 
+> **设计变更（2026-07）**：移除了 `!reset` 和 `!override` YAML 标签以兼容 V1 `docker-compose`。
+> 前端服务现在显式使用 `command: ["/entrypoint.sh"]` 替代 `!reset null`，
+> 因为 Docker Compose 默认的序列合并语义就是替换，`!override` 实际冗余。
+> 同时移除了 `deploy.resources.reservations.cpus`（V1 不支持）。
+> 本节中仍保留的 `!reset`/`!override` 示例仅供历史参考，已不再使用。
+
+#### 多架构构建策略（2026-07）
+
+项目 CI 使用 buildx + QEMU 构建 `linux/amd64,linux/arm/v7` manifest list。
+
+**前端 Dockerfile**：`builder` 阶段使用 `--platform=$BUILDPLATFORM` 强制在 host 平台（amd64）运行，
+因为 `node:24-alpine` 没有 arm/v7 官方镜像；后续 `COPY --from=builder` 跨平台复制静态资源，
+静态资源架构无关，arm/v7 nginx 镜像正常服务。
+
+**Backend Dockerfile**：`builder` 阶段安装 `build-essential`/`libssl-dev`/`libffi-dev`
+作为 Python C 扩展缺少 arm/v7 wheel 时的源码编译回退。
+
+**MongoDB**：`mongo:6` 不支持 arm/v7，通过 `profiles: ["mongodb"]` gate 隔离，不影响默认部署。
+arm/v7 服务器上启用 `--profile mongodb` 将导致 `no matching manifest` 错误。
+
+**生产镜像地址**：`docker-compose.prod.yml` 使用 `${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_PREFIX:-onceme/instantboard}-{api|frontend}:${IMAGE_TAG:-latest}`，
+CI 工作流在各 SSH 部署步骤中设置这三个环境变量，本地手动部署可用 `IMAGE_TAG=v1.2.3 docker compose ... up -d` 覆盖。
+
 ### 3.6 开发机环境隔离方案
 
 所有服务运行在 Docker 容器中，宿主机仅需安装:

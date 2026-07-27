@@ -157,6 +157,8 @@ bash scripts/setup-dev.sh
 - ✅ 复制 `.env.example` → `.env`
 - ✅ 构建 Docker 镜像并启动所有服务
 
+> 💡 安装脚本和 Makefile 自动检测 `docker compose`（V2 插件）或 `docker-compose`（V1 独立版），两者均可使用，无需手动选择。
+
 **启动完成后访问**：
 
 | 服务 | 地址 |
@@ -726,6 +728,17 @@ make prod-up
 | 重启策略 | 无 | always |
 | 密码 | 固定开发密码 | .env 强密码 |
 
+### 架构支持
+
+项目 CI 同时构建 `linux/amd64` 和 `linux/arm/v7` 镜像，支持部署到：
+
+- x86_64 服务器（amd64）
+- ARM 32 位设备（如树莓派 3/4 装 32 位系统）
+
+CI 使用 QEMU + buildx 构建多架构 manifest list 并推送至 GHCR，部署服务器 `docker pull` 时自动选择匹配架构。
+
+> **注意**：`mongo:6` 镜像不提供 arm/v7 版本。若服务器为 arm/v7 架构，请勿启用 `--profile mongodb`。
+
 ---
 
 ## CI/CD
@@ -819,6 +832,7 @@ InstantBoard 支持多租户架构：
 **不需要**。MongoDB 仅作为可选组件用于存储原始抓取数据（初始版本不启用）。核心数据全部由 PostgreSQL 管理。如需启用：
 ```bash
 cd docker && docker compose --profile mongodb up -d
+# docker-compose --profile mongodb up -d  # V1 也同样适用
 ```
 
 ### Q: 如何只使用部分 SSO？
@@ -836,6 +850,21 @@ SSE (EventSource) 原生支持自动重连。后端 30 秒心跳保活，断开�
 ### Q: 如何添加自定义分类/数据源？
 1. 前端：Settings 页面 → 新增 Category → 配置关键词和刷新间隔
 2. 后端 API：`POST /api/v1/categories` → `POST /api/v1/sources`
+
+### Q: `could not determine a constructor for the tag '!reset'`
+已修复。若你本地 fork 仍有此问题，升级到最新版即可。项目现已移除所有 `!reset` / `!override` YAML 标签以兼容 V1 `docker-compose`。
+
+### Q: `no matching manifest for linux/arm/v7`
+项目 CI 现默认推送多架构 manifest list。确保：
+1. 触发的是最新 CI 流程（含多架构构建阶段）
+2. 服务器上的 Docker pull 时会自动选择匹配架构
+
+### Q: 部署服务器是 armv7l 但镜像总是拉不到
+检查 CI 是否已合并多架构构建 commit，以及服务器架构是否正确：
+```bash
+docker info | grep "Architecture"
+# 确认服务器架构为 armv7l
+```
 
 ---
 

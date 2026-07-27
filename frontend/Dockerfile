@@ -9,7 +9,7 @@ EXPOSE 3000
 
 CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "3000"]
 
-FROM node:24-alpine AS builder
+FROM --platform=$BUILDPLATFORM node:24-alpine AS builder
 
 WORKDIR /app
 

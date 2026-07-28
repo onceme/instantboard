@@ -88,12 +88,13 @@ jobs:
             export IMAGE_PREFIX="${{ env.IMAGE_PREFIX }}"
             export IMAGE_TAG="staging-latest"
             cd /opt/instantboard
-            # Auto-detect Docker Compose (V2 plugin) or docker-compose (V1 standalone)
+            # Defensive: ensure gitignored directories used by compose exist
+            mkdir -p docker/nginx/ssl
             if docker compose version >/dev/null 2>&1; then DC="docker compose"; else DC="docker-compose"; fi
             $DC -f docker/docker-compose.yml -f docker/docker-compose.prod.yml pull
-            # Stop existing containers to release ports, then start fresh
-            # (stop does NOT remove data volumes, so postgres/redis/mongodb data is preserved)
-            $DC -f docker/docker-compose.yml -f docker/docker-compose.prod.yml stop
+            # Tear down existing containers/networks; NAMED VOLUMES (data) ARE PRESERVED
+            # This reliably removes orphans from any prior failed deploy
+            $DC -f docker/docker-compose.yml -f docker/docker-compose.prod.yml down
             $DC -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up -d --remove-orphans
 
       - name: Smoke test

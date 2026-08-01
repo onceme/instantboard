@@ -1,0 +1,6 @@
+# HTTP → HTTPS redirect (used only when ENABLE_HTTPS=true)
+server {
+    listen ${HTTP_PORT};
+    server_name ${SERVER_NAME};
+    return 301 https://$host:${HTTPS_PORT}$request_uri;
+}

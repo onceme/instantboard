@@ -125,6 +125,18 @@ CORS_ORIGINS=https://your-domain.com
 ALPHA_VANTAGE_API_KEY=your_key
 ```
 
+## GitHub Secrets 必要清单
+
+部署 workflow 依赖以下 GitHub Repository Secrets（Settings → Secrets → Actions）：
+
+- `STAGING_HOST` / `STAGING_PORT` / `STAGING_USER` / `STAGING_SSH_KEY` — staging 服务器 SSH 凭证
+- `STAGING_DOMAIN=ib.bithollow.org` — 用于部署后 smoke test
+- `PROD_HOST` / `PROD_PORT` / `PROD_USER` / `PROD_SSH_KEY` — 生产服务器 SSH 凭证
+- `PROD_DOMAIN` — 用于部署后 health check
+- `PROD_DATABASE_URL` / `PROD_REDIS_URL` / `PROD_SECRET_KEY` / `PROD_JWT_SECRET` / `PROD_CORS_ORIGINS` — 生产环境敏感配置
+
+> Smoke test 会用 `https://${STAGING_DOMAIN}/api/v1/health` 验证部署，HTTPS 必须配置正确。
+
 ## Docker Compose 部署
 
 参考 [快速开始](../README.md#快速开始) 章节和 [infrastructure.md](design/infrastructure.md) 了解完整的 Docker 编排方案。
@@ -139,6 +151,33 @@ make prod-up
 ```
 
 Makefile 和所有 shell 脚本均自动检测 `docker compose`（V2 插件）与 `docker-compose`（V1 独立版），两者均可使用，无需手动配置。
+
+### SSL 证书与 Nginx 端口配置
+
+Nginx 的 HTTPS 行为和监听端口完全由 `.env` 控制：
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `SERVER_NAME` | `_` | nginx server_name；本地用 `_`（任意 host），生产用真实域名 |
+| `HTTP_PORT` | `80` | HTTP 监听端口（也用于外部映射） |
+| `HTTPS_PORT` | `443` | HTTPS 监听端口（仅当 `ENABLE_HTTPS=true` 时监听） |
+| `ENABLE_HTTPS` | `false` | 设为 `true` 启用 HTTPS + 80→443 跳转 |
+| `SSL_CERT_DIR` | `./nginx/ssl` | 证书目录路径（含 `fullchain.pem`/`privkey.pem`） |
+
+**本地开发 .env**：保持默认即可，HTTP-only 模式。
+
+**生产/预生产 .env** 示例：
+```bash
+SERVER_NAME=ib.bithollow.org
+HTTP_PORT=8080          # 如果 80 被占用
+HTTPS_PORT=443
+ENABLE_HTTPS=true
+SSL_CERT_DIR=/etc/letsencrypt/live/ib.bithollow.org
+```
+
+> 模板在 `docker/nginx/conf.d/*.template`，启动时 `entrypoint.sh` 用 envsubst 渲染到容器的 `/etc/nginx/conf.d/`。
+
+> **注意**：`.gitignore` 应忽略服务器本地的 `.env` 文件，生产 `.env` 不应提交到仓库。
 
 ### 架构支持
 

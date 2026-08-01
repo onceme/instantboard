@@ -122,7 +122,7 @@ services:
       target: prod
     command: ["/entrypoint.sh"]
     ports:
-      - "3000:80"
+      - "${FRONTEND_PORT:-3000}:80"
     volumes:
       - frontend_static:/usr/share/nginx/html
     depends_on:

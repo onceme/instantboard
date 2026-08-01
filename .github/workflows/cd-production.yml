@@ -103,9 +103,9 @@ jobs:
             # Auto-detect Docker Compose (V2 plugin) or docker-compose (V1 standalone)
             if docker compose version >/dev/null 2>&1; then DC="docker compose"; else DC="docker-compose"; fi
             # Pull latest images
-            $DC -f docker/docker-compose.yml -f docker/docker-compose.prod.yml pull api worker
+            $DC -f docker/docker-compose.yml -f docker/docker-compose.prod.yml --env-file .env pull api worker
             # Rolling deploy: backend first
-            $DC -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up -d --no-deps api worker
+            $DC -f docker/docker-compose.yml -f docker/docker-compose.prod.yml --env-file .env up -d --no-deps api worker
             # Wait for backend health check
             echo "Waiting for API health check..."
             for i in $(seq 1 30); do
@@ -131,8 +131,8 @@ jobs:
             # Auto-detect Docker Compose (V2 plugin) or docker-compose (V1 standalone)
             if docker compose version >/dev/null 2>&1; then DC="docker compose"; else DC="docker-compose"; fi
             # Pull and deploy frontend + nginx
-            $DC -f docker/docker-compose.yml -f docker/docker-compose.prod.yml pull frontend nginx
-            $DC -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up -d --no-deps frontend nginx
+            $DC -f docker/docker-compose.yml -f docker/docker-compose.prod.yml --env-file .env pull frontend nginx
+            $DC -f docker/docker-compose.yml -f docker/docker-compose.prod.yml --env-file .env up -d --no-deps frontend nginx
 
       - name: Health check
         run: |
@@ -159,6 +159,6 @@ jobs:
             # Auto-detect Docker Compose (V2 plugin) or docker-compose (V1 standalone)
             if docker compose version >/dev/null 2>&1; then DC="docker compose"; else DC="docker-compose"; fi
             # Rollback to previous known-good images
-            $DC -f docker/docker-compose.yml -f docker/docker-compose.prod.yml down
-            $DC -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up -d
+            $DC -f docker/docker-compose.yml -f docker/docker-compose.prod.yml --env-file .env down
+            $DC -f docker/docker-compose.yml -f docker/docker-compose.prod.yml --env-file .env up -d
             echo "Rollback attempted"

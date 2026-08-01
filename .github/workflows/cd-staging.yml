@@ -91,11 +91,11 @@ jobs:
             # Defensive: ensure gitignored directories used by compose exist
             mkdir -p docker/nginx/ssl
             if docker compose version >/dev/null 2>&1; then DC="docker compose"; else DC="docker-compose"; fi
-            $DC -f docker/docker-compose.yml -f docker/docker-compose.prod.yml pull
+            $DC -f docker/docker-compose.yml -f docker/docker-compose.prod.yml --env-file .env pull
             # Tear down existing containers/networks; NAMED VOLUMES (data) ARE PRESERVED
             # This reliably removes orphans from any prior failed deploy
-            $DC -f docker/docker-compose.yml -f docker/docker-compose.prod.yml down
-            $DC -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up -d --remove-orphans
+            $DC -f docker/docker-compose.yml -f docker/docker-compose.prod.yml --env-file .env down
+            $DC -f docker/docker-compose.yml -f docker/docker-compose.prod.yml --env-file .env up -d --remove-orphans
 
       - name: Smoke test
         run: |

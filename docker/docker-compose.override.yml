@@ -1,0 +1,11 @@
+# Development-only overrides.
+# Auto-loaded when `docker compose up` runs with no -f flags.
+# NOT loaded when -f flags are explicitly passed (e.g., in CI for staging/production).
+services:
+  frontend:
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    volumes:
+      - ../frontend/src:/app/src
+      - ../frontend/public:/app/public
+      - ../frontend/vite.config.ts:/app/vite.config.ts

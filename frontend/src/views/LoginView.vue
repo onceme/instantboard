@@ -7,6 +7,7 @@ import LoadingSpinner from "@/components/common/LoadingSpinner.vue";
 
 const { loginWithSSO } = useAuth();
 const loadingProvider = ref<string | null>(null);
+const loginError = ref<string | null>(null);
 const enabledProviders = ref<string[]>([]);
 
 onMounted(async () => {
@@ -23,9 +24,12 @@ onMounted(async () => {
 
 async function handleLogin(provider: string) {
   loadingProvider.value = provider;
+  loginError.value = null;
   try {
-    loginWithSSO(provider);
-  } finally {
+    await loginWithSSO(provider);
+  } catch (err) {
+    console.error("SSO login error:", err);
+    loginError.value = "登录请求失败，请重试。";
     loadingProvider.value = null;
   }
 }
@@ -63,6 +67,8 @@ const providerIcons: Record<string, string> = {
           </button>
         </template>
       </div>
+
+      <p v-if="loginError" class="login-error">{{ loginError }}</p>
     </div>
   </div>
 </template>
@@ -159,6 +165,13 @@ const providerIcons: Record<string, string> = {
 
 .sso-label {
   flex: 1;
+  text-align: center;
+}
+
+.login-error {
+  margin-top: 16px;
+  font-size: 13px;
+  color: var(--color-error, #e53935);
   text-align: center;
 }
 </style>

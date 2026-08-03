@@ -31,6 +31,11 @@ const routes = [
     name: "login",
     component: () => import("@/views/LoginView.vue"),
   },
+  {
+    path: "/auth/callback",
+    name: "sso-callback",
+    component: () => import("@/views/SSOCallbackView.vue"),
+  },
 ];
 
 const router = createRouter({
@@ -40,7 +45,7 @@ const router = createRouter({
 
 router.beforeEach((to, _from, next) => {
   const token = localStorage.getItem("access_token");
-  if (to.name !== "login" && !token) {
+  if (to.name !== "login" && to.name !== "sso-callback" && !token) {
     next({ name: "login" });
   } else if (to.name === "login" && token) {
     next({ name: "finance" });

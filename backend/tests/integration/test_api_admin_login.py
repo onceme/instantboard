@@ -10,16 +10,16 @@ import uuid
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from sqlalchemy import create_engine, select
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import NullPool
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 
 from app.config import settings
 from app.core.constants import LOCAL_SSO_PROVIDER, SYSTEM_TENANT_ID
 from app.core.security import decode_token, hash_password
 from app.models.tenant import Tenant
 from app.models.user import User
-from tests.conftest import TEST_DATABASE_URL
+from tests.conftest import test_session_factory
 
 ADMIN_PASSWORD = "correct horse battery staple"
 # Computed once at import so every test verifies against a real bcrypt hash.
@@ -29,8 +29,6 @@ LOGIN_URL = "/api/v1/auth/admin/login"
 REFRESH_URL = "/api/v1/auth/refresh"
 ME_URL = "/api/v1/auth/me"
 SYSTEM_ENDPOINT = "/api/v1/dashboard/system"
-
-SYNC_DB_URL = TEST_DATABASE_URL.replace("+aiosqlite", "")
 
 
 def _enable_admin(monkeypatch, email):
@@ -62,50 +60,57 @@ def _bearer(token):
     return {"Authorization": f"Bearer {token}"}
 
 
-def _engine():
-    return create_engine(SYNC_DB_URL, poolclass=NullPool, connect_args={"timeout": 30})
+@pytest_asyncio.fixture
+async def aclient(app_with_overrides):
+    # Async client drives the ASGI app on the test's own event loop so that the async
+    # engine (aiosqlite/asyncpg) shared with the DB helpers below stays inside a single
+    # greenlet context. A sync TestClient request cannot be mixed with direct async DB
+    # reads/writes in the same test.
+    app, _ = app_with_overrides
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        yield ac
 
 
-def _seed_sso_user(email):
+async def _seed_sso_user(email):
     """Insert an SSO (github/member) user with the given email and return its ids."""
-    engine = _engine()
-    session = sessionmaker(bind=engine, expire_on_commit=False)()
-    tenant = Tenant(name="SSO Tenant", slug=f"sso-{uuid.uuid4().hex[:10]}", plan="free", settings={})
-    session.add(tenant)
-    session.flush()
-    user = User(
-        tenant_id=tenant.id,
-        email=email,
-        name="SSO User",
-        sso_provider="github",
-        sso_provider_id=f"gh-{uuid.uuid4().hex}",
-        role="member",
-    )
-    session.add(user)
-    session.commit()
-    tenant_id, user_id = tenant.id, user.id
-    session.close()
-    engine.dispose()
-    return tenant_id, user_id
+    async with test_session_factory() as session:
+        tenant = Tenant(name="SSO Tenant", slug=f"sso-{uuid.uuid4().hex[:10]}", plan="free", settings={})
+        session.add(tenant)
+        await session.flush()
+        user = User(
+            tenant_id=tenant.id,
+            email=email,
+            name="SSO User",
+            sso_provider="github",
+            sso_provider_id=f"gh-{uuid.uuid4().hex}",
+            role="member",
+        )
+        session.add(user)
+        await session.commit()
+        # expire_on_commit=False on the factory keeps these readable without a reload.
+        return tenant.id, user.id
 
 
-def _users_by_email(email):
-    engine = _engine()
-    session = sessionmaker(bind=engine, expire_on_commit=False)()
-    rows = session.execute(select(User).where(User.email == email)).scalars().all()
-    data = [
-        {
-            "id": str(r.id),
-            "tenant_id": str(r.tenant_id),
-            "role": r.role,
-            "sso_provider": r.sso_provider,
-            "sso_provider_id": r.sso_provider_id,
-        }
-        for r in rows
-    ]
-    session.close()
-    engine.dispose()
-    return data
+async def _users_by_email(email):
+    """Re-read users by email through an explicit async session.
+
+    Values are copied into plain dicts before the session closes so no attribute access
+    can trigger implicit IO outside a greenlet context (sqlalchemy MissingGreenlet).
+    """
+    async with test_session_factory() as session:
+        result = await session.execute(select(User).where(User.email == email))
+        rows = result.scalars().all()
+        return [
+            {
+                "id": str(r.id),
+                "tenant_id": str(r.tenant_id),
+                "role": r.role,
+                "sso_provider": r.sso_provider,
+                "sso_provider_id": r.sso_provider_id,
+            }
+            for r in rows
+        ]
 
 
 class TestAdminLoginHappyPath:
@@ -214,15 +219,15 @@ class TestAdminLoginLockout:
 
 
 class TestIsolationFromSSO:
-    def test_admin_login_does_not_touch_same_email_sso_user(self, client, monkeypatch):
+    async def test_admin_login_does_not_touch_same_email_sso_user(self, aclient, monkeypatch):
         email = _unique_email()
-        sso_tenant_id, sso_user_id = _seed_sso_user(email)
+        sso_tenant_id, sso_user_id = await _seed_sso_user(email)
         _enable_admin(monkeypatch, email)
 
-        resp = _login(client, email, ADMIN_PASSWORD)
+        resp = await aclient.post(LOGIN_URL, json={"email": email, "password": ADMIN_PASSWORD})
         assert resp.status_code == 200
 
-        rows = _users_by_email(email)
+        rows = await _users_by_email(email)
         assert len(rows) == 2
         by_provider = {r["sso_provider"]: r for r in rows}
 

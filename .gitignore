@@ -1,4 +1,4 @@
-# Environment (.env.example 入 Git，其他不入)
+# Environment (.env.example is committed to Git, everything else is not)
 .env
 .env.local
 .env.staging

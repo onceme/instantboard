@@ -41,8 +41,9 @@ class TestRootEndpoint:
         assert body["uptime_seconds"] == 0
 
     async def test_root_with_start_time(self):
-        import app.main as main_mod
         from datetime import UTC, datetime
+
+        import app.main as main_mod
         main_mod._start_time = datetime.now(UTC)
         response = await main_mod.root()
         import json
@@ -67,24 +68,28 @@ class TestLifespan:
         mock_task = asyncio.Future()
         mock_task.cancel()
 
-        with patch("app.main.create_tables", new_callable=AsyncMock):
-            with patch("app.main.get_redis_client", new_callable=AsyncMock, return_value=mock_redis):
-                with patch("app.main.event_router") as mock_event_router:
-                    mock_event_router.start_redis_listener = AsyncMock(return_value=mock_task)
-                    mock_event_router.start_heartbeat = MagicMock(return_value=mock_task)
-                    mock_event_router.stop_heartbeat = MagicMock()
-                    mock_event_router.stop_redis_listener = MagicMock()
-                    with patch("app.main.settings") as mock_settings:
-                        mock_settings.sse_heartbeat_interval = 30
-                        mock_settings.scheduler_enabled = False
-                        mock_settings.log_level = "INFO"
-                        mock_settings.env = "development"
-                        with patch("asyncio.create_task", return_value=mock_task):
-                            with patch("app.services.dashboard.start_metrics_collection", new_callable=AsyncMock, return_value=mock_task):
-                                with patch("app.services.dashboard.stop_metrics_collection"):
-                                    with patch("app.main.close_redis", new_callable=AsyncMock):
-                                        async with main_mod.lifespan(_app):
-                                            pass
+        with (
+            patch("app.main.create_tables", new_callable=AsyncMock),
+            patch("app.main.get_redis_client", new_callable=AsyncMock, return_value=mock_redis),
+            patch("app.main.event_router") as mock_event_router,
+        ):
+            mock_event_router.start_redis_listener = AsyncMock(return_value=mock_task)
+            mock_event_router.start_heartbeat = MagicMock(return_value=mock_task)
+            mock_event_router.stop_heartbeat = MagicMock()
+            mock_event_router.stop_redis_listener = MagicMock()
+            with patch("app.main.settings") as mock_settings:
+                mock_settings.sse_heartbeat_interval = 30
+                mock_settings.scheduler_enabled = False
+                mock_settings.log_level = "INFO"
+                mock_settings.env = "development"
+                with (
+                    patch("asyncio.create_task", return_value=mock_task),
+                    patch("app.services.dashboard.start_metrics_collection", new_callable=AsyncMock, return_value=mock_task),
+                    patch("app.services.dashboard.stop_metrics_collection"),
+                    patch("app.main.close_redis", new_callable=AsyncMock),
+                ):
+                    async with main_mod.lifespan(_app):
+                        pass
 
     async def test_lifespan_with_scheduler(self):
         import app.main as main_mod
@@ -104,26 +109,30 @@ class TestLifespan:
         mock_result.scalars.return_value.all.return_value = []
         mock_session.execute = AsyncMock(return_value=mock_result)
 
-        with patch("app.main.create_tables", new_callable=AsyncMock):
-            with patch("app.main.get_redis_client", new_callable=AsyncMock, return_value=mock_redis):
-                with patch("app.main.event_router") as mock_event_router:
-                    mock_event_router.start_redis_listener = AsyncMock(return_value=mock_task)
-                    mock_event_router.start_heartbeat = MagicMock(return_value=mock_task)
-                    mock_event_router.stop_heartbeat = MagicMock()
-                    mock_event_router.stop_redis_listener = MagicMock()
-                    with patch("app.main.settings") as mock_settings:
-                        mock_settings.sse_heartbeat_interval = 30
-                        mock_settings.scheduler_enabled = True
-                        mock_settings.log_level = "INFO"
-                        mock_settings.env = "development"
-                        with patch("asyncio.create_task", return_value=mock_task):
-                            with patch("app.services.dashboard.start_metrics_collection", new_callable=AsyncMock, return_value=mock_task):
-                                with patch("app.services.dashboard.stop_metrics_collection"):
-                                    with patch("app.main.close_redis", new_callable=AsyncMock):
-                                        with patch("app.scheduler.manager.scheduler_manager") as mock_sched_mgr:
-                                            mock_sched_mgr.start = AsyncMock()
-                                            mock_sched_mgr.shutdown = AsyncMock()
-                                            mock_sched_mgr.schedule_all_active_sources = AsyncMock()
-                                            with patch("app.db.session.async_session_factory", return_value=mock_session):
-                                                async with main_mod.lifespan(_app):
-                                                    mock_sched_mgr.start.assert_called_once()
+        with (
+            patch("app.main.create_tables", new_callable=AsyncMock),
+            patch("app.main.get_redis_client", new_callable=AsyncMock, return_value=mock_redis),
+            patch("app.main.event_router") as mock_event_router,
+        ):
+            mock_event_router.start_redis_listener = AsyncMock(return_value=mock_task)
+            mock_event_router.start_heartbeat = MagicMock(return_value=mock_task)
+            mock_event_router.stop_heartbeat = MagicMock()
+            mock_event_router.stop_redis_listener = MagicMock()
+            with patch("app.main.settings") as mock_settings:
+                mock_settings.sse_heartbeat_interval = 30
+                mock_settings.scheduler_enabled = True
+                mock_settings.log_level = "INFO"
+                mock_settings.env = "development"
+                with (
+                    patch("asyncio.create_task", return_value=mock_task),
+                    patch("app.services.dashboard.start_metrics_collection", new_callable=AsyncMock, return_value=mock_task),
+                    patch("app.services.dashboard.stop_metrics_collection"),
+                    patch("app.main.close_redis", new_callable=AsyncMock),
+                    patch("app.scheduler.manager.scheduler_manager") as mock_sched_mgr,
+                ):
+                    mock_sched_mgr.start = AsyncMock()
+                    mock_sched_mgr.shutdown = AsyncMock()
+                    mock_sched_mgr.schedule_all_active_sources = AsyncMock()
+                    with patch("app.db.session.async_session_factory", return_value=mock_session):
+                        async with main_mod.lifespan(_app):
+                            mock_sched_mgr.start.assert_called_once()

@@ -65,11 +65,15 @@ class InvalidRefreshToken(AppException):
 
 
 class SSOProviderError(AppException):
-    def __init__(self, message: str = "SSO provider returned an error"):
+    # Fix: upstream SSO provider failures are gateway/upstream errors and should return
+    # 502, not 401. A 401 triggers the frontend axios interceptor to hard-redirect to the
+    # login page, misleadingly presenting an upstream outage as an expired session.
+    def __init__(self, message: str = "SSO provider returned an error", details: list[dict] | None = None):
         super().__init__(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+            status_code=status.HTTP_502_BAD_GATEWAY,
             error_code=ErrorCode.SSO_PROVIDER_ERROR,
             message=message,
+            details=details,
         )
 
 

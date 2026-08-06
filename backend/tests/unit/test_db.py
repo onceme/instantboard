@@ -1,6 +1,7 @@
 """Unit tests for app/db package."""
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 
 # ── session.py ───────────────────────────────────────────────────
@@ -45,7 +46,7 @@ class TestInitDBModule:
         assert "refresh_interval_seconds" in first
 
     def test_tech_sources_constants(self):
-        from app.db.init_db import TECH_AI_SOURCES, TECH_ROBOTICS_SOURCES, TECH_EMBEDDED_SOURCES, TECH_SPACE_SOURCES
+        from app.db.init_db import TECH_AI_SOURCES, TECH_EMBEDDED_SOURCES, TECH_ROBOTICS_SOURCES, TECH_SPACE_SOURCES
         assert isinstance(TECH_AI_SOURCES, list)
         assert isinstance(TECH_ROBOTICS_SOURCES, list)
         assert isinstance(TECH_EMBEDDED_SOURCES, list)
@@ -74,27 +75,127 @@ class TestInitDBModule:
         mock_engine.begin = MagicMock(return_value=mocked_begin_ctx)
         mock_engine.dispose = AsyncMock()
 
-        with patch("app.db.init_db.create_async_engine", return_value=mock_engine):
-            with patch("app.db.init_db.settings") as mock_settings:
-                mock_settings.database_url = "postgresql+asyncpg://test"
-                await create_tables()
-                mock_conn.run_sync.assert_called_once()
+        with (
+            patch("app.db.init_db.create_async_engine", return_value=mock_engine),
+            patch("app.db.init_db.settings") as mock_settings,
+        ):
+            mock_settings.database_url = "postgresql+asyncpg://test"
+            await create_tables()
+            mock_conn.run_sync.assert_called_once()
 
-    async def test_seed_default_data_skip_existing(self):
-        from app.db.init_db import seed_default_data
+    async def test_seed_idempotent_when_all_exists(self):
+        """Idempotent seeding: when tenants/categories/sources all exist, re-running seed creates nothing."""
+        from app.db.init_db import (
+            FINANCE_SOURCES,
+            TECH_AI_SOURCES,
+            TECH_CROSS_DOMAIN_SOURCES,
+            TECH_EMBEDDED_SOURCES,
+            TECH_ROBOTICS_SOURCES,
+            TECH_SPACE_SOURCES,
+            seed_default_data,
+        )
 
         mock_session = AsyncMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
-        mock_session.close = AsyncMock()
+        mock_session.commit = AsyncMock()
+        mock_session.flush = AsyncMock()
+        mock_session.add = MagicMock()
 
-        mock_result = MagicMock()
-        mock_result.scalar.return_value = 1
-        mock_session.execute = AsyncMock(return_value=mock_result)
+        existing = MagicMock()
+        all_seed_names = [
+            src["name"]
+            for src in (
+                FINANCE_SOURCES
+                + TECH_AI_SOURCES
+                + TECH_ROBOTICS_SOURCES
+                + TECH_EMBEDDED_SOURCES
+                + TECH_SPACE_SOURCES
+                + TECH_CROSS_DOMAIN_SOURCES
+            )
+        ]
 
-        with patch("app.db.init_db.async_session_factory", return_value=mock_session):
+        call_count = 0
+
+        async def fake_execute(stmt):
+            nonlocal call_count
+            call_count += 1
+            r = MagicMock()
+            if call_count in (1, 2, 3, 4):
+                # system tenant / default tenant / finance category / tech category all exist
+                r.scalar_one_or_none.return_value = existing
+            elif call_count == 5:
+                # all seed sources already exist
+                r.all.return_value = [(name,) for name in all_seed_names]
+            return r
+
+        with (
+            patch("app.db.init_db.async_session_factory", return_value=mock_session),
+            patch.object(mock_session, "execute", new=AsyncMock(side_effect=fake_execute)),
+        ):
             await seed_default_data()
-        mock_session.close.assert_called_once()
+
+        mock_session.add.assert_not_called()
+        mock_session.commit.assert_called()
+
+    async def test_seed_backfills_missing_sources_when_tenants_exist(self):
+        """Idempotent seeding: when tenants exist (old logic skipped entirely), missing sources are still created."""
+        from app.db.init_db import (
+            FINANCE_SOURCES,
+            TECH_AI_SOURCES,
+            TECH_CROSS_DOMAIN_SOURCES,
+            TECH_EMBEDDED_SOURCES,
+            TECH_ROBOTICS_SOURCES,
+            TECH_SPACE_SOURCES,
+            seed_default_data,
+        )
+        from app.models.source import Source, SourceHealth
+
+        mock_session = AsyncMock()
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        mock_session.commit = AsyncMock()
+        mock_session.flush = AsyncMock()
+        mock_session.add = MagicMock()
+
+        added_objects = []
+        mock_session.add.side_effect = lambda obj: added_objects.append(obj)
+
+        existing = MagicMock()
+        all_defs = (
+            FINANCE_SOURCES
+            + TECH_AI_SOURCES
+            + TECH_ROBOTICS_SOURCES
+            + TECH_EMBEDDED_SOURCES
+            + TECH_SPACE_SOURCES
+            + TECH_CROSS_DOMAIN_SOURCES
+        )
+
+        call_count = 0
+
+        async def fake_execute(stmt):
+            nonlocal call_count
+            call_count += 1
+            r = MagicMock()
+            if call_count in (1, 2, 3, 4):
+                # tenants and categories already exist (the parts backfilled after a historically interrupted seed)
+                r.scalar_one_or_none.return_value = existing
+            elif call_count == 5:
+                # only the first seed source exists, the rest are missing
+                r.all.return_value = [(all_defs[0]["name"],)]
+            return r
+
+        with (
+            patch("app.db.init_db.async_session_factory", return_value=mock_session),
+            patch.object(mock_session, "execute", new=AsyncMock(side_effect=fake_execute)),
+        ):
+            await seed_default_data()
+
+        mock_session.commit.assert_called()
+        source_count = sum(1 for obj in added_objects if isinstance(obj, Source))
+        health_count = sum(1 for obj in added_objects if isinstance(obj, SourceHealth))
+        assert source_count == len(all_defs) - 1
+        assert health_count == len(all_defs) - 1
 
     async def test_seed_default_data_full_run(self):
         from app.db.init_db import seed_default_data
@@ -113,36 +214,34 @@ class TestInitDBModule:
             nonlocal call_count
             call_count += 1
             r = MagicMock()
-            if call_count == 1:
-                r.scalar.return_value = 0
-            elif call_count in (2, 3, 4):
+            if call_count in (1, 2, 3, 4):
+                # system tenant / default tenant / finance category / tech category all missing
                 r.scalar_one_or_none.return_value = None
             elif call_count == 5:
-                r.scalar_one_or_none.return_value = None
-            elif call_count == 6:
-                r.scalar_one_or_none.return_value = None
-            elif call_count == 7:
-                r.scalar.return_value = 0
-            else:
-                pass
+                # existing source names: none
+                r.all.return_value = []
             return r
 
-        with patch("app.db.init_db.async_session_factory", return_value=mock_session):
-            with patch.object(mock_session, "execute", new=AsyncMock(side_effect=fake_execute)):
-                await seed_default_data()
+        with (
+            patch("app.db.init_db.async_session_factory", return_value=mock_session),
+            patch.object(mock_session, "execute", new=AsyncMock(side_effect=fake_execute)),
+        ):
+            await seed_default_data()
         mock_session.commit.assert_called()
         mock_session.add.assert_called()
 
     async def test_init_db_calls_create_and_seed(self):
-        with patch("app.db.init_db.create_tables", new_callable=AsyncMock) as mock_create:
-            with patch("app.db.init_db.seed_default_data", new_callable=AsyncMock) as mock_seed:
-                from app.db.init_db import init_db
-                await init_db()
-                mock_create.assert_called_once()
-                mock_seed.assert_called_once()
+        with (
+            patch("app.db.init_db.create_tables", new_callable=AsyncMock) as mock_create,
+            patch("app.db.init_db.seed_default_data", new_callable=AsyncMock) as mock_seed,
+        ):
+            from app.db.init_db import init_db
+            await init_db()
+            mock_create.assert_called_once()
+            mock_seed.assert_called_once()
 
     async def test_seed_existing_system_tenant(self):
-        """When system tenant already exists but no tenants (count=0 path won't hit, use separate logic)."""
+        """When system tenant already exists, skip creating it but continue seeding the rest."""
         from app.db.init_db import seed_default_data
 
         mock_session = AsyncMock()
@@ -163,26 +262,26 @@ class TestInitDBModule:
             call_count += 1
             r = MagicMock()
             if call_count == 1:
-                r.scalar.return_value = 0  # no tenants overall
-            elif call_count == 2:
                 # system tenant exists
                 r.scalar_one_or_none.return_value = existing_tenant
-            elif call_count == 3:
+            elif call_count == 2:
                 # default tenant does not exist
                 r.scalar_one_or_none.return_value = None
-            elif call_count == 4:
+            elif call_count == 3:
                 # finance category does not exist
                 r.scalar_one_or_none.return_value = None
-            elif call_count == 5:
+            elif call_count == 4:
                 # tech category does not exist
                 r.scalar_one_or_none.return_value = None
-            elif call_count == 6:
-                r.scalar.return_value = 0  # no sources yet
+            elif call_count == 5:
+                r.all.return_value = []  # no sources yet
             return r
 
-        with patch("app.db.init_db.async_session_factory", return_value=mock_session):
-            with patch.object(mock_session, "execute", new=AsyncMock(side_effect=fake_execute)):
-                await seed_default_data()
+        with (
+            patch("app.db.init_db.async_session_factory", return_value=mock_session),
+            patch.object(mock_session, "execute", new=AsyncMock(side_effect=fake_execute)),
+        ):
+            await seed_default_data()
         mock_session.commit.assert_called()
 
     async def test_seed_existing_default_tenant(self):
@@ -210,23 +309,23 @@ class TestInitDBModule:
             call_count += 1
             r = MagicMock()
             if call_count == 1:
-                r.scalar.return_value = 0
-            elif call_count == 2:
                 r.scalar_one_or_none.return_value = existing_system
-            elif call_count == 3:
+            elif call_count == 2:
                 # default tenant already exists
                 r.scalar_one_or_none.return_value = existing_default
-            elif call_count == 4:
+            elif call_count == 3:
                 r.scalar_one_or_none.return_value = None  # finance cat missing
-            elif call_count == 5:
+            elif call_count == 4:
                 r.scalar_one_or_none.return_value = None  # tech cat missing
-            elif call_count == 6:
-                r.scalar.return_value = 0
+            elif call_count == 5:
+                r.all.return_value = []  # no sources yet
             return r
 
-        with patch("app.db.init_db.async_session_factory", return_value=mock_session):
-            with patch.object(mock_session, "execute", new=AsyncMock(side_effect=fake_execute)):
-                await seed_default_data()
+        with (
+            patch("app.db.init_db.async_session_factory", return_value=mock_session),
+            patch.object(mock_session, "execute", new=AsyncMock(side_effect=fake_execute)),
+        ):
+            await seed_default_data()
         mock_session.commit.assert_called()
 
     async def test_seed_existing_categories(self):
@@ -256,29 +355,37 @@ class TestInitDBModule:
             call_count += 1
             r = MagicMock()
             if call_count == 1:
-                r.scalar.return_value = 0
-            elif call_count == 2:
                 r.scalar_one_or_none.return_value = existing_system
-            elif call_count == 3:
+            elif call_count == 2:
                 r.scalar_one_or_none.return_value = None  # default tenant missing
-            elif call_count == 4:
+            elif call_count == 3:
                 # finance category exists
                 r.scalar_one_or_none.return_value = existing_finance_cat
-            elif call_count == 5:
+            elif call_count == 4:
                 # tech category exists
                 r.scalar_one_or_none.return_value = existing_tech_cat
-            elif call_count == 6:
-                r.scalar.return_value = 0  # no sources
+            elif call_count == 5:
+                r.all.return_value = []  # no sources
             return r
 
-        with patch("app.db.init_db.async_session_factory", return_value=mock_session):
-            with patch.object(mock_session, "execute", new=AsyncMock(side_effect=fake_execute)):
-                await seed_default_data()
+        with (
+            patch("app.db.init_db.async_session_factory", return_value=mock_session),
+            patch.object(mock_session, "execute", new=AsyncMock(side_effect=fake_execute)),
+        ):
+            await seed_default_data()
         mock_session.commit.assert_called()
 
     async def test_seed_existing_sources_skip(self):
-        """When sources already exist for system tenant, skip source seeding."""
-        from app.db.init_db import seed_default_data
+        """Do not recreate sources when all seed sources already exist (deduplicated by name)."""
+        from app.db.init_db import (
+            FINANCE_SOURCES,
+            TECH_AI_SOURCES,
+            TECH_CROSS_DOMAIN_SOURCES,
+            TECH_EMBEDDED_SOURCES,
+            TECH_ROBOTICS_SOURCES,
+            TECH_SPACE_SOURCES,
+            seed_default_data,
+        )
 
         mock_session = AsyncMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
@@ -288,6 +395,18 @@ class TestInitDBModule:
         mock_session.flush = AsyncMock()
         mock_session.add = MagicMock()
 
+        all_seed_names = [
+            src["name"]
+            for src in (
+                FINANCE_SOURCES
+                + TECH_AI_SOURCES
+                + TECH_ROBOTICS_SOURCES
+                + TECH_EMBEDDED_SOURCES
+                + TECH_SPACE_SOURCES
+                + TECH_CROSS_DOMAIN_SOURCES
+            )
+        ]
+
         call_count = 0
 
         async def fake_execute(stmt):
@@ -295,26 +414,26 @@ class TestInitDBModule:
             call_count += 1
             r = MagicMock()
             if call_count == 1:
-                r.scalar.return_value = 0
-            elif call_count == 2:
                 r.scalar_one_or_none.return_value = None  # no system tenant
-            elif call_count == 3:
+            elif call_count == 2:
                 r.scalar_one_or_none.return_value = None  # no default tenant
-            elif call_count == 4:
+            elif call_count == 3:
                 r.scalar_one_or_none.return_value = None  # no finance cat
-            elif call_count == 5:
+            elif call_count == 4:
                 r.scalar_one_or_none.return_value = None  # no tech cat
-            elif call_count == 6:
-                # sources already exist
-                r.scalar.return_value = 10
+            elif call_count == 5:
+                # new flow: query existing source names, all present
+                r.all.return_value = [(name,) for name in all_seed_names]
             return r
 
-        with patch("app.db.init_db.async_session_factory", return_value=mock_session):
-            with patch.object(mock_session, "execute", new=AsyncMock(side_effect=fake_execute)):
-                await seed_default_data()
+        with (
+            patch("app.db.init_db.async_session_factory", return_value=mock_session),
+            patch.object(mock_session, "execute", new=AsyncMock(side_effect=fake_execute)),
+        ):
+            await seed_default_data()
         mock_session.commit.assert_called()
-        # add should only have been called for tenants/categories, not sources
-        assert mock_session.add.call_count <= 4  # system tenant, default tenant, finance cat, tech cat
+        # add is called only 4 times for tenants/categories, never for sources
+        assert mock_session.add.call_count == 4  # system tenant, default tenant, finance cat, tech cat
 
     async def test_seed_full_source_creation(self):
         """Full source creation path with all source types."""
@@ -343,27 +462,34 @@ class TestInitDBModule:
             call_count += 1
             r = MagicMock()
             if call_count == 1:
-                r.scalar.return_value = 0
-            elif call_count == 2:
                 r.scalar_one_or_none.return_value = None  # no system tenant
-            elif call_count == 3:
+            elif call_count == 2:
                 r.scalar_one_or_none.return_value = None  # no default tenant
-            elif call_count == 4:
+            elif call_count == 3:
                 r.scalar_one_or_none.return_value = None  # no finance cat
-            elif call_count == 5:
+            elif call_count == 4:
                 r.scalar_one_or_none.return_value = None  # no tech cat
-            elif call_count == 6:
-                r.scalar.return_value = 0  # no sources
+            elif call_count == 5:
+                r.all.return_value = []  # no sources
             return r
 
-        with patch("app.db.init_db.async_session_factory", return_value=mock_session):
-            with patch.object(mock_session, "execute", new=AsyncMock(side_effect=fake_execute)):
-                await seed_default_data()
+        with (
+            patch("app.db.init_db.async_session_factory", return_value=mock_session),
+            patch.object(mock_session, "execute", new=AsyncMock(side_effect=fake_execute)),
+        ):
+            await seed_default_data()
 
         # Should have created system tenant, default tenant, 2 categories, and many sources
         mock_session.commit.assert_called()
         # Verify sources were added (finance + tech sources)
-        from app.db.init_db import FINANCE_SOURCES, TECH_AI_SOURCES, TECH_ROBOTICS_SOURCES, TECH_EMBEDDED_SOURCES, TECH_SPACE_SOURCES, TECH_CROSS_DOMAIN_SOURCES
+        from app.db.init_db import (
+            FINANCE_SOURCES,
+            TECH_AI_SOURCES,
+            TECH_CROSS_DOMAIN_SOURCES,
+            TECH_EMBEDDED_SOURCES,
+            TECH_ROBOTICS_SOURCES,
+            TECH_SPACE_SOURCES,
+        )
         total_tech = len(TECH_AI_SOURCES) + len(TECH_ROBOTICS_SOURCES) + len(TECH_EMBEDDED_SOURCES) + len(TECH_SPACE_SOURCES) + len(TECH_CROSS_DOMAIN_SOURCES)
         expected_sources = len(FINANCE_SOURCES) + total_tech
         # Count Source objects added (excluding tenants and categories)

@@ -6,6 +6,10 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+# Fix: the local SYSTEM_TENANT_ID used to be the string "system", which asyncpg failed to
+# encode when compared against a UUID column. Same fix as source.py: reuse the UUID
+# constant from core.constants (keeping the original exported name).
+from app.core.constants import SYSTEM_TENANT_ID
 from app.core.exceptions import CategoryNotFound, DuplicateCategory, Forbidden, ValidationError
 from app.models.category import Category
 from app.models.item import Item
@@ -21,8 +25,6 @@ from app.schemas.category import (
 )
 
 logger = logging.getLogger(__name__)
-
-SYSTEM_TENANT_ID = "system"
 
 SUBCATEGORY_LABEL_MAP = {
     "china-stock": "A股行情",

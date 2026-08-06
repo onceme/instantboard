@@ -9,6 +9,7 @@ from starlette.responses import JSONResponse
 
 from app.api.router import v1_router
 from app.config import settings
+from app.core.constants import SYSTEM_TENANT_ID
 from app.core.middleware import setup_middlewares
 from app.core.redis import close_redis, get_redis_client
 from app.core.sse_router import event_router
@@ -76,7 +77,9 @@ async def lifespan(app: FastAPI):
 
     _metrics_task = await start_metrics_collection(
         start_time=_start_time,
-        tenant_id="00000000-0000-0000-0000-000000000000",
+        # Fix: reuse the shared SYSTEM_TENANT_ID constant instead of a hardcoded literal.
+        # Kept as str because this value flows into SSE/Redis json.dumps.
+        tenant_id=str(SYSTEM_TENANT_ID),
     )
     logger.info("Dashboard metrics collection started")
 

@@ -13,8 +13,7 @@ from fastapi.testclient import TestClient
 from redis.asyncio import Redis
 
 from app.core.security import create_access_token
-from tests.conftest import test_session_factory, test_engine
-
+from tests.conftest import test_engine, test_session_factory
 
 _redis_mock_instance = None
 
@@ -60,6 +59,7 @@ class MockRedis:
 @asynccontextmanager
 async def _mock_lifespan(app):
     from datetime import UTC, datetime
+
     import app.main as main_mod
     main_mod._start_time = datetime.now(UTC)
     yield
@@ -94,8 +94,8 @@ def app_with_overrides():
     async def override_get_redis_client():
         return mock_redis
 
-    from app.db.session import get_db_session as db_get_db_session
     from app.core.redis import get_redis_client as core_get_redis_client
+    from app.db.session import get_db_session as db_get_db_session
     from app.dependencies import get_db
 
     app.dependency_overrides[db_get_db_session] = override_get_db_session_dep

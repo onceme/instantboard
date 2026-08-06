@@ -1,4 +1,5 @@
 import pytest
+
 from app.config import Settings, _parse_list_str
 
 

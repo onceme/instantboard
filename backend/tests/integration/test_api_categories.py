@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, patch
 
 from tests.integration.conftest import make_auth_header
 
-
 NOW = datetime.now(UTC).isoformat()
 
 

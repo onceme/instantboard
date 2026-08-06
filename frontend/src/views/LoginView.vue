@@ -1,16 +1,32 @@
 <script setup lang="ts">
 import { useAuth } from "@/composables/useAuth";
 import { ref, onMounted } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { SSO_PROVIDERS } from "@/utils/constants";
 import { apiGet } from "@/utils/api";
 import LoadingSpinner from "@/components/common/LoadingSpinner.vue";
 
 const { loginWithSSO } = useAuth();
+const route = useRoute();
+const router = useRouter();
 const loadingProvider = ref<string | null>(null);
 const loginError = ref<string | null>(null);
 const enabledProviders = ref<string[]>([]);
 
+// Messages for error flags redirected from the SSO callback (e.g. /login?error=csrf_mismatch)
+const QUERY_ERROR_MESSAGES: Record<string, string> = {
+  csrf_mismatch: "安全验证失败（登录状态不匹配），请重新登录。",
+};
+
 onMounted(async () => {
+  // Show the error coming from the SSO callback and clear the query so it doesn't persist after refresh
+  const queryError = route.query.error;
+  if (typeof queryError === "string" && queryError) {
+    loginError.value =
+      QUERY_ERROR_MESSAGES[queryError] || "登录失败，请重试。";
+    router.replace({ query: {} });
+  }
+
   try {
     const response = await apiGet<{ enabled_providers: string[] }>(
       "/auth/sso/providers",

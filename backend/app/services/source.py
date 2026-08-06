@@ -6,6 +6,10 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+# Fix: the local SYSTEM_TENANT_ID used to be the string "system", which asyncpg failed to
+# encode when compared against a UUID column. Reuse the UUID constant from core.constants
+# instead (keeping the original exported name so modules like dashboard still work).
+from app.core.constants import SYSTEM_TENANT_ID
 from app.core.exceptions import CategoryNotFound, Forbidden, SourceNotFound, ValidationError
 from app.core.redis import RedisKeys, redis_delete, redis_hset, redis_publish
 from app.models.category import Category
@@ -28,8 +32,6 @@ SOURCE_TYPE_CONFIG_RULES = {
     "web_scrape": {"required_fields": ["url", "selector"]},
     "social": {"required_fields": ["platform", "query"]},
 }
-
-SYSTEM_TENANT_ID = "system"
 
 
 def _source_to_response(source: Source) -> SourceResponse:

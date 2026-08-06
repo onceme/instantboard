@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.core.exceptions import SourceNotFound, Forbidden, ValidationError, CategoryNotFound
-from app.services.source import SourceService, SYSTEM_TENANT_ID, _source_to_response, _health_to_response
+from app.core.exceptions import CategoryNotFound, Forbidden, SourceNotFound, ValidationError
+from app.services.source import SYSTEM_TENANT_ID, SourceService, _health_to_response, _source_to_response
 
 
 def _mock_db():
@@ -803,7 +803,7 @@ class TestUpdateSourceHealth:
         result_obj = HealthCheckResult(success=True, response_time_ms=50)
 
         service = SourceService(db, redis)
-        result = await service.update_source_health(str(src.id), result_obj)
+        await service.update_source_health(str(src.id), result_obj)
         assert mock_publish.call_count == 2
 
     @patch("app.services.source.redis_publish", new_callable=AsyncMock)
@@ -863,7 +863,7 @@ class TestUpdateSourceHealth:
         result_obj = HealthCheckResult(success=True, response_time_ms=50)
 
         service = SourceService(db, redis)
-        result = await service.update_source_health(str(src.id), result_obj)
+        await service.update_source_health(str(src.id), result_obj)
         mock_publish.assert_not_called()
 
 

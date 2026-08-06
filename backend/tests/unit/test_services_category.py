@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.core.exceptions import CategoryNotFound, DuplicateCategory, Forbidden, ValidationError
-from app.services.category import CategoryService, SYSTEM_TENANT_ID, _slugify, _category_to_response
+from app.services.category import SYSTEM_TENANT_ID, CategoryService, _category_to_response, _slugify
 
 
 def _make_category(

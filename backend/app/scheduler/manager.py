@@ -55,6 +55,18 @@ class AsyncSchedulerManager:
         self._adaptive_multipliers: dict[str, float] = {}
         self._last_run_times: dict[str, datetime] = {}
         self._last_run_results: dict[str, dict] = {}
+        # Adaptive pause switch: auto-pause jobs when there are no SSE subscribers.
+        # Only meaningful for the api-embedded scheduler (the SSE connection registry lives
+        # in the api process). The worker process has no SSE connections, so it must disable
+        # this, otherwise jobs get paused permanently after the first collection round.
+        self.adaptive_pause_enabled = True
+
+    def disable_adaptive_pause(self) -> None:
+        # Called by the worker process before starting the scheduler: the SSE connection
+        # dict lives in the api process (core/sse_router.py), so get_connections_count() is
+        # always 0 in the worker. Without disabling, every source would be paused
+        # permanently after its first collection round.
+        self.adaptive_pause_enabled = False
 
     async def start(self) -> None:
         if not self._running:
@@ -89,6 +101,11 @@ class AsyncSchedulerManager:
             id=job_id,
             kwargs=kwargs or {},
             replace_existing=True,
+            # Fix: IntervalTrigger waits a full interval before its first fire by default.
+            # Passing next_run_time makes the first collection run immediately.
+            # datetime.now(UTC) is timezone-aware; APScheduler converts it to the scheduler
+            # timezone automatically, which is compatible.
+            next_run_time=datetime.now(UTC),
         )
         logger.info(f"Job {job_id} added with interval {interval_seconds}s")
 
@@ -194,7 +211,12 @@ class AsyncSchedulerManager:
         source_connections = event_router.get_connections_by_category(category)
         active_connections = event_router.get_connections_count()
 
-        if active_connections == 0 or len(source_connections) == 0:
+        # Only pause based on the SSE subscriber count when adaptive pause is enabled
+        # (api-embedded scheduler scenario). In the worker process the SSE connection
+        # registry is always empty, and this branch is turned off via
+        # disable_adaptive_pause(); otherwise jobs would be paused permanently after the
+        # first collection round.
+        if self.adaptive_pause_enabled and (active_connections == 0 or len(source_connections) == 0):
             job = self.scheduler.get_job(job_id)
             if job and not job.pending:
                 await self.pause_job(job_id)

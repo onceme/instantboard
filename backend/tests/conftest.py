@@ -1,20 +1,20 @@
 import asyncio
 import os
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
 
 import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
-from httpx import AsyncClient, ASGITransport
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import Text, event, text
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.ext.compiler import compiles
-from sqlalchemy.pool import StaticPool, NullPool
+from sqlalchemy.pool import NullPool, StaticPool
 
+from app.config import settings
 from app.main import app
 from app.models.base import Base
-from app.config import settings
 
 
 @compiles(JSONB, "sqlite")

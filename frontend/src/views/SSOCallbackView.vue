@@ -2,6 +2,7 @@
 import { onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useAuth } from "@/composables/useAuth";
+import { getApiErrorMessage } from "@/utils/api";
 import LoadingSpinner from "@/components/common/LoadingSpinner.vue";
 
 const route = useRoute();
@@ -10,35 +11,32 @@ const { handleCallback } = useAuth();
 
 const error = ref<string | null>(null);
 
+function backToLogin() {
+  router.push("/login");
+}
+
 onMounted(async () => {
   const code = route.query.code as string | null;
   const state = route.query.state as string | null;
   const provider = (sessionStorage.getItem("oauth_provider") as string) || null;
 
+  // Missing state/provider validation info: redirect back to the login page with an error flag and let it show the message
+  if (!provider || !state) {
+    router.replace({ name: "login", query: { error: "csrf_mismatch" } });
+    return;
+  }
+
   if (!code) {
     error.value = "授权码缺失，请重新登录。";
-    setTimeout(() => router.push("/login"), 2000);
-    return;
-  }
-
-  if (!provider) {
-    error.value = "登录提供商信息丢失，请重新登录。";
-    setTimeout(() => router.push("/login"), 2000);
-    return;
-  }
-
-  if (!state) {
-    error.value = "安全验证参数缺失，请重新登录。";
-    setTimeout(() => router.push("/login"), 2000);
     return;
   }
 
   try {
     await handleCallback(provider, code, state);
   } catch (err) {
-    error.value = "登录失败，请重试。";
+    // Login failed: extract a readable message from the backend error envelope and show it on the page instead of silently redirecting
+    error.value = getApiErrorMessage(err, "登录失败，请重试。");
     console.error("SSO callback error:", err);
-    setTimeout(() => router.push("/login"), 2000);
   }
 });
 </script>
@@ -48,6 +46,7 @@ onMounted(async () => {
     <div class="callback-card">
       <div v-if="error" class="callback-error">
         <p class="error-text">{{ error }}</p>
+        <button class="back-btn" @click="backToLogin">返回登录</button>
       </div>
       <div v-else class="callback-loading">
         <LoadingSpinner />
@@ -94,6 +93,19 @@ onMounted(async () => {
 
 .error-text {
   font-size: 16px;
-  margin-bottom: 8px;
+  margin-bottom: 16px;
+}
+
+.back-btn {
+  padding: 8px 24px;
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  color: white;
+  background-color: var(--accent);
+  transition: opacity var(--transition-fast);
+}
+
+.back-btn:hover {
+  opacity: 0.9;
 }
 </style>

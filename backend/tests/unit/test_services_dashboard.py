@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.services.dashboard import DashboardService, stop_metrics_collection, start_metrics_collection
+from app.services.dashboard import DashboardService, start_metrics_collection, stop_metrics_collection
 
 
 def _mock_db():

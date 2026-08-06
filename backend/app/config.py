@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
     redis_max_memory: str = Field(default="512mb", alias="REDIS_MAX_MEMORY")
 
-    # MongoDB (初始版本不启用)
+    # MongoDB (not enabled in the initial version)
     mongodb_url: str | None = Field(default=None, alias="MONGODB_URL")
 
     # JWT

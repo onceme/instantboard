@@ -56,8 +56,14 @@ class AuthService:
             logger.error("SSO authentication failed for provider=%s: %s", provider, str(e)[:200])
             raise SSOProviderError(message=f"{provider} authentication failed") from e
         except Exception as e:
-            logger.error("SSO provider error for provider=%s: %s", provider, str(e)[:200])
-            raise SSOProviderError(message=f"{provider} returned an error") from e
+            # Fix: log the full stack trace for upstream failures to ease debugging, and put
+            # the exception class name + message into the error response's details field
+            # (HTTP 502). The message is truncated to avoid excessive length.
+            logger.exception("SSO provider error for provider=%s", provider)
+            raise SSOProviderError(
+                message=f"{provider} returned an error",
+                details=[{"exception": type(e).__name__, "message": str(e)[:500]}],
+            ) from e
         finally:
             await handler.close()
 

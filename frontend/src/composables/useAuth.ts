@@ -42,7 +42,8 @@ export function useAuth() {
   }
 
   function isAdmin(): boolean {
-    return authStore.user?.role === "admin";
+    // Reuse the store's isAdmin computed property to keep a single source of truth for the check
+    return authStore.isAdmin;
   }
 
   function canAccessDashboard(): boolean {

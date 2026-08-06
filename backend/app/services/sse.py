@@ -4,6 +4,9 @@ from datetime import UTC, datetime
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+# Fix: default tenant of publish_source_health_update changed from "system" to
+# SYSTEM_TENANT_ID (kept as str for SSE JSON serialization).
+from app.core.constants import SYSTEM_TENANT_ID
 from app.core.sse_router import SSEEventType, event_router
 from app.models.sse import SSEConnection as SSEConnectionModel
 
@@ -100,7 +103,7 @@ class SSEService:
         source_id: str,
         status: str,
         last_error: str | None = None,
-        tenant_id: str = "system",
+        tenant_id: str = str(SYSTEM_TENANT_ID),
     ) -> None:
         data = {
             "source_id": source_id,

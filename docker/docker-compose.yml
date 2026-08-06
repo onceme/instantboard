@@ -1,5 +1,5 @@
 services:
-  # --- 基础服务 ---
+  # --- Infrastructure services ---
   postgres:
     image: postgres:15-alpine
     environment:
@@ -46,7 +46,7 @@ services:
       - mongodb
     restart: unless-stopped
 
-  # --- 应用服务 ---
+  # --- Application services ---
   api:
     build:
       context: ../backend

@@ -5,6 +5,7 @@ from typing import Any
 import httpx
 
 from app.collectors.base import BaseCollector
+from app.core.constants import YAHOO_BROWSER_HEADERS
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +43,14 @@ class YFinanceCollector(BaseCollector):
 
         async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
             try:
-                response = await client.get(url, params=params)
+                # Yahoo rate-limits default client fingerprints (429); send browser-like
+                # headers to improve the success rate.
+                response = await client.get(url, params=params, headers=YAHOO_BROWSER_HEADERS)
+                if response.status_code == 429:
+                    # Rate-limiting is not a failure of this service; log a warning and let
+                    # failover advance to the next data source.
+                    logger.warning(f"yfinance rate-limited (429) for {symbol}, falling over")
+                    return None
                 if response.status_code != 200:
                     logger.warning(f"yfinance API returned {response.status_code} for {symbol}")
                     return None

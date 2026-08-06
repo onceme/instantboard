@@ -5,6 +5,7 @@ import pytest
 from fastapi.security import HTTPAuthorizationCredentials
 
 from app.core.exceptions import AuthRequired, Forbidden, InvalidToken
+from app.core.security import create_access_token
 from app.dependencies import (
     _raw_token_var,
     get_current_tenant,
@@ -15,12 +16,11 @@ from app.dependencies import (
     get_redis,
     require_admin,
 )
-from app.core.security import create_access_token
 
 
 class TestGetRawToken:
     def test_returns_none_by_default(self):
-        token = _raw_token_var.set(None)
+        _raw_token_var.set(None)
         result = get_raw_token()
         assert result is None
 
@@ -32,17 +32,16 @@ class TestGetRawToken:
 
 class TestGetCurrentUser:
     async def test_no_credentials_raises_auth_required(self):
-        with patch("app.dependencies.get_redis", new_callable=AsyncMock):
-            with pytest.raises(AuthRequired):
-                async_gen = get_current_user(credentials=None, redis=MagicMock())
-                await async_gen
+        with patch("app.dependencies.get_redis", new_callable=AsyncMock), pytest.raises(AuthRequired):
+            async_gen = get_current_user(credentials=None, redis=MagicMock())
+            await async_gen
 
     async def test_blacklisted_token_raises_invalid(self):
         token = create_access_token({"sub": "user123"})
         credentials = HTTPAuthorizationCredentials(
             scheme="bearer", credentials=token
         )
-        
+
         with patch("app.dependencies.is_token_blacklisted", new_callable=AsyncMock) as mock_bl:
             mock_bl.return_value = True
             with pytest.raises(InvalidToken, match="Token has been revoked"):
@@ -52,7 +51,7 @@ class TestGetCurrentUser:
         credentials = HTTPAuthorizationCredentials(
             scheme="bearer", credentials="invalid_token"
         )
-        
+
         with patch("app.dependencies.is_token_blacklisted", new_callable=AsyncMock) as mock_bl:
             mock_bl.return_value = False
             with pytest.raises(InvalidToken):
@@ -60,6 +59,7 @@ class TestGetCurrentUser:
 
     async def test_no_user_id_raises_invalid(self):
         from jose import jwt
+
         from app.config import settings
         token = jwt.encode(
             {"type": "access", "tenant_id": "t1"},
@@ -69,7 +69,7 @@ class TestGetCurrentUser:
         credentials = HTTPAuthorizationCredentials(
             scheme="bearer", credentials=token
         )
-        
+
         with patch("app.dependencies.is_token_blacklisted", new_callable=AsyncMock) as mock_bl:
             mock_bl.return_value = False
             with pytest.raises(InvalidToken, match="missing user_id"):
@@ -82,7 +82,7 @@ class TestGetCurrentUser:
         credentials = HTTPAuthorizationCredentials(
             scheme="bearer", credentials=token
         )
-        
+
         with patch("app.dependencies.is_token_blacklisted", new_callable=AsyncMock) as mock_bl:
             mock_bl.return_value = False
             result = await get_current_user(credentials=credentials, redis=MagicMock())
@@ -119,7 +119,7 @@ class TestRequireAdmin:
 class TestGetOptionalToken:
     async def test_query_token(self):
         token = create_access_token(data={"sub": "user123", "tenant_id": "t1"})
-        
+
         with patch("app.dependencies.is_token_blacklisted", new_callable=AsyncMock) as mock_bl:
             mock_bl.return_value = False
             result = await get_optional_token(
@@ -133,7 +133,7 @@ class TestGetOptionalToken:
         credentials = HTTPAuthorizationCredentials(
             scheme="bearer", credentials=token
         )
-        
+
         with patch("app.dependencies.is_token_blacklisted", new_callable=AsyncMock) as mock_bl:
             mock_bl.return_value = False
             result = await get_optional_token(
@@ -150,7 +150,7 @@ class TestGetOptionalToken:
 
     async def test_blacklisted_query_token_raises_invalid(self):
         token = create_access_token(data={"sub": "user123", "tenant_id": "t1"})
-        
+
         with patch("app.dependencies.is_token_blacklisted", new_callable=AsyncMock) as mock_bl:
             mock_bl.return_value = True
             with pytest.raises(InvalidToken, match="revoked"):

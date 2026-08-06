@@ -45,6 +45,11 @@ async def main() -> None:
     except Exception as exc:
         logger.warning(f"Redis connection failed: {exc}. Worker continuing without Redis.")
 
+    # The worker process has no SSE connections (the connection registry lives in the api
+    # process, core/sse_router). Adaptive pause must be disabled, otherwise every source
+    # would be paused permanently after its first collection round due to "no subscribers".
+    scheduler_manager.disable_adaptive_pause()
+
     await scheduler_manager.start()
     logger.info("Scheduler started")
 

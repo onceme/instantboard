@@ -11,7 +11,13 @@ import type {
   FinancePanel,
   SSEEventType,
 } from "@/types";
-import { apiGet, apiPost, apiDelete, apiPut } from "@/utils/api";
+import {
+  apiGet,
+  apiPost,
+  apiDelete,
+  apiPut,
+  getApiErrorMessage,
+} from "@/utils/api";
 import { SSEConnection, SSEConnectionState } from "@/utils/sse.ts";
 import { useAuthStore } from "./auth";
 
@@ -28,6 +34,11 @@ export const useFinanceStore = defineStore("finance", () => {
   const searchQuery = ref("");
   const sseConnection = ref<SSEConnection | null>(null);
   const sseState = ref<SSEConnectionState>(SSEConnectionState.DISCONNECTED);
+
+  // Per-endpoint error state: on backend 5xx/503 the matching panel shows it via ErrorAlert instead of failing silently
+  const marketIndicesError = ref<string | null>(null);
+  const commoditiesError = ref<string | null>(null);
+  const watchlistError = ref<string | null>(null);
 
   const watchlistTop5 = computed(() => {
     const sorted = [...watchlist.value].sort(
@@ -63,13 +74,29 @@ export const useFinanceStore = defineStore("finance", () => {
   }
 
   async function getMarketIndices() {
-    const response = await apiGet<MarketIndex[]>("/finance/market-indices");
-    marketIndices.value = response.data;
+    marketIndicesError.value = null;
+    try {
+      const response = await apiGet<MarketIndex[]>("/finance/market-indices");
+      marketIndices.value = response.data;
+    } catch (err) {
+      marketIndicesError.value = getApiErrorMessage(
+        err,
+        "加载市场指数失败，请稍后重试。",
+      );
+    }
   }
 
   async function getCommodities() {
-    const response = await apiGet<Commodity[]>("/finance/commodities");
-    commodities.value = response.data;
+    commoditiesError.value = null;
+    try {
+      const response = await apiGet<Commodity[]>("/finance/commodities");
+      commodities.value = response.data;
+    } catch (err) {
+      commoditiesError.value = getApiErrorMessage(
+        err,
+        "加载大宗商品失败，请稍后重试。",
+      );
+    }
   }
 
   async function getFundNAV(symbol: string) {
@@ -79,17 +106,25 @@ export const useFinanceStore = defineStore("finance", () => {
   }
 
   async function fetchWatchlist() {
-    const response = await apiGet<WatchlistItem[]>("/finance/watchlist");
-    watchlist.value = response.data;
+    watchlistError.value = null;
+    try {
+      const response = await apiGet<WatchlistItem[]>("/finance/watchlist");
+      watchlist.value = response.data;
 
-    const quotesResponse = await apiGet<WatchlistQuote[]>(
-      "/finance/watchlist/quotes",
-    );
-    const quotesMap = new Map<string, WatchlistQuote>();
-    for (const q of quotesResponse.data) {
-      quotesMap.set(q.symbol, q);
+      const quotesResponse = await apiGet<WatchlistQuote[]>(
+        "/finance/watchlist/quotes",
+      );
+      const quotesMap = new Map<string, WatchlistQuote>();
+      for (const q of quotesResponse.data) {
+        quotesMap.set(q.symbol, q);
+      }
+      watchlistQuotes.value = quotesMap;
+    } catch (err) {
+      watchlistError.value = getApiErrorMessage(
+        err,
+        "加载自选股失败，请稍后重试。",
+      );
     }
-    watchlistQuotes.value = quotesMap;
   }
 
   async function addToWatchlist(symbol: string) {
@@ -225,6 +260,9 @@ export const useFinanceStore = defineStore("finance", () => {
     currentPanel,
     searchQuery,
     sseState,
+    marketIndicesError,
+    commoditiesError,
+    watchlistError,
     watchlistTop5,
     setCurrentPanel,
     searchSymbols,

@@ -17,10 +17,38 @@ apiClient.interceptors.request.use((config) => {
   return config;
 });
 
+// Backend 4xx/5xx error envelope: response.data.detail.error (AppException structure)
+export interface ApiErrorDetail {
+  code?: string;
+  message?: string;
+  description?: string;
+}
+
+// Extract a readable error message from an error object for callers to display (falls back to the given fallback)
+export function getApiErrorMessage(err: unknown, fallback: string): string {
+  if (axios.isAxiosError(err)) {
+    const data = err.response?.data as
+      | { detail?: { error?: ApiErrorDetail } | string }
+      | undefined;
+    const detail = data?.detail;
+    if (typeof detail === "string" && detail) return detail;
+    if (detail?.error?.message) return detail.error.message;
+    if (detail?.error?.description) return detail.error.description;
+  }
+  return fallback;
+}
+
 apiClient.interceptors.response.use(
   (response) => response,
   async (error) => {
     const originalRequest = error.config;
+
+    // 401s on the SSO login flow (e.g. POST /auth/sso/{provider}) are rethrown to the caller for display,
+    // skipping token refresh / clearing auth state / redirects so SSO failures are not bounced back to the login page with no visible error
+    const requestUrl: string = originalRequest?.url || "";
+    if (requestUrl.includes("/auth/sso/")) {
+      return Promise.reject(error);
+    }
 
     if (error.response?.status === 401 && !originalRequest._retry) {
       originalRequest._retry = true;

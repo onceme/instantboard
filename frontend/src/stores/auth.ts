@@ -10,6 +10,8 @@ export const useAuthStore = defineStore("auth", () => {
   const refreshToken = ref<string>(localStorage.getItem("refresh_token") || "");
   const isAuthenticated = computed(() => !!token.value && !!user.value);
   const tenantId = computed(() => user.value?.tenant_id || "");
+  // Shared admin check used by both the router guard and useAuth
+  const isAdmin = computed(() => user.value?.role === "admin");
 
   const colorScheme = ref<"chinese" | "international">(
     (localStorage.getItem("color_scheme") as "chinese" | "international") ||
@@ -110,6 +112,7 @@ export const useAuthStore = defineStore("auth", () => {
     token,
     refreshToken,
     isAuthenticated,
+    isAdmin,
     tenantId,
     colorScheme,
     theme,

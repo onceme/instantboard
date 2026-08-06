@@ -192,8 +192,7 @@ class TestDeleteTenant:
         assert resp.status_code == 400
 
     def test_delete_system_tenant_forbidden(self, client):
-        sys_tid = "00000000-0000-0000-0000-000000000000"
-        with patch("app.api.v1.admin.Tenant") as mock_model:
+        with patch("app.api.v1.admin.Tenant"):
             pass
 
         # Create a system-slugged tenant and try to delete it

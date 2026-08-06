@@ -4,6 +4,7 @@ import { formatCurrency, formatPercent, getChangeClass } from "@/utils/format";
 import { computed } from "vue";
 import { X, Star } from "lucide-vue-next";
 import EmptyState from "@/components/common/EmptyState.vue";
+import ErrorAlert from "@/components/common/ErrorAlert.vue";
 
 const financeStore = useFinanceStore();
 
@@ -27,6 +28,11 @@ function changeClass(changePercent: number): string {
 async function removeItem(itemId: string) {
   await financeStore.removeFromWatchlist(itemId);
 }
+
+// ErrorAlert retry: refetch the watchlist
+async function retryWatchlist() {
+  await financeStore.fetchWatchlist();
+}
 </script>
 
 <template>
@@ -36,8 +42,15 @@ async function removeItem(itemId: string) {
       <Star :size="16" class="header-icon" />
     </div>
 
+    <ErrorAlert
+      v-if="financeStore.watchlistError"
+      :message="financeStore.watchlistError"
+      retryable
+      @retry="retryWatchlist"
+    />
+
     <EmptyState
-      v-if="sortedWatchlist.length === 0"
+      v-else-if="sortedWatchlist.length === 0"
       title="暂无自选"
       description="搜索并添加自选"
       icon="star"

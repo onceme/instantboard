@@ -11,7 +11,13 @@ from app.core.exceptions import (
     SymbolNotFound,
     ValidationError,
 )
-from app.services.finance import FinanceService, MAX_WATCHLIST_ITEMS, _MockSource
+from app.services.finance import (
+    DATA_TYPE_MARKET_INDICES,
+    MARKET_INDICES_CONFIG,
+    MAX_WATCHLIST_ITEMS,
+    FinanceService,
+    _MockSource,
+)
 
 
 def _mock_db():
@@ -640,8 +646,8 @@ class TestHelperMethods:
         redis = _mock_redis()
         service = FinanceService(db, redis)
 
-        from unittest.mock import patch as mock_patch
         from datetime import time as dt_time
+        from unittest.mock import patch as mock_patch
 
         with mock_patch("app.services.finance.datetime") as mock_dt:
             mock_now = MagicMock()
@@ -804,8 +810,12 @@ class TestGetFailoverChain:
         db, _ = _mock_db()
         redis = _mock_redis()
         service = FinanceService(db, redis)
-        chain = service._get_failover_chain("market_index")
-        assert len(chain) == 3
+        # Unified spelling via the market_indices constant; indices chain is eastmoney
+        # (domestic source, covers A-share indices) with yfinance as fallback
+        chain = service._get_failover_chain(DATA_TYPE_MARKET_INDICES)
+        assert len(chain) == 2
+        assert chain[0]["name"] == "eastmoney"
+        assert chain[1]["name"] == "yfinance"
 
     def test_commodity(self):
         db, _ = _mock_db()
@@ -928,10 +938,38 @@ class TestFetchFailoverSuccessPaths:
         redis = _mock_redis()
         service = FinanceService(db, redis)
 
-        indices = [{"symbol": "^GSPC", "current_price": 5000}]
-        with patch.object(FinanceService, "_fetch_with_failover_batch", new_callable=AsyncMock, return_value=indices):
+        async def fake_try_batch(tenant_id, symbols, source_config):
+            return [{"symbol": s, "current_price": 5000} for s in symbols]
+
+        # Indices failover now merges by symbol; patch _try_collector_batch directly
+        with patch.object(FinanceService, "_try_collector_batch", new_callable=AsyncMock, side_effect=fake_try_batch):
             result = await service._fetch_indices_with_failover("tenant-1")
-            assert len(result) == 1
+            assert len(result) == len(MARKET_INDICES_CONFIG)
+
+    async def test_fetch_indices_with_failover_merge(self):
+        """eastmoney returns only A-share indices (partial symbols); yfinance fills in the rest; merged by symbol."""
+        db, _ = _mock_db()
+        redis = _mock_redis()
+        service = FinanceService(db, redis)
+
+        cn_symbols = {"000001.SS", "399001.SZ", "000300.SS"}
+        tried = []
+
+        async def fake_try_batch(tenant_id, symbols, source_config):
+            tried.append(source_config["name"])
+            if source_config["name"] == "eastmoney":
+                # eastmoney covers only A-share indices
+                return [{"symbol": s, "current_price": 3500} for s in symbols if s in cn_symbols]
+            return [{"symbol": s, "current_price": 5000} for s in symbols]
+
+        with patch.object(FinanceService, "_try_collector_batch", new_callable=AsyncMock, side_effect=fake_try_batch):
+            result = await service._fetch_indices_with_failover("tenant-1")
+
+        assert tried == ["eastmoney", "yfinance"]
+        assert len(result) == len(MARKET_INDICES_CONFIG)
+        by_symbol = {r["symbol"]: r for r in result}
+        assert by_symbol["000001.SS"]["current_price"] == 3500  # CN indices came from eastmoney
+        assert by_symbol["^GSPC"]["current_price"] == 5000  # the rest filled in by yfinance
 
     async def test_fetch_commodities_with_failover(self):
         db, _ = _mock_db()

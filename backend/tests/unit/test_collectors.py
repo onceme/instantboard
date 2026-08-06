@@ -1,18 +1,19 @@
 """Unit tests for app/collectors package."""
-from unittest.mock import AsyncMock, MagicMock, patch
 import asyncio
 import time
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
 from app.collectors import COLLECTOR_REGISTRY, get_collector
 from app.collectors.base import BaseCollector, CollectionResult
-from app.collectors.finance.yfinance_collector import YFinanceCollector
 from app.collectors.finance.alpha_vantage_collector import AlphaVantageCollector, asyncio_sleep
 from app.collectors.finance.eastmoney_collector import EastMoneyCollector
 from app.collectors.finance.finnhub_collector import FinnhubCollector
-from app.collectors.tech.rss_collector import RSSCollector, _parse_feedparser_date
-from app.collectors.tech.hackernews_collector import HackerNewsCollector
+from app.collectors.finance.yfinance_collector import YFinanceCollector
 from app.collectors.tech.arxiv_collector import ArxivCollector
+from app.collectors.tech.hackernews_collector import HackerNewsCollector
+from app.collectors.tech.rss_collector import RSSCollector, _parse_feedparser_date
 
 
 def _make_source(**kwargs):
@@ -76,9 +77,11 @@ class TestBaseCollector:
                 return raw_data
         c = ConcreteCol()
         source = _make_source()
-        with patch("app.collectors.base.redis_get", new_callable=AsyncMock, return_value=None):
-            with patch("app.collectors.base.redis_set", new_callable=AsyncMock):
-                result = await c.collect(source)
+        with (
+            patch("app.collectors.base.redis_get", new_callable=AsyncMock, return_value=None),
+            patch("app.collectors.base.redis_set", new_callable=AsyncMock),
+        ):
+            result = await c.collect(source)
         assert isinstance(result, CollectionResult)
         assert result.success is True
 
@@ -107,9 +110,11 @@ class TestBaseCollector:
                 return []
         c = ConcreteCol()
         source = _make_source()
-        with patch("app.collectors.base.redis_get", new_callable=AsyncMock, return_value=None):
-            with patch("app.collectors.base.redis_set", new_callable=AsyncMock):
-                result = await c.collect(source)
+        with (
+            patch("app.collectors.base.redis_get", new_callable=AsyncMock, return_value=None),
+            patch("app.collectors.base.redis_set", new_callable=AsyncMock),
+        ):
+            result = await c.collect(source)
         assert result.success is False
         assert "retry" in result.error.lower()
 
@@ -122,9 +127,11 @@ class TestBaseCollector:
                 raise RuntimeError("parse fail")
         c = ConcreteCol()
         source = _make_source()
-        with patch("app.collectors.base.redis_get", new_callable=AsyncMock, return_value=None):
-            with patch("app.collectors.base.redis_set", new_callable=AsyncMock):
-                result = await c.collect(source)
+        with (
+            patch("app.collectors.base.redis_get", new_callable=AsyncMock, return_value=None),
+            patch("app.collectors.base.redis_set", new_callable=AsyncMock),
+        ):
+            result = await c.collect(source)
         assert result.success is False
         assert "parse fail" in result.error
 
@@ -139,9 +146,11 @@ class TestBaseCollector:
                 raise RuntimeError("valid fail")
         c = ConcreteCol()
         source = _make_source()
-        with patch("app.collectors.base.redis_get", new_callable=AsyncMock, return_value=None):
-            with patch("app.collectors.base.redis_set", new_callable=AsyncMock):
-                result = await c.collect(source)
+        with (
+            patch("app.collectors.base.redis_get", new_callable=AsyncMock, return_value=None),
+            patch("app.collectors.base.redis_set", new_callable=AsyncMock),
+        ):
+            result = await c.collect(source)
         assert result.success is False
         assert "valid fail" in result.error
 
@@ -174,9 +183,11 @@ class TestBaseCollector:
             async def parse_data(self, raw_data, source):
                 return []
         c = ConcreteCol()
-        with patch("app.collectors.base.redis_get", new_callable=AsyncMock, return_value="5"):
-            with patch("app.collectors.base.redis_set", new_callable=AsyncMock):
-                result = await c.rate_limit_check(_make_source())
+        with (
+            patch("app.collectors.base.redis_get", new_callable=AsyncMock, return_value="5"),
+            patch("app.collectors.base.redis_set", new_callable=AsyncMock),
+        ):
+            result = await c.rate_limit_check(_make_source())
         assert result is True
 
     async def test_rate_limit_check_exceeded(self):
@@ -199,9 +210,11 @@ class TestBaseCollector:
             async def parse_data(self, raw_data, source):
                 return []
         c = ConcreteCol()
-        with patch("app.collectors.base.redis_get", new_callable=AsyncMock, return_value=None):
-            with patch("app.collectors.base.redis_set", new_callable=AsyncMock):
-                result = await c.rate_limit_check(_make_source())
+        with (
+            patch("app.collectors.base.redis_get", new_callable=AsyncMock, return_value=None),
+            patch("app.collectors.base.redis_set", new_callable=AsyncMock),
+        ):
+            result = await c.rate_limit_check(_make_source())
         assert result is True
 
     async def test_rate_limit_check_redis_unavailable(self):
@@ -224,9 +237,11 @@ class TestBaseCollector:
                 return []
         c = ConcreteCol()
         source = _make_source()
-        with patch("app.collectors.base.redis_get", new_callable=AsyncMock, return_value=None):
-            with patch("app.collectors.base.redis_set", new_callable=AsyncMock):
-                await c.record_health(source, True, 100)
+        with (
+            patch("app.collectors.base.redis_get", new_callable=AsyncMock, return_value=None),
+            patch("app.collectors.base.redis_set", new_callable=AsyncMock),
+        ):
+            await c.record_health(source, True, 100)
 
     async def test_record_health_with_existing(self):
         import json
@@ -238,9 +253,11 @@ class TestBaseCollector:
         c = ConcreteCol()
         source = _make_source()
         existing = json.dumps({"status": "healthy", "consecutive_failures": 0, "total_fetches_24h": 1, "success_count_24h": 1, "avg_response_time_ms": 50})
-        with patch("app.collectors.base.redis_get", new_callable=AsyncMock, return_value=existing):
-            with patch("app.collectors.base.redis_set", new_callable=AsyncMock):
-                await c.record_health(source, True, 100)
+        with (
+            patch("app.collectors.base.redis_get", new_callable=AsyncMock, return_value=existing),
+            patch("app.collectors.base.redis_set", new_callable=AsyncMock),
+        ):
+            await c.record_health(source, True, 100)
 
     async def test_record_health_failures_degraded(self):
         import json
@@ -252,9 +269,11 @@ class TestBaseCollector:
         c = ConcreteCol()
         source = _make_source()
         existing = json.dumps({"status": "healthy", "consecutive_failures": 0, "total_fetches_24h": 5, "success_count_24h": 5, "avg_response_time_ms": 50})
-        with patch("app.collectors.base.redis_get", new_callable=AsyncMock, return_value=existing):
-            with patch("app.collectors.base.redis_set", new_callable=AsyncMock):
-                await c.record_health(source, False, 1000, "some error")
+        with (
+            patch("app.collectors.base.redis_get", new_callable=AsyncMock, return_value=existing),
+            patch("app.collectors.base.redis_set", new_callable=AsyncMock),
+        ):
+            await c.record_health(source, False, 1000, "some error")
 
     async def test_record_health_failures_down(self):
         import json
@@ -266,9 +285,11 @@ class TestBaseCollector:
         c = ConcreteCol()
         source = _make_source()
         existing = json.dumps({"status": "degraded", "consecutive_failures": 9, "total_fetches_24h": 10, "success_count_24h": 1, "avg_response_time_ms": 50})
-        with patch("app.collectors.base.redis_get", new_callable=AsyncMock, return_value=existing):
-            with patch("app.collectors.base.redis_set", new_callable=AsyncMock):
-                await c.record_health(source, False, 1000, "some error")
+        with (
+            patch("app.collectors.base.redis_get", new_callable=AsyncMock, return_value=existing),
+            patch("app.collectors.base.redis_set", new_callable=AsyncMock),
+        ):
+            await c.record_health(source, False, 1000, "some error")
 
     async def test_record_health_redis_failure(self):
         class ConcreteCol(BaseCollector):
@@ -383,7 +404,7 @@ class TestAlphaVantageCollector:
     async def test_fetch_data_no_api_key(self):
         c = AlphaVantageCollector()
         source = _make_source(config={"symbols": ["AAPL"], "function": "TIME_SERIES_INTRADAY"})
-        with patch.object(c, "fetch_data", wraps=c.fetch_data) as spy:
+        with patch.object(c, "fetch_data", wraps=c.fetch_data):
             from app.config import settings as s
             with patch.object(s, "alpha_vantage_api_key", None):
                 result = await c.fetch_data(source)
@@ -407,10 +428,12 @@ class TestAlphaVantageCollector:
         mock_client.get = AsyncMock(return_value=mock_response)
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
-        with patch("httpx.AsyncClient", return_value=mock_client):
-            with patch("app.collectors.finance.alpha_vantage_collector.settings") as mock_settings:
-                mock_settings.alpha_vantage_api_key = "test-key"
-                result = await c.fetch_data(source)
+        with (
+            patch("httpx.AsyncClient", return_value=mock_client),
+            patch("app.collectors.finance.alpha_vantage_collector.settings") as mock_settings,
+        ):
+            mock_settings.alpha_vantage_api_key = "test-key"
+            result = await c.fetch_data(source)
         assert isinstance(result, list)
         assert len(result) == 1
         assert result[0]["symbol"] == "AAPL"
@@ -424,10 +447,12 @@ class TestAlphaVantageCollector:
         mock_client.get = AsyncMock(return_value=mock_response)
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
-        with patch("httpx.AsyncClient", return_value=mock_client):
-            with patch("app.collectors.finance.alpha_vantage_collector.settings") as mock_settings:
-                mock_settings.alpha_vantage_api_key = "test-key"
-                result = await c.fetch_data(source)
+        with (
+            patch("httpx.AsyncClient", return_value=mock_client),
+            patch("app.collectors.finance.alpha_vantage_collector.settings") as mock_settings,
+        ):
+            mock_settings.alpha_vantage_api_key = "test-key"
+            result = await c.fetch_data(source)
         assert result == []
 
     async def test_fetch_data_api_error(self):
@@ -439,10 +464,12 @@ class TestAlphaVantageCollector:
         mock_client.get = AsyncMock(return_value=mock_response)
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
-        with patch("httpx.AsyncClient", return_value=mock_client):
-            with patch("app.collectors.finance.alpha_vantage_collector.settings") as mock_settings:
-                mock_settings.alpha_vantage_api_key = "test-key"
-                result = await c.fetch_data(source)
+        with (
+            patch("httpx.AsyncClient", return_value=mock_client),
+            patch("app.collectors.finance.alpha_vantage_collector.settings") as mock_settings,
+        ):
+            mock_settings.alpha_vantage_api_key = "test-key"
+            result = await c.fetch_data(source)
         assert result == []
 
     async def test_fetch_data_api_error_response(self):
@@ -455,10 +482,12 @@ class TestAlphaVantageCollector:
         mock_client.get = AsyncMock(return_value=mock_response)
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
-        with patch("httpx.AsyncClient", return_value=mock_client):
-            with patch("app.collectors.finance.alpha_vantage_collector.settings") as mock_settings:
-                mock_settings.alpha_vantage_api_key = "test-key"
-                result = await c.fetch_data(source)
+        with (
+            patch("httpx.AsyncClient", return_value=mock_client),
+            patch("app.collectors.finance.alpha_vantage_collector.settings") as mock_settings,
+        ):
+            mock_settings.alpha_vantage_api_key = "test-key"
+            result = await c.fetch_data(source)
         assert result == []
 
     async def test_parse_response_global_quote(self):
@@ -690,7 +719,7 @@ class TestRSSCollector:
         assert result is None
 
     async def test_fetch_data_not_200(self):
-        """非 200 响应应抛出 RuntimeError"""
+        """A non-200 response should raise RuntimeError"""
         c = RSSCollector()
         source = _make_source(url="https://x.com")
         mock_response = MagicMock()
@@ -699,9 +728,8 @@ class TestRSSCollector:
         mock_client.get = AsyncMock(return_value=mock_response)
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
-        with patch("httpx.AsyncClient", return_value=mock_client):
-            with pytest.raises(RuntimeError, match="HTTP 500"):
-                await c.fetch_data(source)
+        with patch("httpx.AsyncClient", return_value=mock_client), pytest.raises(RuntimeError, match="HTTP 500"):
+            await c.fetch_data(source)
 
     async def test_parse_data_entries(self):
         import time as _t
@@ -1086,9 +1114,8 @@ class TestFinnhubCollectorExtended:
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("httpx.AsyncClient", return_value=mock_client):
-            with patch("asyncio.sleep"):
-                result = await c._fetch_stock_quotes(["AAPL"], "key")
+        with patch("httpx.AsyncClient", return_value=mock_client), patch("asyncio.sleep"):
+            result = await c._fetch_stock_quotes(["AAPL"], "key")
         assert len(result) == 1
         assert result[0]["symbol"] == "AAPL"
 
@@ -1130,9 +1157,8 @@ class TestFinnhubCollectorExtended:
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("httpx.AsyncClient", return_value=mock_client):
-            with patch("asyncio.sleep"):
-                result = await c._fetch_stock_quotes(["AAPL"], "key")
+        with patch("httpx.AsyncClient", return_value=mock_client), patch("asyncio.sleep"):
+            result = await c._fetch_stock_quotes(["AAPL"], "key")
         assert result == []  # exception caught, returns empty
 
     async def test_fetch_generic_exception(self):
@@ -1148,9 +1174,8 @@ class TestFinnhubCollectorExtended:
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("httpx.AsyncClient", return_value=mock_client):
-            with patch("asyncio.sleep"):
-                result = await c._fetch_stock_quotes(["AAPL"], "key")
+        with patch("httpx.AsyncClient", return_value=mock_client), patch("asyncio.sleep"):
+            result = await c._fetch_stock_quotes(["AAPL"], "key")
         assert result == []
 
     async def test_fetch_company_name_error(self):
@@ -1321,9 +1346,8 @@ class TestFinnhubCollectorExtended:
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("httpx.AsyncClient", return_value=mock_client):
-            with patch("asyncio.sleep"):
-                result = await c._fetch_commodities(["GC=F"], "key")
+        with patch("httpx.AsyncClient", return_value=mock_client), patch("asyncio.sleep"):
+            result = await c._fetch_commodities(["GC=F"], "key")
         assert result == []
 
 
@@ -1345,9 +1369,8 @@ class TestRSSCollectorExtended:
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("httpx.AsyncClient", return_value=mock_client):
-            with pytest.raises(_httpx.TimeoutException):
-                await c.fetch_data(source)
+        with patch("httpx.AsyncClient", return_value=mock_client), pytest.raises(_httpx.TimeoutException):
+            await c.fetch_data(source)
 
     async def test_fetch_data_http_error(self):
         """httpx.HTTPError (non-timeout) is re-raised by fetch_data."""
@@ -1363,9 +1386,8 @@ class TestRSSCollectorExtended:
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("httpx.AsyncClient", return_value=mock_client):
-            with pytest.raises(_httpx.HTTPError):
-                await c.fetch_data(source)
+        with patch("httpx.AsyncClient", return_value=mock_client), pytest.raises(_httpx.HTTPError):
+            await c.fetch_data(source)
 
     async def test_parse_data_feedparser_exception(self):
         """Lines 44-46: feedparser raises exception."""
@@ -1598,10 +1620,12 @@ class TestAlphaVantageCollectorExtended:
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("httpx.AsyncClient", return_value=mock_client):
-            with patch("app.collectors.finance.alpha_vantage_collector.settings") as mock_settings:
-                mock_settings.alpha_vantage_api_key = "test-key"
-                result = await c.fetch_data(source)
+        with (
+            patch("httpx.AsyncClient", return_value=mock_client),
+            patch("app.collectors.finance.alpha_vantage_collector.settings") as mock_settings,
+        ):
+            mock_settings.alpha_vantage_api_key = "test-key"
+            result = await c.fetch_data(source)
         assert result == []
 
     async def test_fetch_quote_timeout(self):
@@ -1675,10 +1699,12 @@ class TestAlphaVantageCollectorExtended:
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("httpx.AsyncClient", return_value=mock_client):
-            with patch("app.collectors.finance.alpha_vantage_collector.settings") as mock_settings:
-                mock_settings.alpha_vantage_api_key = "test-key"
-                result = await c.fetch_data(source)
+        with (
+            patch("httpx.AsyncClient", return_value=mock_client),
+            patch("app.collectors.finance.alpha_vantage_collector.settings") as mock_settings,
+        ):
+            mock_settings.alpha_vantage_api_key = "test-key"
+            result = await c.fetch_data(source)
         assert result == []
 
 

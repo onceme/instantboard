@@ -1,5 +1,5 @@
 services:
-  # --- Nginx 反向代理 ---
+  # --- Nginx reverse proxy ---
   nginx:
     image: nginx:1.25-alpine
     ports:
@@ -34,7 +34,7 @@ services:
           memory: 128M
     restart: always
 
-  # --- 应用服务 ---
+  # --- Application services ---
   api:
     image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_PREFIX:-onceme/instantboard}-api:${IMAGE_TAG:-latest}
     build:
@@ -45,6 +45,10 @@ services:
       - ../.env
     environment:
       - ENV=production
+      # In production the worker container owns scheduling/collection; the api-embedded
+      # scheduler must be disabled to avoid duplicate collection by two schedulers.
+      # environment takes precedence over env_file, overriding SCHEDULER_ENABLED=true in .env.
+      - SCHEDULER_ENABLED=false
       - DATABASE_URL=${PROD_DATABASE_URL:-postgresql+asyncpg://instantboard:prodpass123@postgres:5432/instantboard}
       - REDIS_URL=${PROD_REDIS_URL:-redis://:prodredis123@redis:6379/0}
       - SECRET_KEY=${PROD_SECRET_KEY:-change-this-prod-secret-key-at-least-32-chars}
@@ -135,7 +139,7 @@ services:
           memory: 128M
     restart: always
 
-  # --- 基础服务 ---
+  # --- Infrastructure services ---
   postgres:
     image: postgres:15-alpine
     environment:

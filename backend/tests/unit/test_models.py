@@ -2,20 +2,31 @@ import uuid
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import Boolean, CheckConstraint, Column, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Column,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import RelationshipProperty
 
 from app.models.base import Base, BaseModel, TenantMixin, TimestampMixin
+from app.models.category import Category
+from app.models.dashboard import DashboardSnapshot
+from app.models.finance import FinanceQuote, FinanceSymbol, FundNAVEstimate
+from app.models.item import Item
+from app.models.source import Source, SourceHealth
+from app.models.sse import SSEConnection
 from app.models.tenant import Tenant
 from app.models.user import User
-from app.models.category import Category
-from app.models.source import Source, SourceHealth
-from app.models.item import Item
-from app.models.finance import FinanceSymbol, FinanceQuote, FundNAVEstimate
 from app.models.watchlist import WatchlistItem
-from app.models.sse import SSEConnection
-from app.models.dashboard import DashboardSnapshot
 
 
 def _get_column(model_class, name):

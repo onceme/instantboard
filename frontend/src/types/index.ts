@@ -111,8 +111,8 @@ export interface MarketIndex {
   change: number;
   change_percent: number;
   market_status: "open" | "closed" | "pre_market" | "post_market";
-  region:
-    "US" | "CN" | "HK" | "JP" | "EU_LONDON" | "EU_FRANKFURT" | "KR" | "IN";
+  // Must match the region values in the backend MARKET_INDICES_CONFIG (GB=FTSE 100, DE=DAX, FR=CAC 40)
+  region: "US" | "CN" | "HK" | "JP" | "GB" | "DE" | "FR" | "KR" | "IN";
   timestamp: string;
 }
 
@@ -358,6 +358,7 @@ export type FinancePanel =
   "overview" | "watchlist" | "search" | "indices" | "commodities";
 
 // Market region groups
+// Region values align with the backend MARKET_INDICES_CONFIG: GB=FTSE 100/London, DE=DAX, FR=CAC 40, grouped under Europe
 export const MARKET_REGION_GROUPS: Record<
   string,
   { label: string; regions: string[] }
@@ -365,7 +366,7 @@ export const MARKET_REGION_GROUPS: Record<
   US: { label: "美国", regions: ["US"] },
   CN: { label: "中国", regions: ["CN", "HK"] },
   APAC: { label: "亚太", regions: ["JP", "KR", "IN"] },
-  EU: { label: "欧洲", regions: ["EU_LONDON", "EU_FRANKFURT"] },
+  EU: { label: "欧洲", regions: ["GB", "DE", "FR"] },
 };
 
 export const COMMODITY_GROUPS: Record<

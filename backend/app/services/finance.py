@@ -10,6 +10,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.constants import YAHOO_BROWSER_HEADERS
 from app.core.exceptions import (
     DuplicateWatchlistItem,
     ServiceUnavailable,
@@ -80,6 +81,14 @@ REDIS_TTL_NAV = 120
 REDIS_TTL_SEARCH = 300
 
 MAX_WATCHLIST_ITEMS = 512
+
+# Failover data-type identifiers, promoted to module-level constants to prevent a recurrence
+# of the "market_indices"/"market_index" spelling mismatch (previously
+# _fetch_indices_with_failover passed "market_indices" while the chain matched
+# "market_index", so the indices chain always fell through to the fallback).
+DATA_TYPE_STOCK_QUOTE = "stock_quote"
+DATA_TYPE_MARKET_INDICES = "market_indices"
+DATA_TYPE_COMMODITY = "commodity"
 
 
 class FinanceService:
@@ -626,17 +635,41 @@ class FinanceService:
         await self.db.commit()
 
     async def _fetch_quote_with_failover(self, tenant_id: str, symbol: str) -> dict | None:
-        failover_chain = self._get_failover_chain("stock_quote", symbol)
+        failover_chain = self._get_failover_chain(DATA_TYPE_STOCK_QUOTE, symbol)
         return await self._fetch_with_failover(tenant_id, symbol, failover_chain)
 
     async def _fetch_indices_with_failover(self, tenant_id: str) -> list[dict] | None:
         symbols = [c["symbol"] for c in MARKET_INDICES_CONFIG]
-        failover_chain = self._get_failover_chain("market_indices")
-        return await self._fetch_with_failover_batch(tenant_id, symbols, failover_chain)
+        failover_chain = self._get_failover_chain(DATA_TYPE_MARKET_INDICES)
+
+        # eastmoney only covers A-share indices (a domestic source, reachable from staging),
+        # while yfinance covers everything but gets rate-limited. Fill in progressively along
+        # the chain and merge by symbol instead of "first non-empty result wins"; otherwise
+        # all non-CN indices would be missing whenever eastmoney succeeds.
+        merged: dict[str, dict] = {}
+        for source_config in failover_chain:
+            missing = [s for s in symbols if s not in merged]
+            if not missing:
+                break
+            try:
+                results = await self._try_collector_batch(tenant_id, missing, source_config)
+            except Exception as e:
+                logger.warning(f"Failover: {source_config['name']} failed for market indices: {e}")
+                continue
+            if results:
+                for item in results:
+                    item_symbol = item.get("symbol")
+                    if item_symbol and item_symbol not in merged:
+                        merged[item_symbol] = item
+
+        if not merged:
+            logger.error(f"All failover sources failed for market indices batch {symbols[:3]}...")
+            return None
+        return list(merged.values())
 
     async def _fetch_commodities_with_failover(self, tenant_id: str) -> list[dict] | None:
         symbols = [c["symbol"] for c in COMMODITIES_CONFIG]
-        failover_chain = self._get_failover_chain("commodity")
+        failover_chain = self._get_failover_chain(DATA_TYPE_COMMODITY)
         return await self._fetch_with_failover_batch(tenant_id, symbols, failover_chain)
 
     async def _fetch_with_failover(self, tenant_id: str, symbol: str, failover_chain: list[dict]) -> dict | None:
@@ -668,7 +701,7 @@ class FinanceService:
         return None
 
     def _get_failover_chain(self, data_type: str, symbol: str | None = None) -> list[dict]:
-        if data_type == "stock_quote":
+        if data_type == DATA_TYPE_STOCK_QUOTE:
             is_cn = symbol and (
                 symbol.endswith(".SS") or symbol.endswith(".SZ") or symbol.startswith("0") or symbol.startswith("3")
             )
@@ -683,14 +716,17 @@ class FinanceService:
                 {"name": "finnhub", "collector": "finnhub"},
             ]
 
-        if data_type == "market_index":
+        if data_type == DATA_TYPE_MARKET_INDICES:
+            # Fix the spelling mismatch (the old branch matched "market_index" and never hit).
+            # Indices chain eastmoney→yfinance: eastmoney covers A-share indices (domestic
+            # source, reachable from staging) and yfinance is the full-coverage fallback;
+            # works together with the merge-by-symbol logic in _fetch_indices_with_failover.
             return [
+                {"name": "eastmoney", "collector": "eastmoney"},
                 {"name": "yfinance", "collector": "yfinance"},
-                {"name": "eastmoney_cn", "collector": "eastmoney"},
-                {"name": "alpha_vantage", "collector": "alpha_vantage"},
             ]
 
-        if data_type == "commodity":
+        if data_type == DATA_TYPE_COMMODITY:
             return [
                 {"name": "yfinance", "collector": "yfinance"},
                 {"name": "alpha_vantage", "collector": "alpha_vantage"},
@@ -748,9 +784,22 @@ class FinanceService:
 
         result = await collector.collect(mock_source)
         if result.success and result.items:
-            for item in result.items:
+            items = result.items
+            if source_config["collector"] == "eastmoney":
+                # Adaptation: eastmoney returns secid-style symbols (e.g. "1.000001"); map
+                # them back to standard symbols ("000001.SS") so callers can match them
+                # against MARKET_INDICES_CONFIG. Indices outside the requested list are dropped.
+                from app.collectors.finance.eastmoney_collector import EastMoneyCollector
+
+                converter = EastMoneyCollector()
+                symbol_map = {s: s for s in symbols}
+                symbol_map.update({converter._convert_symbol_to_secid(s): s for s in symbols})
+                items = [
+                    {**item, "symbol": symbol_map[item["symbol"]]} for item in items if item.get("symbol") in symbol_map
+                ]
+            for item in items:
                 item["source"] = source_config["name"]
-            return result.items
+            return items
 
         return None
 
@@ -764,7 +813,12 @@ class FinanceService:
             import httpx
 
             async with httpx.AsyncClient(timeout=10) as client:
-                response = await client.get(search_url)
+                # Yahoo rate-limits default client fingerprints (429); send browser-like
+                # headers to improve the success rate.
+                response = await client.get(search_url, headers=YAHOO_BROWSER_HEADERS)
+                if response.status_code == 429:
+                    logger.warning("Yahoo search rate-limited (429), returning empty results")
+                    return []
                 if response.status_code != 200:
                     return []
 

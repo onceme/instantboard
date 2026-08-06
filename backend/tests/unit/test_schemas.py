@@ -3,6 +3,12 @@ from datetime import datetime
 import pytest
 from pydantic import ValidationError
 
+from app.schemas.admin import (
+    TenantCreate,
+    TenantResponse,
+    TenantStatsResponse,
+    TenantUpdate,
+)
 from app.schemas.auth import (
     LogoutResponse,
     RefreshTokenRequest,
@@ -19,15 +25,22 @@ from app.schemas.category import (
     CategoryWithSourcesResponse,
     SubCategoryResponse,
 )
-from app.schemas.source import (
-    HealthCheckResult,
-    SourceCreate,
-    SourceHealthResponse,
-    SourceListParams,
-    SourceResponse,
-    SourceUpdate,
+from app.schemas.dashboard import (
+    CpuMemoryInfo,
+    DatabaseStatus,
+    DataSourceHealthDetail,
+    DataSourceHealthDetailResponse,
+    DataSourceHealthResponse,
+    DataSourceHealthSummary,
+    DiskInfo,
+    NetworkInfo,
+    SchedulerJobInfo,
+    SchedulerStatusResponse,
+    ServiceHealthResponse,
+    SSEStatsResponse,
+    SystemInfoResponse,
+    SystemMetricUpdate,
 )
-from app.schemas.item import ItemResponse
 from app.schemas.finance import (
     CommodityResponse,
     FinanceQuoteResponse,
@@ -41,30 +54,17 @@ from app.schemas.finance import (
     WatchlistOrderUpdate,
     WatchlistReorderRequest,
 )
-from app.schemas.tech import TechNewsParams, TechNewsResponse, TechTopicResponse
+from app.schemas.item import ItemResponse
+from app.schemas.source import (
+    HealthCheckResult,
+    SourceCreate,
+    SourceHealthResponse,
+    SourceListParams,
+    SourceResponse,
+    SourceUpdate,
+)
 from app.schemas.sse import SSEConnectionStatus
-from app.schemas.dashboard import (
-    CpuMemoryInfo,
-    DataSourceHealthDetail,
-    DataSourceHealthDetailResponse,
-    DataSourceHealthResponse,
-    DataSourceHealthSummary,
-    DatabaseStatus,
-    DiskInfo,
-    NetworkInfo,
-    SSEStatsResponse,
-    SchedulerJobInfo,
-    SchedulerStatusResponse,
-    ServiceHealthResponse,
-    SystemInfoResponse,
-    SystemMetricUpdate,
-)
-from app.schemas.admin import (
-    TenantCreate,
-    TenantResponse,
-    TenantStatsResponse,
-    TenantUpdate,
-)
+from app.schemas.tech import TechNewsParams, TechNewsResponse, TechTopicResponse
 
 
 class TestSSOLoginRequest:

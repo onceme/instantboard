@@ -11,13 +11,18 @@ from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+
+# Fix: import SYSTEM_TENANT_ID directly from core.constants (single source of truth, a
+# UUID constant). It used to be re-exported indirectly via source.py, and hardcoded
+# literals were scattered across call sites.
+from app.core.constants import SYSTEM_TENANT_ID
 from app.core.redis import RedisKeys, redis_get, redis_set
 from app.core.sse_router import SSEEventType, event_router
 from app.models.dashboard import DashboardSnapshot
 from app.models.source import Source, SourceHealth
 from app.models.sse import SSEConnection as SSEConnectionModel
 from app.scheduler.manager import scheduler_manager
-from app.services.source import SYSTEM_TENANT_ID, SourceService
+from app.services.source import SourceService
 
 logger = logging.getLogger(__name__)
 
@@ -472,7 +477,9 @@ class DashboardService:
             "avg_connection_duration_seconds": stats.get("avg_connection_duration_seconds", 0),
         }
 
-    async def collect_and_push_metrics(self, start_time: datetime, tenant_id: str = "system") -> None:
+    # Fix: default tenant changed from the dubious "system" string to SYSTEM_TENANT_ID
+    # (kept as str for SSE/Redis JSON serialization).
+    async def collect_and_push_metrics(self, start_time: datetime, tenant_id: str = str(SYSTEM_TENANT_ID)) -> None:
         cpu_usage = await asyncio.to_thread(psutil.cpu_percent, 0.5)
         mem = await asyncio.to_thread(psutil.virtual_memory)
         disk = await asyncio.to_thread(psutil.disk_usage, "/")
@@ -532,7 +539,9 @@ class DashboardService:
             except Exception as e:
                 logger.warning(f"Failed to push SSE metric update: {e}")
 
-    async def archive_snapshot(self, tenant_id: str = "00000000-0000-0000-0000-000000000000") -> None:
+    # Fix: use the SYSTEM_TENANT_ID constant instead of the hardcoded system-tenant UUID
+    # literal (kept as str to preserve the original runtime semantics).
+    async def archive_snapshot(self, tenant_id: str = str(SYSTEM_TENANT_ID)) -> None:
         cpu_usage = _last_metrics.get("cpu_usage_percent", 0)
         mem_total = await asyncio.to_thread(lambda: psutil.virtual_memory().total)
         mem_used = await asyncio.to_thread(lambda: psutil.virtual_memory().used)
@@ -581,7 +590,10 @@ class DashboardService:
         await self.db.commit()
 
 
-async def start_metrics_collection(start_time: datetime, tenant_id: str = "system") -> asyncio.Task:
+# Fix: default tenant changed from the dubious "system" string to SYSTEM_TENANT_ID.
+# This value flows into SSE/Redis json.dumps (needs str) and is stored as the snapshot
+# tenant_id, hence str(constant).
+async def start_metrics_collection(start_time: datetime, tenant_id: str = str(SYSTEM_TENANT_ID)) -> asyncio.Task:
     async def _periodic_loop():
         db_session_factory = None
         from app.db.session import async_session_factory

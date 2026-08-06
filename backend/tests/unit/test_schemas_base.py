@@ -61,8 +61,14 @@ class TestErrorCode:
     def test_service_unavailable(self):
         assert ErrorCode.SERVICE_UNAVAILABLE == "SERVICE_UNAVAILABLE"
 
+    def test_invalid_credentials(self):
+        assert ErrorCode.INVALID_CREDENTIALS == "INVALID_CREDENTIALS"
+
+    def test_admin_login_disabled(self):
+        assert ErrorCode.ADMIN_LOGIN_DISABLED == "ADMIN_LOGIN_DISABLED"
+
     def test_all_values_count(self):
-        assert len(ErrorCode) == 16
+        assert len(ErrorCode) == 18
 
 
 class TestErrorDetail:

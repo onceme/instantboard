@@ -31,7 +31,7 @@ class User(BaseModel):
         UniqueConstraint("tenant_id", "email", name="uq_users_tenant_email"),
         UniqueConstraint("sso_provider", "sso_provider_id", name="uq_users_sso"),
         CheckConstraint(
-            "sso_provider IN ('google', 'azure_ad', 'github', 'apple', 'facebook')",
+            "sso_provider IN ('google', 'azure_ad', 'github', 'apple', 'facebook', 'local')",
             name="chk_users_sso_provider",
         ),
         CheckConstraint(

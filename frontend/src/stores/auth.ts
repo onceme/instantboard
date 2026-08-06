@@ -4,10 +4,24 @@ import type { User, AuthTokens } from "@/types";
 import { apiPost, apiGet, apiDelete } from "@/utils/api";
 import { DEFAULT_THEME, DEFAULT_COLOR_SCHEME } from "@/utils/constants";
 
+// Which login entry created the current session: "sso" (regular front-end user) or
+// "admin" (local admin via /ibadmin). Identities are isolated per entry and never merged;
+// there is a single session slot, so a later login overwrites the earlier one.
+export type SessionEntry = "sso" | "admin";
+
+const SESSION_ENTRY_KEY = "session_entry";
+
+// Read the persisted login entry; missing/unknown values fall back to the SSO entry
+export function readStoredSessionEntry(): SessionEntry {
+  return localStorage.getItem(SESSION_ENTRY_KEY) === "admin" ? "admin" : "sso";
+}
+
 export const useAuthStore = defineStore("auth", () => {
   const user = ref<User | null>(null);
   const token = ref<string>(localStorage.getItem("access_token") || "");
   const refreshToken = ref<string>(localStorage.getItem("refresh_token") || "");
+  // Login entry of the persisted session, restored on page load
+  const sessionEntry = ref<SessionEntry>(readStoredSessionEntry());
   const isAuthenticated = computed(() => !!token.value && !!user.value);
   const tenantId = computed(() => user.value?.tenant_id || "");
   // Shared admin check used by both the router guard and useAuth
@@ -26,6 +40,22 @@ export const useAuthStore = defineStore("auth", () => {
     refreshToken.value = tokens.refresh_token;
     localStorage.setItem("access_token", tokens.access_token);
     localStorage.setItem("refresh_token", tokens.refresh_token);
+  }
+
+  function setSessionEntry(entry: SessionEntry) {
+    sessionEntry.value = entry;
+    localStorage.setItem(SESSION_ENTRY_KEY, entry);
+  }
+
+  // Clear the local session state (tokens + user + entry) without calling the backend
+  function clearSession() {
+    token.value = "";
+    refreshToken.value = "";
+    user.value = null;
+    sessionEntry.value = "sso";
+    localStorage.removeItem("access_token");
+    localStorage.removeItem("refresh_token");
+    localStorage.removeItem(SESSION_ENTRY_KEY);
   }
 
   function setColorScheme(scheme: "chinese" | "international") {
@@ -58,6 +88,25 @@ export const useAuthStore = defineStore("auth", () => {
     }
   }
 
+  function applyUserPreferences(target: User) {
+    if (target.preferences) {
+      const prefs = target.preferences;
+      if (prefs.color_scheme) setColorScheme(prefs.color_scheme);
+      if (prefs.theme) setTheme(prefs.theme);
+    }
+  }
+
+  function storeLoginResponse(data: AuthTokens & { user: User }) {
+    setTokens({
+      access_token: data.access_token,
+      refresh_token: data.refresh_token,
+      token_type: data.token_type,
+      expires_in: data.expires_in,
+    });
+    user.value = data.user;
+    applyUserPreferences(data.user);
+  }
+
   async function login(provider: string, code: string, redirectUri: string) {
     const response = await apiPost<AuthTokens & { user: User }>(
       "/auth/sso/" + provider,
@@ -66,19 +115,19 @@ export const useAuthStore = defineStore("auth", () => {
         redirect_uri: redirectUri,
       },
     );
-    setTokens({
-      access_token: response.data.access_token,
-      refresh_token: response.data.refresh_token,
-      token_type: response.data.token_type,
-      expires_in: response.data.expires_in,
-    });
-    user.value = response.data.user;
+    storeLoginResponse(response.data);
+    // SSO login creates an SSO-entry session (overwrites any previous session)
+    setSessionEntry("sso");
+  }
 
-    if (response.data.user.preferences) {
-      const prefs = response.data.user.preferences;
-      if (prefs.color_scheme) setColorScheme(prefs.color_scheme);
-      if (prefs.theme) setTheme(prefs.theme);
-    }
+  async function adminLogin(email: string, password: string) {
+    const response = await apiPost<AuthTokens & { user: User }>(
+      "/auth/admin/login",
+      { email, password },
+    );
+    storeLoginResponse(response.data);
+    // Local admin login creates an admin-entry session (overwrites any previous session)
+    setSessionEntry("admin");
   }
 
   async function fetchCurrentUser() {
@@ -90,16 +139,15 @@ export const useAuthStore = defineStore("auth", () => {
     }
   }
 
-  async function logout() {
+  // Logs out and returns the login route matching the entry of the ended session
+  async function logout(): Promise<string> {
+    const entry = sessionEntry.value;
     try {
       await apiDelete("/auth/logout");
     } finally {
-      token.value = "";
-      refreshToken.value = "";
-      user.value = null;
-      localStorage.removeItem("access_token");
-      localStorage.removeItem("refresh_token");
+      clearSession();
     }
+    return entry === "admin" ? "/ibadmin" : "/login";
   }
 
   function getSSOAuthorizeUrl(provider: string): string {
@@ -111,6 +159,7 @@ export const useAuthStore = defineStore("auth", () => {
     user,
     token,
     refreshToken,
+    sessionEntry,
     isAuthenticated,
     isAdmin,
     tenantId,
@@ -121,6 +170,8 @@ export const useAuthStore = defineStore("auth", () => {
     setTheme,
     initTheme,
     login,
+    adminLogin,
+    clearSession,
     fetchCurrentUser,
     logout,
     getSSOAuthorizeUrl,

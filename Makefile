@@ -6,6 +6,7 @@
        clean clean-data reset-db \
        prod-up prod-down \
        backend-shell frontend-shell \
+       gen-admin-hash \
        local-dev local-dev-backend local-dev-frontend
 
 # ========================================
@@ -142,6 +143,16 @@ makemigration:  ## Generate a migration file (requires msg="description")
 seed:           ## Run seed data initialization
 	$(COMPOSE) exec api python -c "from app.db.init_db import init_db; import asyncio; asyncio.run(init_db())" || \
 	cd backend && python -c "from app.db.init_db import init_db; import asyncio; asyncio.run(init_db())"
+
+# Generate a bcrypt hash for ADMIN_PASSWORD_HASH. Pass the secret via PASS=...,
+# otherwise the script prompts securely on stdin. Example:
+#   make gen-admin-hash PASS='MySecret'
+gen-admin-hash: ## Generate a bcrypt hash for ADMIN_PASSWORD_HASH (use PASS=...)
+	@if [ -x backend/.venv/bin/python ]; then \
+		cd backend && .venv/bin/python ../scripts/gen_admin_password_hash.py $(PASS); \
+	else \
+		cd backend && python ../scripts/gen_admin_password_hash.py $(PASS); \
+	fi
 
 # ========================================
 # Cleanup

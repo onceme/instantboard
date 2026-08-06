@@ -1,6 +1,6 @@
 from contextvars import ContextVar
 
-from fastapi import Depends, Query
+from fastapi import Depends, Query, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -95,3 +95,16 @@ async def get_optional_token(
 
 def get_raw_token() -> str | None:
     return _raw_token_var.get()
+
+
+def get_client_ip(request: Request) -> str:
+    """Extract the client IP, preferring the first X-Forwarded-For hop (nginx appends
+    the real peer via $proxy_add_x_forwarded_for for the /api/ locations)."""
+    forwarded_for = request.headers.get("x-forwarded-for")
+    if forwarded_for:
+        first_hop = forwarded_for.split(",")[0].strip()
+        if first_hop:
+            return first_hop
+    if request.client and request.client.host:
+        return request.client.host
+    return "unknown"

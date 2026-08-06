@@ -1,8 +1,11 @@
 import json
-from typing import Annotated
+import logging
+from typing import Annotated, Any
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
 
 
 def _parse_list_str(v: object) -> list[str]:
@@ -55,6 +58,11 @@ class Settings(BaseSettings):
     jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
     jwt_access_token_expire_minutes: int = Field(default=60, alias="JWT_ACCESS_TOKEN_EXPIRE_MINUTES")
     jwt_refresh_token_expire_days: int = Field(default=7, alias="JWT_REFRESH_TOKEN_EXPIRE_DAYS")
+
+    # Local Admin Login (isolated admin identity, see docs/design/admin-login.md)
+    admin_email: str | None = Field(default=None, alias="ADMIN_EMAIL")
+    admin_password_hash: str | None = Field(default=None, alias="ADMIN_PASSWORD_HASH")
+    admin_password: str | None = Field(default=None, alias="ADMIN_PASSWORD")
 
     # SSO Enabled Providers
     enabled_sso_providers: Annotated[list[str], NoDecode] = Field(
@@ -124,5 +132,46 @@ class Settings(BaseSettings):
     def is_development(self) -> bool:
         return self.env == "development"
 
+    @property
+    def admin_login_enabled(self) -> bool:
+        return bool(self.admin_email) and bool(self.admin_password_hash)
+
+    def model_post_init(self, __context: Any) -> None:
+        if self.admin_email is not None and not self.admin_email.strip():
+            self.admin_email = None
+        if self.admin_password_hash is not None and not self.admin_password_hash.strip():
+            self.admin_password_hash = None
+        if self.admin_password is not None and not self.admin_password.strip():
+            self.admin_password = None
+
+
+def apply_admin_password_policy(target: Settings) -> None:
+    """Resolve a plaintext ADMIN_PASSWORD into ADMIN_PASSWORD_HASH.
+
+    Allowed for non-production environments only: the password is bcrypt-hashed once at
+    startup (with a warning) and the plaintext is dropped from memory. In production a
+    configured plaintext is logged as an error and treated as unset. Hashing happens
+    outside Settings.model_post_init because app.core.security imports this module, and
+    the module-level settings instance is still being constructed at that point.
+    """
+    if not target.admin_password:
+        return
+    if target.is_production:
+        logger.error(
+            "ADMIN_PASSWORD plaintext is forbidden in production and will be ignored; "
+            "configure ADMIN_PASSWORD_HASH instead (see scripts/gen_admin_password_hash.py)"
+        )
+        target.admin_password = None
+        return
+    from app.core.security import hash_password
+
+    logger.warning(
+        "ADMIN_PASSWORD plaintext detected in a non-production environment; hashing it "
+        "once at startup. Configure ADMIN_PASSWORD_HASH instead."
+    )
+    target.admin_password_hash = hash_password(target.admin_password)
+    target.admin_password = None
+
 
 settings = Settings()
+apply_admin_password_policy(settings)

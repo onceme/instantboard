@@ -35,6 +35,10 @@ Thumbs.db
 # Logs
 *.log
 
+# SQLite test artifacts (created by the test suite via TEST_DATABASE_URL default)
+test.db
+*.sqlite3
+
 # Docker
 docker/nginx/ssl/*.pem
 docker/nginx/ssl/*.key

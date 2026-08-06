@@ -8,6 +8,19 @@ from uuid import UUID
 # which asyncpg cannot encode, causing queries to fail.
 SYSTEM_TENANT_ID: UUID = UUID("00000000-0000-0000-0000-000000000000")
 
+# Provider identifier for the local (non-SSO) admin login. Admin identities live in the
+# system tenant and are fully isolated from SSO users, even when the email matches
+# (see docs/design/admin-login.md).
+LOCAL_SSO_PROVIDER = "local"
+
+# Brute-force protection for local admin login: fixed-window counters and locks.
+ADMIN_LOGIN_MAX_FAILURES = 5
+ADMIN_LOGIN_WINDOW_SECONDS = 15 * 60
+ADMIN_LOGIN_LOCK_SECONDS = 15 * 60
+ADMIN_LOGIN_IP_MAX_FAILURES = 20
+ADMIN_LOGIN_IP_WINDOW_SECONDS = 60 * 60
+ADMIN_LOGIN_IP_LOCK_SECONDS = 60 * 60
+
 # Browser-like request headers for Yahoo Finance: staging tests showed the default client
 # fingerprint gets anti-bot rate-limited with HTTP 429 (TLS itself works fine).
 # Masquerading as a browser improves the success rate. Shared by services/finance.py and

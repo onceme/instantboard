@@ -1,7 +1,7 @@
 import logging
 import secrets
 
-from fastapi import APIRouter, Body, Depends, Query
+from fastapi import APIRouter, Body, Depends, Query, Request
 from pydantic import BaseModel
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,8 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.core.exceptions import ValidationError
 from app.core.sso_handlers import SUPPORTED_PROVIDERS, SSOHandlerFactory
-from app.dependencies import get_current_user, get_db, get_raw_token, get_redis
+from app.dependencies import get_client_ip, get_current_user, get_db, get_raw_token, get_redis
 from app.schemas.auth import (
+    AdminLoginRequest,
     LogoutResponse,
     RefreshTokenRequest,
     RefreshTokenResponse,
@@ -77,6 +78,18 @@ async def sso_login(
         )
     service = AuthService(db, redis)
     result = await service.sso_login(provider, request.code, request.redirect_uri)
+    return SuccessResponse(data=TokenResponse(**result))
+
+
+@router.post("/admin/login", response_model=SuccessResponse[TokenResponse])
+async def admin_login(
+    request: AdminLoginRequest,
+    http_request: Request,
+    db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+):
+    service = AuthService(db, redis)
+    result = await service.admin_login(request.email, request.password, get_client_ip(http_request))
     return SuccessResponse(data=TokenResponse(**result))
 
 

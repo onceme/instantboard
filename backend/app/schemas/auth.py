@@ -1,11 +1,17 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 
 
 class SSOLoginRequest(BaseModel):
     code: str
     redirect_uri: str
+
+
+class AdminLoginRequest(BaseModel):
+    email: EmailStr
+    # bcrypt only uses the first 72 bytes; reject longer input at the schema level.
+    password: str = Field(max_length=72)
 
 
 class TokenResponse(BaseModel):

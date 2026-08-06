@@ -34,6 +34,14 @@ class MockRedis:
     async def delete(self, key):
         self._data.pop(key, None)
 
+    async def incr(self, key):
+        value = int(self._data.get(key, 0)) + 1
+        self._data[key] = value
+        return value
+
+    async def expire(self, key, seconds):
+        return key in self._data
+
     async def publish(self, channel, message):
         pass
 

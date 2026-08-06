@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { TrendingUp, Code, Activity, Settings, LogOut } from "lucide-vue-next";
 import { useAuthStore } from "@/stores/auth";
 import ThemeToggle from "@/components/common/ThemeToggle.vue";
@@ -15,19 +15,33 @@ const emit = defineEmits<{
 }>();
 
 const route = useRoute();
+const router = useRouter();
 const authStore = useAuthStore();
 
-const navItems = [
+// SSO-entry sessions keep the full front-end navigation
+const FRONT_NAV_ITEMS = [
   { path: "/finance", name: "财经", icon: TrendingUp },
   { path: "/tech", name: "科技", icon: Code },
   { path: "/dashboard", name: "仪表盘", icon: Activity },
   { path: "/settings", name: "设置", icon: Settings },
 ];
 
+// Admin-entry sessions only expose back-office entries
+const ADMIN_NAV_ITEMS = [
+  { path: "/dashboard", name: "仪表盘", icon: Activity },
+  { path: "/settings", name: "设置", icon: Settings },
+];
+
+const navItems = computed(() =>
+  authStore.sessionEntry === "admin" ? ADMIN_NAV_ITEMS : FRONT_NAV_ITEMS,
+);
+
 const currentPath = computed(() => route.path);
 
-function handleLogout() {
-  authStore.logout();
+async function handleLogout() {
+  // logout() returns the login route matching the current session entry
+  const target = await authStore.logout();
+  router.push(target);
 }
 
 const userName = computed(() => authStore.user?.name || "用户");

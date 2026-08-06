@@ -64,6 +64,26 @@ class InvalidRefreshToken(AppException):
         )
 
 
+class InvalidCredentials(AppException):
+    # Unified 401 for local admin login failures (wrong password, unknown email, or
+    # active brute-force lock). The message never reveals which reason applied.
+    def __init__(self, message: str = "Incorrect email or password"):
+        super().__init__(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            error_code=ErrorCode.INVALID_CREDENTIALS,
+            message=message,
+        )
+
+
+class AdminLoginDisabled(AppException):
+    def __init__(self, message: str = "Admin login is not enabled"):
+        super().__init__(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            error_code=ErrorCode.ADMIN_LOGIN_DISABLED,
+            message=message,
+        )
+
+
 class SSOProviderError(AppException):
     # Fix: upstream SSO provider failures are gateway/upstream errors and should return
     # 502, not 401. A 401 triggers the frontend axios interceptor to hard-redirect to the

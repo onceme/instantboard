@@ -37,8 +37,10 @@ export function useAuth() {
   }
 
   async function logout() {
-    await authStore.logout();
-    router.push("/login");
+    // logout() returns the login route matching the current session entry
+    // (admin sessions go back to /ibadmin, SSO sessions to /login)
+    const target = await authStore.logout();
+    router.push(target);
   }
 
   function isAdmin(): boolean {

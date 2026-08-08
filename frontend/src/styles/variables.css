@@ -96,7 +96,25 @@
   --down-color: #f87171;
 }
 
-@media (max-width: 768px) {
+/*
+ * Responsive breakpoint system: 640 / 768 / 1024 / 1440 / 1920 (px).
+ *
+ * Based on the most common screen resolutions (w3schools data):
+ * 1920x1080, 1366x768, 1536x864, 1280x720 and above, plus mobile
+ * phone widths of 360-430px. Coverage per tier:
+ *   <640px         small phones (360-430px wide)
+ *   640-767px      large phones / small tablets (still mobile layout)
+ *   768-1023px     tablets, portrait and landscape
+ *   1024-1439px    laptops, incl. 1366x768 and 1280x800
+ *   1440-1919px    large laptops / desktops, incl. 1536x864
+ *   >=1920px       full HD and above (1920x1080, 2K)
+ *
+ * The JS breakpoints in src/utils/constants.ts (useResponsive) use the
+ * same thresholds. Modern evergreen browsers only — no vendor prefixes.
+ */
+
+/* <768px: mobile — sidebar off-canvas, tighter paddings */
+@media (max-width: 767px) {
   :root {
     --sidebar-width: 0px;
     --right-panel-width: 0px;
@@ -104,6 +122,7 @@
   }
 }
 
+/* 768-1023px: tablet — collapsed icon-rail sidebar */
 @media (min-width: 768px) and (max-width: 1023px) {
   :root {
     --sidebar-width: 60px;
@@ -111,7 +130,8 @@
   }
 }
 
-@media (min-width: 1024px) and (max-width: 1365px) {
+/* 1024-1439px: laptop — full sidebar but right panel hidden */
+@media (min-width: 1024px) and (max-width: 1439px) {
   :root {
     --right-panel-width: 0px;
   }

@@ -66,7 +66,8 @@ const currentPanel = computed(() => financeStore.currentPanel);
   flex-shrink: 0;
 }
 
-@media (max-width: 1365px) {
+/* Right panel only from the xl breakpoint (1440px) onward */
+@media (max-width: 1439px) {
   .finance-right {
     display: none;
   }

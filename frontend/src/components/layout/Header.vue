@@ -30,11 +30,31 @@ const pageTitle = computed(() => {
   return titles[route.name as string] || "InstantBoard";
 });
 
+// Routes that actually maintain an SSE connection; on any other route
+// (e.g. /settings) the indicator is hidden instead of faking a red "disconnected"
+const SSE_ROUTES = ["/finance", "/tech", "/dashboard"];
+
+const showSseIndicator = computed(() =>
+  SSE_ROUTES.some((prefix) => route.path.startsWith(prefix)),
+);
+
 const sseState = computed(() => {
   if (route.path.startsWith("/finance")) return financeStore.sseState;
   if (route.path.startsWith("/tech")) return techStore.sseState;
   if (route.path.startsWith("/dashboard")) return dashboardStore.sseState;
   return SSEConnectionState.DISCONNECTED;
+});
+
+const sseLabel = computed(() => {
+  switch (sseState.value) {
+    case SSEConnectionState.CONNECTED:
+      return "实时推送：已连接";
+    case SSEConnectionState.RECONNECTING:
+    case SSEConnectionState.CONNECTING:
+      return "实时推送：重连中";
+    default:
+      return "实时推送：已断开";
+  }
 });
 
 const sseColorClass = computed(() => {
@@ -64,9 +84,20 @@ const userName = computed(() => authStore.user?.name || "用户");
     </h1>
 
     <div class="header-actions">
-      <div class="sse-indicator" :class="sseColorClass">
-        <Wifi v-if="sseState === SSEConnectionState.CONNECTED" :size="16" />
-        <WifiOff v-else :size="16" />
+      <div
+        v-if="showSseIndicator"
+        class="sse-indicator"
+        :class="sseColorClass"
+        role="status"
+        :title="sseLabel"
+        :aria-label="sseLabel"
+      >
+        <Wifi
+          v-if="sseState === SSEConnectionState.CONNECTED"
+          :size="16"
+          aria-hidden="true"
+        />
+        <WifiOff v-else :size="16" aria-hidden="true" />
       </div>
 
       <ThemeToggle />

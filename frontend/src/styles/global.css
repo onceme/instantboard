@@ -202,7 +202,8 @@ textarea:focus {
   overflow: hidden;
 }
 
-@media (max-width: 768px) {
+/* <768px: mobile (see breakpoint system in variables.css) */
+@media (max-width: 767px) {
   html {
     font-size: 13px;
   }

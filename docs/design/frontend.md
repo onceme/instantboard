@@ -222,6 +222,8 @@ graph TD
 
 ### 3.3 响应式布局策略
 
+> ⚠️ 本节断点为早期草案（含 1366px 阈值），已被 §3.10 的统一断点标准（640/768/1024/1440/1920）取代，仅保留作为设计背景。
+
 **基于 W3Schools 数据的断点设计**:
 
 | 断点名称 | CSS 断点 | 目标分辨率 | 占比 | 布局策略 |
@@ -446,6 +448,28 @@ CSS 变量实现:
 - MarketTicker 移动端改为竖向列表
 - SSE 连接在移动端降低刷新频率 (30s → 60s 心跳)
 
+### 3.10 响应式断点（现行统一标准，2026-08 修订）
+
+取代 §3.3 草案中的旧断点（旧 `lg: 1366` 阈值全部迁移至 1440）。CSS 媒体查询（`variables.css`、`global.css` 及各组件 scoped 样式）与 JS 断点（`src/utils/constants.ts` 的 `BREAKPOINTS` + `src/composables/useResponsive.ts`）必须保持同一套阈值。
+
+**断点表**:
+
+| 档位 | JS 名称 | 宽度区间 | CSS 阈值 | 目标设备 | 布局行为 |
+|------|---------|----------|----------|----------|----------|
+| 1 | `xs` | <640px | `max-width: 767px`（与 sm 合并为移动端） | 手机竖屏（360–430px 宽） | 单列；侧边栏 off-canvas（汉堡+遮罩）；SubNav 下拉化 |
+| 2 | `sm` | 640–767px | 同上 | 大屏手机 / 小平板 | 同 `xs`（仍走 <768px 移动端逻辑） |
+| 3 | `md` | 768–1023px | `min-width: 768px` | 平板竖屏/横屏（768×1024 等） | 侧边栏折叠为 60px 图标栏；右栏隐藏 |
+| 4 | `lg` | 1024–1439px | `min-width: 1024px` | 笔记本（含 1366×768、1536×864 缩放后、1280×800） | 侧边栏展开 220px；右栏隐藏 |
+| 5 | `xl` | 1440–1919px | `min-width: 1440px` | 大屏笔记本/桌面（1536×864、1440×900） | 完整三列：侧边栏 + 主内容 + 300px 右栏 |
+| 6 | `xxl` | ≥1920px | `min-width: 1920px` | 全高清及以上（1920×1080、2K） | 同 `xl`；主内容区 `max-width: 1600px` 居中，防止超宽拉伸 |
+
+**数据来源**: w3schools 主流浏览器分辨率统计（Top resolutions: 1920×1080、1366×768、1536×864、1280×720 等），叠加移动端常见视口宽度 360/390/412px。目标浏览器为 Chrome/Edge/Safari/Firefox 现代版本，无需厂商前缀。
+
+**配套规则**:
+- 侧边栏遮挡补偿：`.main-area` 的 `margin-left` 跟随与 Sidebar 相同的折叠状态源（`useResponsive().sidebarCollapsed`），取值 `var(--sidebar-width)` / 折叠态 `var(--sidebar-collapsed-width)`，<768px 归零（off-canvas）。
+- 内容宽度上限：`.main-content` 统一 `max-width: 1600px; margin: 0 auto;`，一处覆盖全部视图。
+- 右栏显隐双保险：JS `showRightPanel`（≥1440px）与 CSS `--right-panel-width`/`max-width: 1439px` 隐藏规则阈值一致。
+
 ## 4. 关键决策
 
 | 决策 | 选择 | 理由 |
@@ -456,7 +480,7 @@ CSS 变量实现:
 | 图表库 | Chart.js | 轻量(~60KB gzip)、足够满足Dashboard需求、无D3的复杂性 |
 | 图标库 | Lucide Icons | 轻量SVG图标、Vue组件式使用、树摇优化 |
 | HTTP客户端 | axios | 拦截器方便(JWT注入)、错误处理统一 |
-| 响应式策略 | 5断点分级 | 精确覆盖W3Schools分辨率分布 |
+| 响应式策略 | 6档断点分级 640/768/1024/1440/1920（见 §3.10） | 精确覆盖W3Schools分辨率分布 |
 | 主题切换 | CSS变量 + data-theme | 运行时切换、无需重建CSS、性能好 |
 
 ## 5. 边界情况

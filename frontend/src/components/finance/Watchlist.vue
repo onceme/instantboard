@@ -192,4 +192,23 @@ async function retryWatchlist() {
   color: var(--danger);
   background-color: rgba(239, 68, 68, 0.1);
 }
+
+/* <768px: row min-widths exceed ~360px viewports; stack the change column
+   and shrink min-widths so symbol/price/change fit without overflowing */
+@media (max-width: 767px) {
+  .item-symbol-name {
+    overflow: hidden;
+  }
+
+  .item-price {
+    min-width: 64px;
+  }
+
+  .item-change {
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0;
+    min-width: 72px;
+  }
+}
 </style>

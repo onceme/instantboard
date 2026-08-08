@@ -1,9 +1,13 @@
+// Responsive breakpoints in px, aligned with the CSS media queries.
+// Based on the most common screen resolutions (w3schools data):
+// 1920x1080, 1536x864, 1366x768, 1280x720 plus mobile widths 360-430px.
 export const BREAKPOINTS = {
-  xs: 0,
-  sm: 768,
-  md: 1024,
-  lg: 1366,
-  xl: 1920,
+  xs: 0, // <640: phones (360-430px wide)
+  sm: 640, // 640-767: large phones / small tablets, still mobile layout
+  md: 768, // 768-1023: tablets portrait/landscape, collapsed icon sidebar
+  lg: 1024, // 1024-1439: laptops incl. 1366x768, full sidebar, no right panel
+  xl: 1440, // 1440-1919: large laptops / desktops incl. 1536x864, right panel on
+  xxl: 1920, // >=1920: full HD and above (1920x1080, 2K)
 };
 
 export const SIDEBAR_WIDTH = 220;

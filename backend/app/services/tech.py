@@ -178,11 +178,21 @@ class TechService:
             )
         )
 
+        # JSONB containment filters. topic_tags is a JSONB column, so the right operand
+        # of @> must be jsonb as well. Routing the filter through the ORM comparator
+        # (Item.topic_tags.contains(...)) makes SQLAlchemy type the bound value with the
+        # column's JSONB type and emit "@> :param::JSONB", letting asyncpg send a real
+        # jsonb value. The previous raw `text(...).bindparams(tag=json.dumps([...]))`
+        # typed the operand as varchar, which PostgreSQL rejects ("operator does not
+        # exist: jsonb @> character varying") -> every domain/subcategory-filtered
+        # /tech/news request 500'd on PostgreSQL. This stays backend-safe because the
+        # expression is only ever executed against PostgreSQL (sqlite unit tests mock
+        # the session), and the value is a bound parameter, never string-interpolated.
         if domain and domain in VALID_DOMAINS:
-            stmt = stmt.where(text("topic_tags @> :domain_tag").bindparams(domain_tag=json.dumps([domain])))
+            stmt = stmt.where(Item.topic_tags.contains([domain]))
 
         if subcategory:
-            stmt = stmt.where(text("topic_tags @> :subcat_tag").bindparams(subcat_tag=json.dumps([subcategory])))
+            stmt = stmt.where(Item.topic_tags.contains([subcategory]))
 
         if source_id:
             stmt = stmt.where(Item.source_id == source_id)

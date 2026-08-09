@@ -104,7 +104,10 @@ function switchToGridMode() {
 
 .category-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  /* minmax(0, 1fr) instead of bare 1fr: grid items default to min-width auto,
+     so long titles could otherwise widen the track past the container and
+     create page-level horizontal overflow */
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
 

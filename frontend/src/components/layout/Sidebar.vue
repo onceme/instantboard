@@ -9,7 +9,6 @@ const props = defineProps<{
   collapsed: boolean;
   mobileVisible: boolean;
 }>();
-
 const emit = defineEmits<{
   close: [];
 }>();
@@ -36,6 +35,11 @@ const navItems = computed(() =>
   authStore.sessionEntry === "admin" ? ADMIN_NAV_ITEMS : FRONT_NAV_ITEMS,
 );
 
+// Labels/user section are visible when the sidebar is expanded OR when the
+// mobile drawer is open (on mobile `collapsed` is always true, so without
+// this the drawer would render as a bare icon rail)
+const showLabels = computed(() => !props.collapsed || props.mobileVisible);
+
 const currentPath = computed(() => route.path);
 
 async function handleLogout() {
@@ -57,7 +61,7 @@ const userName = computed(() => authStore.user?.name || "用户");
   >
     <div class="sidebar-header">
       <div class="brand-logo">IB</div>
-      <span v-if="!props.collapsed" class="brand-name">InstantBoard</span>
+      <span v-if="showLabels" class="brand-name">InstantBoard</span>
     </div>
 
     <nav class="sidebar-nav">
@@ -74,13 +78,13 @@ const userName = computed(() => authStore.user?.name || "用户");
         @click="emit('close')"
       >
         <component :is="item.icon" class="nav-icon" :size="20" />
-        <span v-if="!props.collapsed" class="nav-label">{{ item.name }}</span>
+        <span v-if="showLabels" class="nav-label">{{ item.name }}</span>
       </router-link>
     </nav>
 
     <div class="sidebar-footer">
-      <ThemeToggle v-if="!props.collapsed" />
-      <div v-if="!props.collapsed" class="user-section">
+      <ThemeToggle v-if="showLabels" />
+      <div v-if="showLabels" class="user-section">
         <div class="user-info">
           <div class="user-avatar">
             {{ userName.charAt(0) }}
@@ -113,11 +117,6 @@ const userName = computed(() => authStore.user?.name || "用户");
 
 .sidebar.collapsed {
   width: var(--sidebar-collapsed-width);
-}
-
-.sidebar.mobile-visible {
-  width: 220px;
-  transform: translateX(0);
 }
 
 .sidebar-header {
@@ -242,16 +241,30 @@ const userName = computed(() => authStore.user?.name || "用户");
   color: #f87171;
 }
 
+/* <768px (mobile breakpoint, see variables.css): the sidebar becomes an
+   off-canvas drawer. On mobile `collapsed` is always true as well, so the
+   explicit `.collapsed.mobile-visible` rule (highest specificity) must win,
+   otherwise the drawer stays translated off-screen and never appears. */
 @media (max-width: 767px) {
   .sidebar {
     transform: translateX(-100%);
-    width: 220px;
+    width: min(280px, 85vw);
+    box-shadow: var(--shadow-lg);
   }
-  .sidebar.mobile-visible {
-    transform: translateX(0);
-  }
+
   .sidebar.collapsed {
     transform: translateX(-100%);
+    width: min(280px, 85vw);
+  }
+
+  .sidebar.mobile-visible {
+    transform: translateX(0);
+    width: min(280px, 85vw);
+  }
+
+  .sidebar.collapsed.mobile-visible {
+    transform: translateX(0);
+    width: min(280px, 85vw);
   }
 }
 </style>

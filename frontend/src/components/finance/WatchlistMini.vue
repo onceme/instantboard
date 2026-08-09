@@ -105,7 +105,8 @@ function changeClass(changePercent: number): string {
 
 .mini-item {
   display: grid;
-  grid-template-columns: auto 1fr auto auto;
+  /* minmax(0, 1fr) keeps long names from widening the middle track */
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   gap: 8px;
   align-items: center;
   padding: 6px 0;

@@ -1,13 +1,17 @@
 // Responsive breakpoints in px, aligned with the CSS media queries.
-// Based on the most common screen resolutions (w3schools data):
-// 1920x1080, 1536x864, 1366x768, 1280x720 plus mobile widths 360-430px.
+// Sized against the W3Schools browser display statistics (top desktop
+// resolutions: 1920x1080 18.4%, 1366x768 18.2%, 1280x1024/1280x800 ~1%
+// each, "other high" 47.2% incl. 1536x864/1440x900/2560x1440) plus the
+// dominant phone widths (360/375/390/393/414) and tablet widths
+// (768/820/834 portrait, 1024+ landscape). See variables.css for the
+// full tier-by-tier coverage table.
 export const BREAKPOINTS = {
-  xs: 0, // <640: phones (360-430px wide)
-  sm: 640, // 640-767: large phones / small tablets, still mobile layout
-  md: 768, // 768-1023: tablets portrait/landscape, collapsed icon sidebar
-  lg: 1024, // 1024-1439: laptops incl. 1366x768, full sidebar, no right panel
-  xl: 1440, // 1440-1919: large laptops / desktops incl. 1536x864, right panel on
-  xxl: 1920, // >=1920: full HD and above (1920x1080, 2K)
+  xs: 0, // <640: phones (360x800, 390x844, 393x873, 414x896, ...)
+  sm: 640, // 640-767: large phones / phablets, still mobile drawer layout
+  md: 768, // 768-1023: tablets portrait (iPad 768/820/834), 60px icon rail
+  lg: 1024, // 1024-1439: tablet landscape + laptops (1024x768, 1280x800, 1366x768)
+  xl: 1440, // 1440-1919: large laptops / desktops (1440x900, 1536x864), right panel on
+  xxl: 1920, // >=1920: full HD+ (1920x1080, 2560x1440), content capped at 1600px
 };
 
 export const SIDEBAR_WIDTH = 220;

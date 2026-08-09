@@ -2,7 +2,16 @@ import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import type { User, AuthTokens } from "@/types";
 import { apiPost, apiGet, apiDelete } from "@/utils/api";
-import { DEFAULT_THEME, DEFAULT_COLOR_SCHEME } from "@/utils/constants";
+import {
+  DEFAULT_THEME,
+  DEFAULT_THEME_MODE,
+  DEFAULT_COLOR_SCHEME,
+} from "@/utils/constants";
+
+// Theme selection can be pinned to light/dark or follow the OS preference ("system")
+export type ThemeMode = "light" | "dark" | "system";
+
+const THEME_STORAGE_KEY = "theme";
 
 // Which login entry created the current session: "sso" (regular front-end user) or
 // "admin" (local admin via /ibadmin). Identities are isolated per entry and never merged;
@@ -15,6 +24,27 @@ const SESSION_ENTRY_KEY = "session_entry";
 export function readStoredSessionEntry(): SessionEntry {
   return localStorage.getItem(SESSION_ENTRY_KEY) === "admin" ? "admin" : "sso";
 }
+
+// Read the persisted theme mode; legacy stored values only carry "light"/"dark"
+export function readStoredThemeMode(): ThemeMode {
+  const stored = localStorage.getItem(THEME_STORAGE_KEY);
+  return stored === "light" || stored === "dark" || stored === "system"
+    ? stored
+    : DEFAULT_THEME_MODE;
+}
+
+// Resolve a theme mode to the concrete light/dark value actually applied to the DOM.
+// "system" follows the live OS preference. Kept matchMedia-free at import time.
+function resolveThemeMode(mode: ThemeMode): "light" | "dark" {
+  if (mode !== "system") return mode;
+  return typeof window !== "undefined" &&
+    window.matchMedia("(prefers-color-scheme: dark)").matches
+    ? "dark"
+    : "light";
+}
+
+// Guard so the OS-preference listener is attached once per page, not per store init
+let systemThemeListenerInstalled = false;
 
 export const useAuthStore = defineStore("auth", () => {
   const user = ref<User | null>(null);
@@ -31,8 +61,12 @@ export const useAuthStore = defineStore("auth", () => {
     (localStorage.getItem("color_scheme") as "chinese" | "international") ||
       DEFAULT_COLOR_SCHEME,
   );
+  // Persisted selection: explicit light/dark, or "system" to follow the OS preference
+  const themeMode = ref<ThemeMode>(readStoredThemeMode());
+  // The theme actually applied to the document (always resolves to light/dark).
+  // Initialized without touching matchMedia; initTheme() resolves "system" properly.
   const theme = ref<"light" | "dark">(
-    (localStorage.getItem("theme") as "light" | "dark") || DEFAULT_THEME,
+    themeMode.value === "system" ? DEFAULT_THEME : themeMode.value,
   );
 
   function setTokens(tokens: AuthTokens) {
@@ -64,20 +98,41 @@ export const useAuthStore = defineStore("auth", () => {
     document.documentElement.setAttribute("data-color-scheme", scheme);
   }
 
+  function applyThemeAttribute(resolved: "light" | "dark") {
+    document.documentElement.setAttribute("data-theme", resolved);
+  }
+
+  // Persist the mode and apply the resolved light/dark theme to the document
+  function setThemeMode(mode: ThemeMode) {
+    themeMode.value = mode;
+    localStorage.setItem(THEME_STORAGE_KEY, mode);
+    const resolved = resolveThemeMode(mode);
+    theme.value = resolved;
+    applyThemeAttribute(resolved);
+  }
+
   function setTheme(newTheme: "light" | "dark") {
-    theme.value = newTheme;
-    localStorage.setItem("theme", newTheme);
-    document.documentElement.setAttribute("data-theme", newTheme);
+    setThemeMode(newTheme);
+  }
+
+  // Live OS preference updates, only meaningful while mode === "system"
+  function onSystemThemeChange() {
+    if (themeMode.value !== "system") return;
+    const resolved = resolveThemeMode("system");
+    theme.value = resolved;
+    applyThemeAttribute(resolved);
   }
 
   function initTheme() {
-    const stored = localStorage.getItem("theme");
-    if (stored) {
-      setTheme(stored as "light" | "dark");
-    } else if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
-      setTheme("dark");
-    } else {
-      setTheme(DEFAULT_THEME);
+    // Re-resolve the persisted mode ("system" picks up the current OS preference)
+    setThemeMode(themeMode.value);
+
+    // Track OS preference changes while following the system theme
+    if (!systemThemeListenerInstalled && typeof window !== "undefined") {
+      systemThemeListenerInstalled = true;
+      window
+        .matchMedia("(prefers-color-scheme: dark)")
+        .addEventListener("change", onSystemThemeChange);
     }
 
     const storedScheme = localStorage.getItem("color_scheme");
@@ -165,9 +220,11 @@ export const useAuthStore = defineStore("auth", () => {
     tenantId,
     colorScheme,
     theme,
+    themeMode,
     setTokens,
     setColorScheme,
     setTheme,
+    setThemeMode,
     initTheme,
     login,
     adminLogin,

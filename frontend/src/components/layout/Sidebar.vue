@@ -31,9 +31,15 @@ const ADMIN_NAV_ITEMS = [
   { path: "/settings", name: "设置", icon: Settings },
 ];
 
-const navItems = computed(() =>
-  authStore.sessionEntry === "admin" ? ADMIN_NAV_ITEMS : FRONT_NAV_ITEMS,
-);
+const navItems = computed(() => {
+  if (authStore.sessionEntry === "admin") return ADMIN_NAV_ITEMS;
+  // /dashboard requires the admin role (see router guard); hide the entry from
+  // regular SSO users so the menu matches what they can actually open.
+  // Settings stays visible for everyone — the /settings route has no admin gate.
+  return FRONT_NAV_ITEMS.filter(
+    (item) => item.path !== "/dashboard" || authStore.isAdmin,
+  );
+});
 
 // Labels/user section are visible when the sidebar is expanded OR when the
 // mobile drawer is open (on mobile `collapsed` is always true, so without

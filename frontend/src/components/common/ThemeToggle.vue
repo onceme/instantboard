@@ -1,18 +1,34 @@
 <script setup lang="ts">
+import { computed } from "vue";
 import { useTheme } from "@/composables/useTheme";
-import { Sun, Moon } from "lucide-vue-next";
+import { Sun, Moon, Monitor } from "lucide-vue-next";
 
-const { theme, toggleTheme } = useTheme();
+const { theme, themeMode, toggleTheme } = useTheme();
+
+// Button icon reflects the current mode: Sun=亮色, Moon=暗色, Monitor=跟随系统.
+// Clicking cycles 亮色 → 暗色 → 跟随系统 (kept in sync with ProfileSettings).
+const toggleTitle = computed(() => {
+  switch (themeMode.value) {
+    case "light":
+      return "当前主题：亮色（点击切换为暗色）";
+    case "dark":
+      return "当前主题：暗色（点击切换为跟随系统）";
+    default:
+      return `当前主题：跟随系统（${theme.value === "dark" ? "暗色" : "亮色"}，点击切换为亮色）`;
+  }
+});
 </script>
 
 <template>
   <button
     class="theme-toggle"
-    :title="theme === 'dark' ? '切换亮色' : '切换暗色'"
+    :title="toggleTitle"
+    :aria-label="toggleTitle"
     @click="toggleTheme"
   >
-    <Sun v-if="theme === 'dark'" :size="18" />
-    <Moon v-else :size="18" />
+    <Sun v-if="themeMode === 'light'" :size="18" />
+    <Moon v-else-if="themeMode === 'dark'" :size="18" />
+    <Monitor v-else :size="18" />
   </button>
 </template>
 

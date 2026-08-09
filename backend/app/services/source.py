@@ -9,6 +9,7 @@ from sqlalchemy.orm import selectinload
 # Fix: the local SYSTEM_TENANT_ID used to be the string "system", which asyncpg failed to
 # encode when compared against a UUID column. Reuse the UUID constant from core.constants
 # instead (keeping the original exported name so modules like dashboard still work).
+from app.collectors import resolve_collector
 from app.core.constants import SYSTEM_TENANT_ID
 from app.core.exceptions import CategoryNotFound, Forbidden, SourceNotFound, ValidationError
 from app.core.redis import RedisKeys, redis_delete, redis_hset, redis_publish
@@ -57,6 +58,10 @@ def _source_to_response(source: Source) -> SourceResponse:
         refresh_interval_seconds=refresh_interval,
         is_active=source.is_active,
         priority=source.priority,
+        # Whether a collector can actually run for this source (source_type match or
+        # config.library fallback). The UI uses this to explain why a source cannot
+        # be enabled instead of failing silently.
+        collector_available=resolve_collector(source.source_type, source.config) is not None,
         health_status=health_status,
         last_fetch_at=last_fetch_at,
         last_error=last_error,
@@ -156,6 +161,9 @@ class SourceService:
         )
 
     async def get_source(self, source_id: str, tenant_id: str) -> SuccessResponse[SourceResponse]:
+        # tenant_id arrives as a str from the JWT while ORM attributes are UUID objects;
+        # normalize before comparing so ownership checks work in both directions
+        tenant_id = str(tenant_id)
         stmt = (
             select(Source)
             .where(Source.id == source_id)
@@ -170,7 +178,7 @@ class SourceService:
         if source is None:
             raise SourceNotFound()
 
-        if source.tenant_id != tenant_id and source.tenant_id != SYSTEM_TENANT_ID:
+        if str(source.tenant_id) != tenant_id and source.tenant_id != SYSTEM_TENANT_ID:
             raise SourceNotFound(message="Source not accessible for this tenant")
 
         return SuccessResponse(
@@ -179,6 +187,7 @@ class SourceService:
         )
 
     async def create_source(self, data: SourceCreate, tenant_id: str) -> SuccessResponse[SourceResponse]:
+        tenant_id = str(tenant_id)
         tenant_stmt = select(Tenant).where(Tenant.id == tenant_id)
         tenant = (await self.db.execute(tenant_stmt)).scalar_one_or_none()
         if tenant is None:
@@ -202,7 +211,9 @@ class SourceService:
         if category is None:
             raise CategoryNotFound(message="Referenced category not found")
 
-        if category.tenant_id != tenant_id and category.tenant_id != SYSTEM_TENANT_ID:
+        # str() on both sides: category.tenant_id is a UUID ORM attribute, the JWT
+        # tenant id is a str — a direct comparison would never match (bug)
+        if str(category.tenant_id) != tenant_id and category.tenant_id != SYSTEM_TENANT_ID:
             raise ValidationError(message="Cannot add sources to categories from other tenants")
 
         config = data.config or {}
@@ -279,6 +290,7 @@ class SourceService:
         data: SourceUpdate,
         tenant_id: str,
     ) -> SuccessResponse[SourceResponse]:
+        tenant_id = str(tenant_id)
         stmt = (
             select(Source)
             .where(Source.id == source_id)
@@ -293,10 +305,13 @@ class SourceService:
         if source is None:
             raise SourceNotFound()
 
-        if source.tenant_id != tenant_id:
+        # str() on both sides: source.tenant_id is a UUID ORM attribute, the JWT
+        # tenant id is a str — a direct comparison would reject every update.
+        # System (seed) sources are editable by their owning tenant, i.e. the admin
+        # session which lives in the system tenant itself (e.g. to enable seeded
+        # sources); all other tenants are rejected by the ownership check.
+        if str(source.tenant_id) != tenant_id:
             raise Forbidden(message="Cannot update sources from other tenants")
-        if source.tenant_id == SYSTEM_TENANT_ID:
-            raise Forbidden(message="Cannot update system-level sources")
 
         update_data = data.model_dump(exclude_unset=True)
 
@@ -328,6 +343,7 @@ class SourceService:
         )
 
     async def delete_source(self, source_id: str, tenant_id: str) -> None:
+        tenant_id = str(tenant_id)
         stmt = select(Source).where(Source.id == source_id).options(selectinload(Source.category))
         result = await self.db.execute(stmt)
         source = result.scalar_one_or_none()
@@ -335,7 +351,7 @@ class SourceService:
         if source is None:
             raise SourceNotFound()
 
-        if source.tenant_id != tenant_id:
+        if str(source.tenant_id) != tenant_id:
             raise Forbidden(message="Cannot delete sources from other tenants")
         if source.tenant_id == SYSTEM_TENANT_ID:
             raise Forbidden(message="Cannot delete system-level sources")
@@ -357,6 +373,7 @@ class SourceService:
         await self.db.flush()
 
     async def get_source_health(self, source_id: str, tenant_id: str) -> SuccessResponse[SourceHealthResponse]:
+        tenant_id = str(tenant_id)
         stmt = select(SourceHealth).where(SourceHealth.source_id == source_id)
         result = await self.db.execute(stmt)
         health = result.scalar_one_or_none()
@@ -366,7 +383,7 @@ class SourceService:
             source = (await self.db.execute(source_stmt)).scalar_one_or_none()
             if source is None:
                 raise SourceNotFound()
-            if source.tenant_id != tenant_id and source.tenant_id != SYSTEM_TENANT_ID:
+            if str(source.tenant_id) != tenant_id and source.tenant_id != SYSTEM_TENANT_ID:
                 raise SourceNotFound(message="Source not accessible for this tenant")
 
             return SuccessResponse(
@@ -384,7 +401,7 @@ class SourceService:
         source = (await self.db.execute(source_stmt)).scalar_one_or_none()
         if source is None:
             raise SourceNotFound()
-        if source.tenant_id != tenant_id and source.tenant_id != SYSTEM_TENANT_ID:
+        if str(source.tenant_id) != tenant_id and source.tenant_id != SYSTEM_TENANT_ID:
             raise SourceNotFound(message="Source not accessible for this tenant")
 
         return SuccessResponse(

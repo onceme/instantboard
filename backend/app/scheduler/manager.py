@@ -295,7 +295,7 @@ class AsyncSchedulerManager:
         try:
             from sqlalchemy import select
 
-            from app.collectors import get_collector
+            from app.collectors import resolve_collector
             from app.db.session import async_session_factory
             from app.processors import create_default_processor_chain
             from app.services.sse import SSEService
@@ -323,22 +323,19 @@ class AsyncSchedulerManager:
                 if source.category:
                     _source_category_cache[str(source.id)] = source.category.slug
 
-                collector_cls = get_collector(source.source_type)
+                # Collector selection: source_type match first, then the config.library
+                # fallback (resolve_collector in app.collectors). Template sources like
+                # source_type=api + library=yfinance / web_scrape + library=eastmoney
+                # resolve to their real collectors without per-library special cases.
+                collector_cls = resolve_collector(source.source_type, source.config)
                 if collector_cls is None:
-                    config = source.config or {}
-                    library = config.get("library", "")
-                    if library == "yfinance":
-                        from app.collectors.finance.yfinance_collector import YFinanceCollector
-
-                        collector_cls = YFinanceCollector
-                    else:
-                        logger.warning(f"No collector for source_type={source.source_type}")
-                        self._last_run_results[job_id] = {
-                            "success": False,
-                            "error": f"No collector for {source.source_type}",
-                            "items_count": 0,
-                        }
-                        return
+                    logger.warning(f"No collector for source_type={source.source_type}")
+                    self._last_run_results[job_id] = {
+                        "success": False,
+                        "error": f"No collector for {source.source_type}",
+                        "items_count": 0,
+                    }
+                    return
 
                 collector = collector_cls()
                 collection_result = await collector.collect(source)

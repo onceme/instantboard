@@ -51,6 +51,15 @@ export class SSEConnection {
       return;
     }
 
+    // Re-read the token on every (re)connect: boards stay open longer than the JWT
+    // lifetime and the axios interceptor refreshes localStorage in the meantime.
+    // Without this, reconnects keep presenting the expired token forever and the
+    // connection flaps between "reconnecting" and 401 without ever recovering.
+    const latestToken = localStorage.getItem("access_token");
+    if (latestToken) {
+      this.token = latestToken;
+    }
+
     this.intentionallyClosed = false;
     this.setState(SSEConnectionState.CONNECTING);
 

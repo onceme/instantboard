@@ -28,18 +28,23 @@ async def create_tables():
         await _engine.dispose()
 
 
-# Sources with is_active=False are disabled because collectors are not yet implemented
-# (api, web_scrape, social). They are kept as templates for future development.
+# Sources with is_active=False are disabled because no collector can run for them yet
+# (missing web_scrape/social collector, or — for api sources — no config.library wiring
+# and/or required API keys). They are kept as templates for future development.
+# Sources whose collector resolves via app.collectors.resolve_collector (source_type
+# match or config.library fallback) are active by default.
 
 FINANCE_SOURCES = [
     {
         "name": "东方财富-A股实时",
         "source_type": "web_scrape",
         "url": "https://push2.eastmoney.com/api/qt/stock/get",
-        "config": {"selector": "data", "url_pattern": "push2.eastmoney.com"},
+        # EastMoneyCollector is implemented and registered as "eastmoney"; the scheduler
+        # resolves it through the config.library fallback (source_type has none).
+        "config": {"library": "eastmoney", "data_type": "cn_indices"},
         "refresh_interval_seconds": 15,
         "priority": 1,
-        "is_active": False,  # No web_scrape collector
+        "is_active": True,
     },
     {
         "name": "yfinance-沪深300指数",
@@ -53,7 +58,8 @@ FINANCE_SOURCES = [
         },
         "refresh_interval_seconds": 30,
         "priority": 2,
-        "is_active": False,  # No API collector
+        # Resolves via config.library=yfinance
+        "is_active": True,
     },
     {
         "name": "yfinance-世界市场指数",
@@ -67,7 +73,8 @@ FINANCE_SOURCES = [
         },
         "refresh_interval_seconds": 30,
         "priority": 2,
-        "is_active": False,  # No API collector
+        # Resolves via config.library=yfinance
+        "is_active": True,
     },
     {
         "name": "Alpha Vantage-市场指数(failover)",
@@ -76,7 +83,8 @@ FINANCE_SOURCES = [
         "config": {"api_key_env": "ALPHA_VANTAGE_API_KEY", "method": "GET", "function": "TIME_SERIES_INTRADAY"},
         "refresh_interval_seconds": 30,
         "priority": 5,
-        "is_active": False,  # No API collector
+        # Collector exists but the template is incomplete (no symbols, needs ALPHA_VANTAGE_API_KEY)
+        "is_active": False,
     },
     {
         "name": "yfinance-大宗商品",
@@ -89,7 +97,8 @@ FINANCE_SOURCES = [
         },
         "refresh_interval_seconds": 60,
         "priority": 3,
-        "is_active": False,  # No API collector
+        # Resolves via config.library=yfinance
+        "is_active": True,
     },
     {
         "name": "天天基金-官方NAV",

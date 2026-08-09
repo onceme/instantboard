@@ -61,4 +61,6 @@ export const MAX_WATCHLIST_ITEMS = 512;
 export const SSE_HEARTBEAT_INTERVAL = 30_000;
 
 export const DEFAULT_THEME = "light";
+// Theme selection mode: users may pin light/dark or follow the OS preference
+export const DEFAULT_THEME_MODE = "system";
 export const DEFAULT_COLOR_SCHEME = "chinese";

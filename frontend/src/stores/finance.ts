@@ -20,6 +20,7 @@ import {
 } from "@/utils/api";
 import { SSEConnection, SSEConnectionState } from "@/utils/sse.ts";
 import { useAuthStore } from "./auth";
+import { useSSEStore } from "./sse";
 
 export const useFinanceStore = defineStore("finance", () => {
   const watchlist = ref<WatchlistItem[]>([]);
@@ -206,6 +207,7 @@ export const useFinanceStore = defineStore("finance", () => {
 
   function connectSSE() {
     const authStore = useAuthStore();
+    const sseStore = useSSEStore();
     if (sseConnection.value) {
       sseConnection.value.disconnect();
     }
@@ -215,6 +217,7 @@ export const useFinanceStore = defineStore("finance", () => {
       token: authStore.token,
       onStateChange: (state) => {
         sseState.value = state;
+        sseStore.setFinanceState(state);
       },
       eventHandlers: {
         [SSEEventType.QUOTE_UPDATE]: (data) =>

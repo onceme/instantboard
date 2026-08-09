@@ -10,6 +10,7 @@ import type {
 import { apiGet, getApiErrorMessage } from "@/utils/api";
 import { SSEConnection, SSEConnectionState } from "@/utils/sse.ts";
 import { useAuthStore } from "./auth";
+import { useSSEStore } from "./sse";
 
 export const useTechStore = defineStore("tech", () => {
   const newsItems = ref<TechNewsItem[]>([]);
@@ -112,6 +113,7 @@ export const useTechStore = defineStore("tech", () => {
 
   function connectSSE() {
     const authStore = useAuthStore();
+    const sseStore = useSSEStore();
     if (sseConnection.value) {
       sseConnection.value.disconnect();
     }
@@ -121,6 +123,7 @@ export const useTechStore = defineStore("tech", () => {
       token: authStore.token,
       onStateChange: (state) => {
         sseState.value = state;
+        sseStore.setTechState(state);
       },
       eventHandlers: {
         [SSEEventType.ITEM_UPDATE]: (data) => addItemFromSSE(data as never),

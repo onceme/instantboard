@@ -147,20 +147,27 @@ fetchCategories();
 
 .add-section {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: center;
 }
 
+/* min-width: 0 overrides the replaced-element min-content size that would
+   otherwise keep the inputs wider than the row on narrow screens (360-414px);
+   the flex-basis decides when the fields wrap onto their own rows instead of
+   pushing the 添加 button half off-screen */
 .input-name {
-  flex: 1;
-  min-width: 120px;
+  flex: 1 1 140px;
+  min-width: 0;
 }
 
 .input-desc {
-  flex: 2;
+  flex: 2 1 200px;
+  min-width: 0;
 }
 
 .add-btn {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -236,11 +243,13 @@ fetchCategories();
 
 .edit-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: center;
 }
 
 .save-btn {
+  flex-shrink: 0;
   padding: 4px 12px;
   border-radius: var(--radius-md);
   font-size: 13px;
@@ -250,6 +259,7 @@ fetchCategories();
 }
 
 .cancel-btn {
+  flex-shrink: 0;
   padding: 4px 12px;
   border-radius: var(--radius-md);
   font-size: 13px;

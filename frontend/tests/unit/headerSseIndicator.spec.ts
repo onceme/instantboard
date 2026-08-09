@@ -9,10 +9,12 @@ import { mount } from "@vue/test-utils";
 import { nextTick } from "vue";
 import { createPinia, setActivePinia } from "pinia";
 
-// Minimal vue-router stub: the component only needs the current route object.
+// Minimal vue-router stub: the component only needs the current route object
+// plus a router for the user-menu navigation (not under test here).
 const routeState = vi.hoisted(() => ({ name: "settings", path: "/settings" }));
 vi.mock("vue-router", () => ({
   useRoute: () => routeState,
+  useRouter: () => ({ push: vi.fn() }),
 }));
 
 import Header from "@/components/layout/Header.vue";
@@ -39,14 +41,24 @@ describe("indicator visibility by route", () => {
   });
 
   it("is hidden on login-ish routes", () => {
-    expect(mountHeader("/login", "login").find(".sse-indicator").exists()).toBe(false);
-    expect(mountHeader("/ibadmin", "ibadmin").find(".sse-indicator").exists()).toBe(false);
+    expect(mountHeader("/login", "login").find(".sse-indicator").exists()).toBe(
+      false,
+    );
+    expect(
+      mountHeader("/ibadmin", "ibadmin").find(".sse-indicator").exists(),
+    ).toBe(false);
   });
 
   it("is shown on the SSE routes", () => {
-    expect(mountHeader("/finance", "finance").find(".sse-indicator").exists()).toBe(true);
-    expect(mountHeader("/tech", "tech").find(".sse-indicator").exists()).toBe(true);
-    expect(mountHeader("/dashboard", "dashboard").find(".sse-indicator").exists()).toBe(true);
+    expect(
+      mountHeader("/finance", "finance").find(".sse-indicator").exists(),
+    ).toBe(true);
+    expect(mountHeader("/tech", "tech").find(".sse-indicator").exists()).toBe(
+      true,
+    );
+    expect(
+      mountHeader("/dashboard", "dashboard").find(".sse-indicator").exists(),
+    ).toBe(true);
   });
 });
 

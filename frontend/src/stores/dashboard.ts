@@ -12,6 +12,7 @@ import type {
 import { apiGet } from "@/utils/api";
 import { SSEConnection, SSEConnectionState } from "@/utils/sse.ts";
 import { useAuthStore } from "./auth";
+import { useSSEStore } from "./sse";
 
 export const useDashboardStore = defineStore("dashboard", () => {
   const systemInfo = ref<DashboardSystemInfo | null>(null);
@@ -97,6 +98,7 @@ export const useDashboardStore = defineStore("dashboard", () => {
 
   function connectSSE() {
     const authStore = useAuthStore();
+    const sseStore = useSSEStore();
     if (sseConnection.value) {
       sseConnection.value.disconnect();
     }
@@ -106,6 +108,7 @@ export const useDashboardStore = defineStore("dashboard", () => {
       token: authStore.token,
       onStateChange: (state) => {
         sseState.value = state;
+        sseStore.setDashboardState(state);
       },
       eventHandlers: {
         [SSEEventType.SYSTEM_METRIC_UPDATE]: (data) =>

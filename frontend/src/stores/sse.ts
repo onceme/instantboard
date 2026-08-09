@@ -9,18 +9,24 @@ export const useSSEStore = defineStore("sse", () => {
     SSEConnectionState.DISCONNECTED,
   );
 
+  // Overall = "is any live push channel up right now?". Views only keep their own
+  // channel connected while mounted, so requiring every channel to be connected
+  // (the old logic) reported DISCONNECTED/CONNECTING almost all the time.
   const overallState = computed(() => {
     const states = [financeState.value, techState.value, dashboardState.value];
-    if (states.every((s) => s === SSEConnectionState.CONNECTED)) {
+    if (states.some((s) => s === SSEConnectionState.CONNECTED)) {
       return SSEConnectionState.CONNECTED;
     }
-    if (states.some((s) => s === SSEConnectionState.RECONNECTING)) {
+    if (
+      states.some(
+        (s) =>
+          s === SSEConnectionState.RECONNECTING ||
+          s === SSEConnectionState.CONNECTING,
+      )
+    ) {
       return SSEConnectionState.RECONNECTING;
     }
-    if (states.every((s) => s === SSEConnectionState.DISCONNECTED)) {
-      return SSEConnectionState.DISCONNECTED;
-    }
-    return SSEConnectionState.CONNECTING;
+    return SSEConnectionState.DISCONNECTED;
   });
 
   function setFinanceState(state: SSEConnectionState) {

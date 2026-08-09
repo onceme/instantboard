@@ -466,7 +466,40 @@ class TestUpdateSource:
         with pytest.raises(Forbidden, match="other tenants"):
             await service.update_source(str(src.id), data, "tenant-1")
 
-    async def test_update_system_source_forbidden(self):
+    async def test_update_system_source_by_owning_admin_tenant_allowed(self):
+        """System (seed) sources are editable by the tenant that owns them — the admin
+        session lives in the system tenant itself and must be able to enable seeded
+        sources (e.g. 东方财富/yfinance) via the sources API."""
+        db, mock_result = _mock_db()
+        redis = _mock_redis()
+
+        src = _make_source(tenant_id=SYSTEM_TENANT_ID, is_active=False)
+
+        call_count = 0
+
+        async def execute_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            mock_r = MagicMock()
+            if call_count == 1:
+                mock_r.scalar_one_or_none.return_value = src
+            elif call_count == 2:
+                mock_r.scalar_one.return_value = src
+            return mock_r
+
+        db.execute = execute_side_effect
+
+        from app.schemas.source import SourceUpdate
+
+        data = SourceUpdate(is_active=True)
+
+        service = SourceService(db, redis)
+        # The API passes the JWT tenant id as a str — must match the UUID ORM attribute
+        result = await service.update_source(str(src.id), data, str(SYSTEM_TENANT_ID))
+        assert result.success is True
+        assert src.is_active is True
+
+    async def test_update_system_source_other_tenant_forbidden(self):
         db, mock_result = _mock_db()
         redis = _mock_redis()
         src = _make_source(tenant_id=SYSTEM_TENANT_ID)
@@ -477,8 +510,8 @@ class TestUpdateSource:
         data = SourceUpdate(name="Updated")
 
         service = SourceService(db, redis)
-        with pytest.raises(Forbidden, match="system-level"):
-            await service.update_source(str(src.id), data, SYSTEM_TENANT_ID)
+        with pytest.raises(Forbidden, match="other tenants"):
+            await service.update_source(str(src.id), data, "tenant-1")
 
     async def test_update_with_source_type_validation(self):
         db, mock_result = _mock_db()

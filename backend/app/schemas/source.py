@@ -33,6 +33,9 @@ class SourceResponse(BaseModel):
     refresh_interval_seconds: int | None = None
     is_active: bool
     priority: int
+    # False when no collector can run for this source (no source_type match and no
+    # config.library fallback) — the UI shows why such a source cannot be enabled
+    collector_available: bool = False
     health_status: str | None = None
     last_fetch_at: datetime | None = None
     last_error: str | None = None

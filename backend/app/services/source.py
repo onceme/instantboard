@@ -11,7 +11,13 @@ from sqlalchemy.orm import selectinload
 # instead (keeping the original exported name so modules like dashboard still work).
 from app.collectors import resolve_collector
 from app.core.constants import SYSTEM_TENANT_ID
-from app.core.exceptions import CategoryNotFound, Forbidden, SourceNotFound, ValidationError
+from app.core.exceptions import (
+    CategoryNotFound,
+    Forbidden,
+    NoCollectorAvailable,
+    SourceNotFound,
+    ValidationError,
+)
 from app.core.redis import RedisKeys, redis_delete, redis_hset, redis_publish
 from app.models.category import Category
 from app.models.source import Source, SourceHealth
@@ -110,6 +116,21 @@ class SourceService:
             )
 
         return True
+
+    @staticmethod
+    def _check_collector_available(source_type: str, config: dict) -> None:
+        # Pre-flight check before activating a source: without a resolvable collector
+        # the source would sit in is_active=True forever without collecting anything
+        # (e.g. a bare web_scrape/social source with no config.library fallback).
+        if resolve_collector(source_type, config) is None:
+            raise NoCollectorAvailable(
+                message=(
+                    f"No collector available for source_type '{source_type}'. "
+                    "Set config.library to a supported collector "
+                    "(yfinance, alpha_vantage, eastmoney, finnhub, rss, hackernews, arxiv) "
+                    "or keep the source inactive."
+                )
+            )
 
     async def list_sources(
         self,
@@ -219,6 +240,11 @@ class SourceService:
         config = data.config or {}
         self._validate_source_config(data.source_type, config)
 
+        # Creating an active source without a resolvable collector would silently
+        # never collect; reject it up front (same pre-flight as the enable path).
+        if data.is_active:
+            self._check_collector_available(data.source_type, config)
+
         refresh_interval = data.refresh_interval_seconds
         if refresh_interval is None:
             refresh_interval = category.refresh_interval_seconds
@@ -320,6 +346,19 @@ class SourceService:
             config = update_data.get("config", source.config) or {}
             self._validate_source_config(new_type, config)
 
+        # Enabling a source requires a collector that can actually run it. Evaluate
+        # the effective type/config after this same request's changes (an update may
+        # flip is_active and change source_type/config simultaneously). None values
+        # are never written by the setattr loop below, so they keep the current state.
+        if update_data.get("is_active") is True:
+            effective_type = update_data.get("source_type") or source.source_type
+            effective_config = update_data.get("config")
+            if effective_config is None:
+                effective_config = source.config
+            self._check_collector_available(effective_type, effective_config or {})
+
+        old_is_active = source.is_active
+
         for field, value in update_data.items():
             if value is not None and field != "category_id":
                 setattr(source, field, value)
@@ -336,6 +375,33 @@ class SourceService:
             )
         )
         source = (await self.db.execute(stmt)).scalar_one()
+
+        # Runtime scheduling hook: the worker subscribes to the dashboard channel and
+        # adds/removes the collection job without waiting for a restart. The payload
+        # carries the full source data so the worker can build the job without reading
+        # the DB (avoiding a race against the still-uncommitted transaction); the
+        # worker's full rebuild from the DB on startup remains the fallback.
+        if source.is_active != old_is_active:
+            await redis_publish(
+                RedisKeys.channel_key("dashboard"),
+                {
+                    "event": "source_enabled" if source.is_active else "source_disabled",
+                    "source_id": str(source.id),
+                    "source": {
+                        "id": str(source.id),
+                        "tenant_id": str(source.tenant_id),
+                        "category_id": str(source.category_id),
+                        "category_slug": source.category.slug if source.category else "",
+                        "name": source.name,
+                        "source_type": source.source_type,
+                        "url": source.url,
+                        "config": source.config or {},
+                        "refresh_interval_seconds": source.refresh_interval_seconds,
+                        "is_active": source.is_active,
+                        "priority": source.priority,
+                    },
+                },
+            )
 
         return SuccessResponse(
             success=True,

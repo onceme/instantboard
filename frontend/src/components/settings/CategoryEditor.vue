@@ -1,15 +1,31 @@
 <script setup lang="ts">
 import { ref, computed } from "vue";
+import axios from "axios";
 import type { Category } from "@/types";
-import { apiGet, apiPost, apiPut, apiDelete } from "@/utils/api";
+import {
+  apiGet,
+  apiPost,
+  apiPut,
+  apiDelete,
+  getApiErrorMessage,
+} from "@/utils/api";
 import { Plus, Pencil, Trash2 } from "lucide-vue-next";
 import EmptyState from "@/components/common/EmptyState.vue";
+import ErrorAlert from "@/components/common/ErrorAlert.vue";
 
 const categories = ref<Category[]>([]);
 const loading = ref(false);
+
+// The top "add" form and the inline row editor keep separate state so starting
+// a row edit no longer pours its values into the add inputs (and vice versa)
+const addForm = ref({ name: "", description: "" });
+const addError = ref("");
 const editingId = ref<string | null>(null);
-const newName = ref("");
-const newDescription = ref("");
+const editForm = ref({ name: "", description: "" });
+const editError = ref("");
+const deleteError = ref("");
+// Bumped on every new delete error so a dismissed ErrorAlert remounts and shows again
+const deleteErrorKey = ref(0);
 
 const customCategories = computed(() =>
   categories.value.filter((c) => c.type === "custom"),
@@ -17,6 +33,22 @@ const customCategories = computed(() =>
 const predefinedCategories = computed(() =>
   categories.value.filter((c) => c.type !== "custom"),
 );
+
+// Status-driven Chinese fallbacks (409 duplicate / 400 quota / 403 permission);
+// the backend envelope message wins whenever getApiErrorMessage can extract one
+function categoryFallback(err: unknown, action: string): string {
+  const status = axios.isAxiosError(err) ? err.response?.status : undefined;
+  switch (status) {
+    case 409:
+      return "分类名称已存在";
+    case 403:
+      return "仅管理员可管理分类";
+    case 400:
+      return `${action}失败：请检查输入或分类数量是否已达上限`;
+    default:
+      return `${action}失败，请重试`;
+  }
+}
 
 async function fetchCategories() {
   loading.value = true;
@@ -29,44 +61,63 @@ async function fetchCategories() {
 }
 
 async function addCategory() {
-  if (!newName.value.trim()) return;
-  await apiPost<Category>("/categories", {
-    name: newName.value,
-    description: newDescription.value,
-    type: "custom",
-  });
-  newName.value = "";
-  newDescription.value = "";
-  await fetchCategories();
+  if (!addForm.value.name.trim()) return;
+  addError.value = "";
+  try {
+    await apiPost<Category>("/categories", {
+      name: addForm.value.name,
+      description: addForm.value.description,
+      type: "custom",
+    });
+    // Success: clear the inputs and refresh; failure keeps both via catch
+    addForm.value = { name: "", description: "" };
+    await fetchCategories();
+  } catch (err) {
+    addError.value = getApiErrorMessage(err, categoryFallback(err, "添加"));
+  }
 }
 
 async function updateCategory(id: string) {
-  if (!newName.value.trim()) return;
-  await apiPut<Category>(`/categories/${id}`, {
-    name: newName.value,
-    description: newDescription.value,
-  });
-  editingId.value = null;
-  newName.value = "";
-  newDescription.value = "";
-  await fetchCategories();
+  if (!editForm.value.name.trim()) return;
+  editError.value = "";
+  try {
+    await apiPut<Category>(`/categories/${id}`, {
+      name: editForm.value.name,
+      description: editForm.value.description,
+    });
+    editingId.value = null;
+    editForm.value = { name: "", description: "" };
+    await fetchCategories();
+  } catch (err) {
+    // Stay in edit mode with the values and the error visible for retry
+    editError.value = getApiErrorMessage(err, categoryFallback(err, "保存"));
+  }
 }
 
 async function deleteCategory(id: string) {
-  await apiDelete(`/categories/${id}`);
-  await fetchCategories();
+  deleteError.value = "";
+  try {
+    await apiDelete(`/categories/${id}`);
+    await fetchCategories();
+  } catch (err) {
+    deleteError.value = getApiErrorMessage(err, categoryFallback(err, "删除"));
+    deleteErrorKey.value += 1;
+  }
 }
 
 function startEdit(category: Category) {
   editingId.value = category.id;
-  newName.value = category.name;
-  newDescription.value = category.description || "";
+  editForm.value = {
+    name: category.name,
+    description: category.description || "",
+  };
+  editError.value = "";
 }
 
 function cancelEdit() {
   editingId.value = null;
-  newName.value = "";
-  newDescription.value = "";
+  editForm.value = { name: "", description: "" };
+  editError.value = "";
 }
 
 fetchCategories();
@@ -76,22 +127,33 @@ fetchCategories();
   <div class="category-editor">
     <div class="add-section">
       <input
-        v-model="newName"
+        v-model="addForm.name"
         type="text"
         placeholder="新分类名称"
         class="input-name"
       />
       <input
-        v-model="newDescription"
+        v-model="addForm.description"
         type="text"
         placeholder="描述(可选)"
         class="input-desc"
       />
-      <button class="add-btn" :disabled="!newName.trim()" @click="addCategory">
+      <button
+        class="add-btn"
+        :disabled="!addForm.name.trim()"
+        @click="addCategory"
+      >
         <Plus :size="16" />
         添加
       </button>
+      <p v-if="addError" class="error-text">{{ addError }}</p>
     </div>
+
+    <ErrorAlert
+      v-if="deleteError"
+      :key="deleteErrorKey"
+      :message="deleteError"
+    />
 
     <div class="category-list">
       <h4 class="list-label">预定义分类</h4>
@@ -118,10 +180,15 @@ fetchCategories();
         class="category-item custom"
       >
         <div v-if="editingId === cat.id" class="edit-row">
-          <input v-model="newName" type="text" class="input-name" />
-          <input v-model="newDescription" type="text" class="input-desc" />
+          <input v-model="editForm.name" type="text" class="input-name" />
+          <input
+            v-model="editForm.description"
+            type="text"
+            class="input-desc"
+          />
           <button class="save-btn" @click="updateCategory(cat.id)">保存</button>
           <button class="cancel-btn" @click="cancelEdit">取消</button>
+          <p v-if="editError" class="error-text">{{ editError }}</p>
         </div>
         <div v-else class="display-row">
           <span class="cat-name">{{ cat.name }}</span>
@@ -246,6 +313,14 @@ fetchCategories();
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+}
+
+/* flex-basis 100% pushes the message onto its own line inside the wrapped rows */
+.error-text {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 13px;
+  color: var(--danger);
 }
 
 .save-btn {

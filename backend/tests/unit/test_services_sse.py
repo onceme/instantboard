@@ -33,8 +33,12 @@ class TestConnect:
         assert result["client_id"] == "client-1"
         assert result["categories"] == ["finance", "tech"]
         assert result["tenant_id"] == "tenant-1"
-        mock_router.register.assert_called_once()
-        db.add.assert_called_once()
+        # user_id must reach the in-memory registry so disconnect() can audit the row
+        mock_router.register.assert_called_once_with("client-1", ["finance", "tech"], "tenant-1", user_id="user-1")
+        db_conn = db.add.call_args.args[0]
+        # The DB row must reuse the registry timestamp so disconnect can match exactly
+        assert db_conn.connected_at == conn.connected_at
+        assert db_conn.user_id == "user-1"
         db.commit.assert_called_once()
 
 
@@ -43,6 +47,7 @@ class TestDisconnect:
     async def test_disconnect_success(self, mock_router):
         conn = MagicMock()
         conn.tenant_id = "tenant-1"
+        conn.user_id = "user-1"
         conn.events_sent_count = 10
         conn.connected_at = datetime.now(UTC)
         mock_router.unregister.return_value = conn
@@ -58,6 +63,34 @@ class TestDisconnect:
         assert result["client_id"] == "client-1"
         assert result["events_sent"] == 10
         mock_router.unregister.assert_called_once_with("client-1")
+
+    @patch("app.services.sse.event_router")
+    async def test_disconnect_audit_matches_connection_row(self, mock_router):
+        """Regression: the disconnect UPDATE used WHERE user_id == conn.tenant_id, which
+        never matched, so sse_connections rows were never audited as disconnected.
+        The WHERE clause must use the connection's own user_id and connected_at."""
+        conn = MagicMock()
+        conn.tenant_id = "tenant-1"
+        conn.user_id = str(uuid.uuid4())
+        conn.events_sent_count = 3
+        conn.connected_at = datetime.now(UTC)
+        mock_router.unregister.return_value = conn
+
+        db = AsyncMock()
+        db.execute = AsyncMock()
+        db.commit = AsyncMock()
+
+        service = SSEService()
+        await service.disconnect("client-1", db)
+
+        db.execute.assert_awaited_once()
+        stmt = db.execute.await_args.args[0]
+        params = stmt.compile().params
+        assert conn.user_id in params.values()
+        assert conn.connected_at in params.values()
+        # tenant id must NOT be bound as the user id (the old bug)
+        assert conn.tenant_id not in params.values()
+        db.commit.assert_awaited_once()
 
     @patch("app.services.sse.event_router")
     async def test_disconnect_not_found(self, mock_router):

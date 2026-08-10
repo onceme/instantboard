@@ -3,11 +3,13 @@ import { useAuthStore } from "@/stores/auth";
 import { useSSEStore } from "@/stores/sse";
 import { useTheme, THEME_MODE_OPTIONS } from "@/composables/useTheme";
 import { computed } from "vue";
+import { useRoute } from "vue-router";
 import { Sun, Moon, Monitor, Palette, Wifi, WifiOff } from "lucide-vue-next";
 import { SSEConnectionState } from "@/types";
 
 const authStore = useAuthStore();
 const sseStore = useSSEStore();
+const route = useRoute();
 const { theme, themeMode, setThemeMode, colorScheme, toggleColorScheme } =
   useTheme();
 
@@ -24,9 +26,28 @@ const colorSchemeLabel = computed(() =>
 // Real aggregated SSE state: the finance/tech/dashboard stores feed the global
 // SSE store while their views keep a stream open. On pages without a stream
 // (e.g. /settings) this is honestly DISCONNECTED instead of a hardcoded value.
-const sseStatus = computed(() => sseStore.overallState);
+// Typed as the full enum so the defensive CONNECTING branches below stay valid
+// even though overallState currently never yields it.
+const sseStatus = computed<SSEConnectionState>(() => sseStore.overallState);
+
+// Routes whose views keep a live SSE stream open while mounted
+const SSE_ROUTES = ["/finance", "/tech", "/dashboard"];
+const onSseRoute = computed(() =>
+  SSE_ROUTES.some((prefix) => route.path.startsWith(prefix)),
+);
+
+// DISCONNECTED while not on an SSE route is expected (no view maintains a
+// stream here): report it neutrally instead of a scary "未连接". A real stream
+// that dropped keeps the warning wording.
+const noStreamExpected = computed(
+  () =>
+    sseStatus.value === SSEConnectionState.DISCONNECTED && !onSseRoute.value,
+);
 
 const sseLabel = computed(() => {
+  if (noStreamExpected.value) {
+    return "当前页面无数据流（在 财经/科技/仪表盘 页面自动连接）";
+  }
   switch (sseStatus.value) {
     case SSEConnectionState.CONNECTED:
       return "已连接";
@@ -39,6 +60,7 @@ const sseLabel = computed(() => {
 });
 
 const sseColorClass = computed(() => {
+  if (noStreamExpected.value) return "sse-idle";
   switch (sseStatus.value) {
     case SSEConnectionState.CONNECTED:
       return "sse-connected";
@@ -82,7 +104,7 @@ const sseColorClass = computed(() => {
           class="theme-option"
           :class="{ active: themeMode === option.value }"
           role="radio"
-          :aria-checked="String(themeMode === option.value)"
+          :aria-checked="themeMode === option.value"
           @click="setThemeMode(option.value)"
         >
           {{ option.label }}
@@ -251,5 +273,10 @@ const sseColorClass = computed(() => {
 
 .sse-disconnected {
   color: var(--danger);
+}
+
+/* Neutral tone: no stream is expected on this page, so it's not an error */
+.sse-idle {
+  color: var(--text-muted);
 }
 </style>

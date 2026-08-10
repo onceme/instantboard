@@ -24,7 +24,6 @@ export class SSEConnection {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private eventHandlers: Map<string, SSEEventHandler> = new Map();
   private onStateChange: ((state: SSEConnectionState) => void) | null = null;
-  private lastEventId: string = "";
   private intentionallyClosed = false;
 
   constructor(options: SSEConnectionOptions) {
@@ -101,9 +100,6 @@ export class SSEConnection {
 
     for (const eventType of eventTypes) {
       this.eventSource.addEventListener(eventType, (e: MessageEvent) => {
-        if (e.lastEventId) {
-          this.lastEventId = e.lastEventId;
-        }
         const handler = this.eventHandlers.get(eventType);
         if (handler) {
           try {

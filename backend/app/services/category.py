@@ -225,7 +225,9 @@ class CategoryService:
         if category.tenant_id == SYSTEM_TENANT_ID:
             raise Forbidden(message="Cannot modify predefined system categories")
 
-        if category.tenant_id != tenant_id:
+        # str() on both sides: category.tenant_id is a UUID ORM attribute, the JWT
+        # tenant id is a str — a direct comparison would reject every owner update.
+        if str(category.tenant_id) != tenant_id:
             raise Forbidden(message="Cannot modify categories from other tenants")
 
         update_data = data.model_dump(exclude_unset=True)
@@ -272,7 +274,9 @@ class CategoryService:
         if category.tenant_id == SYSTEM_TENANT_ID:
             raise Forbidden(message="Cannot delete predefined system categories")
 
-        if category.tenant_id != tenant_id:
+        # str() on both sides: category.tenant_id is a UUID ORM attribute, the JWT
+        # tenant id is a str — a direct comparison would reject every owner delete.
+        if str(category.tenant_id) != tenant_id:
             raise Forbidden(message="Cannot delete categories from other tenants")
 
         source_count_stmt = select(func.count()).select_from(Source).where(Source.category_id == category_id)

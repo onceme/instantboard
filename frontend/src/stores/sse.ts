@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
-import type { SSEConnectionState } from "@/types";
+import { SSEConnectionState } from "@/types";
 
 export const useSSEStore = defineStore("sse", () => {
   const financeState = ref<SSEConnectionState>(SSEConnectionState.DISCONNECTED);

@@ -24,13 +24,15 @@ class SSEService:
         client_ip: str | None = None,
         user_agent: str | None = None,
     ) -> dict:
-        conn = event_router.register(client_id, categories, tenant_id)
+        conn = event_router.register(client_id, categories, tenant_id, user_id=user_id)
 
         db_conn = SSEConnectionModel(
             tenant_id=tenant_id,
             user_id=user_id,
             channels=categories,
-            connected_at=datetime.now(UTC),
+            # Reuse the in-memory connection's timestamp so disconnect() can match the
+            # exact row via (user_id, connected_at); a fresh now() here would differ.
+            connected_at=conn.connected_at,
             client_ip=client_ip,
             user_agent=user_agent,
         )
@@ -49,10 +51,14 @@ class SSEService:
         if conn is None:
             return None
 
+        # Audit the disconnect against the exact row written by connect(): the previous
+        # WHERE compared user_id == conn.tenant_id (always false), so rows were never
+        # marked disconnected. Match on (user_id, connected_at) with an open session.
         await db_session.execute(
             update(SSEConnectionModel)
             .where(
-                SSEConnectionModel.user_id == conn.tenant_id,
+                SSEConnectionModel.user_id == conn.user_id,
+                SSEConnectionModel.connected_at == conn.connected_at,
                 SSEConnectionModel.disconnected_at.is_(None),
             )
             .values(

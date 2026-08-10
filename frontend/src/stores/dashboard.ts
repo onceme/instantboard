@@ -7,8 +7,8 @@ import type {
   DataSourceHealthDetail,
   SchedulerStatus,
   SSEStats,
-  SSEEventType,
 } from "@/types";
+import { SSEEventType } from "@/types";
 import { apiGet } from "@/utils/api";
 import { SSEConnection, SSEConnectionState } from "@/utils/sse.ts";
 import { useAuthStore } from "./auth";

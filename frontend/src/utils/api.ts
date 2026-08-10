@@ -31,7 +31,7 @@ export function getApiErrorMessage(err: unknown, fallback: string): string {
       | { detail?: { error?: ApiErrorDetail } | string }
       | undefined;
     const detail = data?.detail;
-    if (typeof detail === "string" && detail) return detail;
+    if (typeof detail === "string") return detail || fallback;
     if (detail?.error?.message) return detail.error.message;
     if (detail?.error?.description) return detail.error.description;
   }

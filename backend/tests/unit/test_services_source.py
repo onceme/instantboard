@@ -5,7 +5,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.core.exceptions import CategoryNotFound, Forbidden, SourceNotFound, ValidationError
+from app.core.exceptions import (
+    CategoryNotFound,
+    Forbidden,
+    NoCollectorAvailable,
+    SourceNotFound,
+    ValidationError,
+)
 from app.services.source import SYSTEM_TENANT_ID, SourceService, _health_to_response, _source_to_response
 
 
@@ -409,6 +415,148 @@ class TestCreateSource:
         with pytest.raises(ValidationError, match="other tenants"):
             await service.create_source(data, "tenant-1")
 
+    # ── collector pre-flight on create ───────────────────────────
+    async def test_create_active_without_collector_rejected(self):
+        """web_scrape sources have no collector of their own and no config.library
+        fallback here → creating them active must fail loudly instead of
+        silently scheduling a job that can never collect."""
+        db, mock_result = _mock_db()
+        redis = _mock_redis()
+
+        tenant = MagicMock()
+        tenant.max_sources = 50
+        category = MagicMock()
+        category.tenant_id = "tenant-1"
+        category.refresh_interval_seconds = 300
+
+        call_count = 0
+
+        async def execute_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            mock_r = MagicMock()
+            if call_count == 1:
+                mock_r.scalar_one_or_none.return_value = tenant
+            elif call_count == 2:
+                mock_r.scalar.return_value = 0
+            elif call_count == 3:
+                mock_r.scalar_one_or_none.return_value = category
+            return mock_r
+
+        db.execute = execute_side_effect
+
+        from app.schemas.source import SourceCreate
+
+        data = SourceCreate(
+            name="Bare scraper",
+            category_id=str(uuid.uuid4()),
+            source_type="web_scrape",
+            url="https://example.com",
+            config={"url": "https://example.com", "selector": ".item"},
+            is_active=True,
+        )
+
+        service = SourceService(db, redis)
+        with pytest.raises(NoCollectorAvailable, match="web_scrape"):
+            await service.create_source(data, "tenant-1")
+        db.add.assert_not_called()
+
+    @patch("app.services.source.redis_publish", new_callable=AsyncMock)
+    @patch("app.services.source.redis_hset", new_callable=AsyncMock)
+    async def test_create_active_with_library_collector_ok(self, mock_hset, mock_publish):
+        """Same web_scrape source but with a config.library fallback → resolves to a
+        real collector and may be created active."""
+        db, _ = _mock_db()
+        redis = _mock_redis()
+
+        tenant = MagicMock()
+        tenant.max_sources = 50
+        category = MagicMock()
+        category.id = uuid.uuid4()
+        category.tenant_id = "tenant-1"
+        category.refresh_interval_seconds = 300
+        created_source = _make_source(tenant_id="tenant-1", source_type="web_scrape")
+
+        call_count = 0
+
+        async def execute_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            mock_r = MagicMock()
+            if call_count == 1:
+                mock_r.scalar_one_or_none.return_value = tenant
+            elif call_count == 2:
+                mock_r.scalar.return_value = 0
+            elif call_count == 3:
+                mock_r.scalar_one_or_none.return_value = category
+            elif call_count == 4:
+                mock_r.scalar_one.return_value = created_source
+            return mock_r
+
+        db.execute = execute_side_effect
+
+        from app.schemas.source import SourceCreate
+
+        data = SourceCreate(
+            name="Scraper with library",
+            category_id=str(category.id if hasattr(category, "id") else uuid.uuid4()),
+            source_type="web_scrape",
+            url="https://example.com",
+            config={"url": "https://example.com", "selector": ".item", "library": "eastmoney"},
+            is_active=True,
+        )
+
+        service = SourceService(db, redis)
+        result = await service.create_source(data, "tenant-1")
+        assert result.success is True
+
+    @patch("app.services.source.redis_publish", new_callable=AsyncMock)
+    @patch("app.services.source.redis_hset", new_callable=AsyncMock)
+    async def test_create_inactive_without_collector_allowed(self, mock_hset, mock_publish):
+        """Inactive sources may be created without a collector (draft state)."""
+        db, _ = _mock_db()
+        redis = _mock_redis()
+
+        tenant = MagicMock()
+        tenant.max_sources = 50
+        category = MagicMock()
+        category.tenant_id = "tenant-1"
+        category.refresh_interval_seconds = 300
+        created_source = _make_source(tenant_id="tenant-1", source_type="web_scrape", is_active=False)
+
+        call_count = 0
+
+        async def execute_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            mock_r = MagicMock()
+            if call_count == 1:
+                mock_r.scalar_one_or_none.return_value = tenant
+            elif call_count == 2:
+                mock_r.scalar.return_value = 0
+            elif call_count == 3:
+                mock_r.scalar_one_or_none.return_value = category
+            elif call_count == 4:
+                mock_r.scalar_one.return_value = created_source
+            return mock_r
+
+        db.execute = execute_side_effect
+
+        from app.schemas.source import SourceCreate
+
+        data = SourceCreate(
+            name="Draft scraper",
+            category_id=str(uuid.uuid4()),
+            source_type="web_scrape",
+            url="https://example.com",
+            config={"url": "https://example.com", "selector": ".item"},
+            is_active=False,
+        )
+
+        service = SourceService(db, redis)
+        result = await service.create_source(data, "tenant-1")
+        assert result.success is True
+
 
 class TestUpdateSource:
     async def test_update_success(self):
@@ -466,7 +614,8 @@ class TestUpdateSource:
         with pytest.raises(Forbidden, match="other tenants"):
             await service.update_source(str(src.id), data, "tenant-1")
 
-    async def test_update_system_source_by_owning_admin_tenant_allowed(self):
+    @patch("app.services.source.redis_publish", new_callable=AsyncMock)
+    async def test_update_system_source_by_owning_admin_tenant_allowed(self, mock_publish):
         """System (seed) sources are editable by the tenant that owns them — the admin
         session lives in the system tenant itself and must be able to enable seeded
         sources (e.g. 东方财富/yfinance) via the sources API."""
@@ -541,6 +690,216 @@ class TestUpdateSource:
         result = await service.update_source(str(src.id), data, "tenant-1")
         assert result.success is True
 
+    # ── collector pre-flight on enable ───────────────────────────
+    @patch("app.services.source.redis_publish", new_callable=AsyncMock)
+    async def test_enable_without_collector_rejected(self, mock_publish):
+        """Flipping is_active to True on a source no collector can run must return
+        the NO_COLLECTOR_AVAILABLE error instead of silently succeeding."""
+        db, mock_result = _mock_db()
+        redis = _mock_redis()
+
+        src = _make_source(
+            tenant_id="tenant-1",
+            source_type="web_scrape",
+            config={"url": "https://example.com", "selector": ".item"},
+            is_active=False,
+        )
+        mock_result.scalar_one_or_none.return_value = src
+
+        from app.schemas.source import SourceUpdate
+
+        data = SourceUpdate(is_active=True)
+
+        service = SourceService(db, redis)
+        with pytest.raises(NoCollectorAvailable, match="web_scrape"):
+            await service.update_source(str(src.id), data, "tenant-1")
+        mock_publish.assert_not_called()
+
+    @patch("app.services.source.redis_publish", new_callable=AsyncMock)
+    async def test_enable_checks_effective_type_after_same_request_change(self, mock_publish):
+        """is_active=True combined with source_type=web_scrape in the same request must
+        be validated against the effective (new) type, not the current one."""
+        db, mock_result = _mock_db()
+        redis = _mock_redis()
+
+        src = _make_source(tenant_id="tenant-1", source_type="rss", is_active=False)
+        mock_result.scalar_one_or_none.return_value = src
+
+        from app.schemas.source import SourceUpdate
+
+        data = SourceUpdate(
+            is_active=True,
+            source_type="web_scrape",
+            config={"url": "https://example.com", "selector": ".item"},
+        )
+
+        service = SourceService(db, redis)
+        with pytest.raises(NoCollectorAvailable, match="web_scrape"):
+            await service.update_source(str(src.id), data, "tenant-1")
+        mock_publish.assert_not_called()
+
+    @patch("app.services.source.redis_publish", new_callable=AsyncMock)
+    async def test_enable_with_library_fallback_ok(self, mock_publish):
+        """web_scrape + config.library=eastmoney resolves to a real collector → the
+        enable is allowed and publishes source_enabled for the worker."""
+        db, mock_result = _mock_db()
+        redis = _mock_redis()
+
+        src = _make_source(
+            tenant_id="tenant-1",
+            source_type="web_scrape",
+            config={"url": "https://example.com", "selector": ".item", "library": "eastmoney"},
+            is_active=False,
+        )
+
+        async def execute_side_effect(*args, **kwargs):
+            mock_r = MagicMock()
+            mock_r.scalar_one_or_none.return_value = src
+            mock_r.scalar_one.return_value = src
+            return mock_r
+
+        db.execute = execute_side_effect
+
+        from app.schemas.source import SourceUpdate
+
+        data = SourceUpdate(is_active=True)
+
+        service = SourceService(db, redis)
+        result = await service.update_source(str(src.id), data, "tenant-1")
+        assert result.success is True
+        assert src.is_active is True
+        mock_publish.assert_awaited_once()
+        channel, message = mock_publish.call_args.args
+        assert channel == "channel:dashboard"
+        assert message["event"] == "source_enabled"
+
+    @patch("app.services.source.redis_publish", new_callable=AsyncMock)
+    async def test_disable_with_type_change_to_uncollectable_not_blocked(self, mock_publish):
+        """Disabling must never be blocked by the collector pre-flight, even when the
+        same request switches source_type to one no collector can run. Guards against
+        the pre-flight gate regressing from `is True` to `is not None` (which would
+        reject every plain disable of an uncollectable source)."""
+        db, mock_result = _mock_db()
+        redis = _mock_redis()
+
+        src = _make_source(tenant_id="tenant-1", source_type="rss", is_active=True)
+
+        async def execute_side_effect(*args, **kwargs):
+            mock_r = MagicMock()
+            mock_r.scalar_one_or_none.return_value = src
+            mock_r.scalar_one.return_value = src
+            return mock_r
+
+        db.execute = execute_side_effect
+
+        from app.schemas.source import SourceUpdate
+
+        data = SourceUpdate(
+            is_active=False,
+            source_type="web_scrape",
+            config={"url": "https://example.com", "selector": ".item"},
+        )
+
+        service = SourceService(db, redis)
+        result = await service.update_source(str(src.id), data, "tenant-1")
+        assert result.success is True
+        assert src.is_active is False
+        mock_publish.assert_awaited_once()
+        channel, message = mock_publish.call_args.args
+        assert channel == "channel:dashboard"
+        assert message["event"] == "source_disabled"
+
+    # ── runtime scheduling events ────────────────────────────────
+    @patch("app.services.source.redis_publish", new_callable=AsyncMock)
+    async def test_enable_publishes_full_source_payload(self, mock_publish):
+        """The worker rebuilds the collection job purely from this payload, so it must
+        carry every field add_source_job needs (no DB round-trip)."""
+        db, mock_result = _mock_db()
+        redis = _mock_redis()
+
+        src = _make_source(tenant_id="tenant-1", is_active=False, refresh_interval_seconds=120)
+
+        async def execute_side_effect(*args, **kwargs):
+            mock_r = MagicMock()
+            mock_r.scalar_one_or_none.return_value = src
+            mock_r.scalar_one.return_value = src
+            return mock_r
+
+        db.execute = execute_side_effect
+
+        from app.schemas.source import SourceUpdate
+
+        service = SourceService(db, redis)
+        await service.update_source(str(src.id), SourceUpdate(is_active=True), "tenant-1")
+
+        mock_publish.assert_awaited_once()
+        channel, message = mock_publish.call_args.args
+        assert channel == "channel:dashboard"
+        assert message["event"] == "source_enabled"
+        assert message["source_id"] == str(src.id)
+        payload = message["source"]
+        assert payload == {
+            "id": str(src.id),
+            "tenant_id": str(src.tenant_id),
+            "category_id": str(src.category_id),
+            "category_slug": src.category.slug,
+            "name": src.name,
+            "source_type": src.source_type,
+            "url": src.url,
+            "config": src.config,
+            "refresh_interval_seconds": 120,
+            "is_active": True,
+            "priority": src.priority,
+        }
+
+    @patch("app.services.source.redis_publish", new_callable=AsyncMock)
+    async def test_disable_publishes_source_disabled(self, mock_publish):
+        db, mock_result = _mock_db()
+        redis = _mock_redis()
+
+        src = _make_source(tenant_id="tenant-1", is_active=True)
+
+        async def execute_side_effect(*args, **kwargs):
+            mock_r = MagicMock()
+            mock_r.scalar_one_or_none.return_value = src
+            mock_r.scalar_one.return_value = src
+            return mock_r
+
+        db.execute = execute_side_effect
+
+        from app.schemas.source import SourceUpdate
+
+        service = SourceService(db, redis)
+        await service.update_source(str(src.id), SourceUpdate(is_active=False), "tenant-1")
+
+        mock_publish.assert_awaited_once()
+        channel, message = mock_publish.call_args.args
+        assert channel == "channel:dashboard"
+        assert message["event"] == "source_disabled"
+        assert message["source_id"] == str(src.id)
+        assert message["source"]["is_active"] is False
+
+    @patch("app.services.source.redis_publish", new_callable=AsyncMock)
+    async def test_update_without_is_active_change_publishes_nothing(self, mock_publish):
+        db, mock_result = _mock_db()
+        redis = _mock_redis()
+
+        src = _make_source(tenant_id="tenant-1", is_active=True)
+
+        async def execute_side_effect(*args, **kwargs):
+            mock_r = MagicMock()
+            mock_r.scalar_one_or_none.return_value = src
+            mock_r.scalar_one.return_value = src
+            return mock_r
+
+        db.execute = execute_side_effect
+
+        from app.schemas.source import SourceUpdate
+
+        service = SourceService(db, redis)
+        await service.update_source(str(src.id), SourceUpdate(name="Renamed"), "tenant-1")
+        mock_publish.assert_not_called()
+
 
 class TestDeleteSource:
     @patch("app.services.source.redis_publish", new_callable=AsyncMock)
@@ -555,6 +914,26 @@ class TestDeleteSource:
         service = SourceService(db, redis)
         await service.delete_source(str(src.id), "tenant-1")
         db.delete.assert_called_once()
+
+    @patch("app.services.source.redis_publish", new_callable=AsyncMock)
+    @patch("app.services.source.redis_delete", new_callable=AsyncMock)
+    async def test_delete_publishes_source_deleted_event(self, mock_del, mock_publish):
+        """The scheduler worker removes the collection job based on this event, so lock
+        the publisher-side contract against the worker's 'source_deleted' handler."""
+        db, mock_result = _mock_db()
+        redis = _mock_redis()
+
+        src = _make_source(tenant_id="tenant-1")
+        mock_result.scalar_one_or_none.return_value = src
+
+        service = SourceService(db, redis)
+        await service.delete_source(str(src.id), "tenant-1")
+
+        mock_publish.assert_awaited_once()
+        channel, message = mock_publish.call_args.args
+        assert channel == "channel:dashboard"
+        assert message["event"] == "source_deleted"
+        assert message["source_id"] == str(src.id)
 
     async def test_delete_not_found(self):
         db, mock_result = _mock_db()

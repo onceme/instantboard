@@ -347,6 +347,9 @@ export interface Source {
   refresh_interval_seconds: number;
   is_active: boolean;
   health_status: "healthy" | "degraded" | "down";
+  // Backend schemas/source.py: false = no collector registered for this source
+  // type (cannot be enabled); undefined = legacy payloads, treat as unknown
+  collector_available?: boolean;
   last_fetch_at?: string;
   last_error?: string;
   created_at: string;

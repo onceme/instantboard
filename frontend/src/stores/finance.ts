@@ -9,8 +9,8 @@ import type {
   WatchlistQuote,
   SearchResult,
   FinancePanel,
-  SSEEventType,
 } from "@/types";
+import { SSEEventType } from "@/types";
 import {
   apiGet,
   apiPost,

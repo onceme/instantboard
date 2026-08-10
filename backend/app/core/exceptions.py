@@ -28,6 +28,19 @@ class ValidationError(AppException):
         )
 
 
+class NoCollectorAvailable(AppException):
+    # Raised when a source is about to be activated (create with is_active=True or an
+    # update that flips is_active to True) but no collector can run for it: the
+    # source_type has no registered collector and config.library names none either.
+    # Without this check the source would be "active" forever without collecting.
+    def __init__(self, message: str = "No collector available for this source type"):
+        super().__init__(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            error_code=ErrorCode.NO_COLLECTOR_AVAILABLE,
+            message=message,
+        )
+
+
 class InvalidOAuthCode(AppException):
     def __init__(self, message: str = "Invalid OAuth authorization code"):
         super().__init__(

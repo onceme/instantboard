@@ -161,6 +161,72 @@ class TestAddRemoveJob:
             await mgr.remove_job("nonexistent")
 
 
+# ── runtime scheduling hooks (source enable/disable events) ──────
+class TestSourceJobHooks:
+    async def test_add_source_job_schedules_from_payload(self):
+        """add_source_job must build the job purely from the event payload (no DB read)
+        and seed the category cache used by adaptive_reschedule."""
+        with patch("app.scheduler.manager.AsyncIOScheduler") as mock_cls:
+            sched = _make_mock_scheduler()
+            mock_cls.return_value = sched
+            mgr = AsyncSchedulerManager()
+
+            payload = {
+                "id": "src-abc",
+                "category_slug": "finance",
+                "refresh_interval_seconds": 120,
+                "source_type": "rss",
+            }
+            await mgr.add_source_job(payload)
+
+            sched.add_job.assert_called_once()
+            kwargs = sched.add_job.call_args.kwargs
+            assert kwargs["id"] == "collect_src-abc"
+            _source_category_cache.pop("src-abc", None)
+
+    async def test_add_source_job_missing_id_is_noop(self):
+        with patch("app.scheduler.manager.AsyncIOScheduler") as mock_cls:
+            sched = _make_mock_scheduler()
+            mock_cls.return_value = sched
+            mgr = AsyncSchedulerManager()
+            await mgr.add_source_job({"name": "no id"})
+            sched.add_job.assert_not_called()
+
+    async def test_add_source_job_falls_back_to_default_interval(self):
+        """An event payload without refresh_interval_seconds must fall back to the
+        per-source_type default instead of scheduling a broken trigger."""
+        with patch("app.scheduler.manager.AsyncIOScheduler") as mock_cls:
+            sched = _make_mock_scheduler()
+            mock_cls.return_value = sched
+            mgr = AsyncSchedulerManager()
+            default = SOURCE_TYPE_DEFAULT_INTERVALS["web_scrape"]
+            seen = []
+
+            async def _spy(job_id, func, interval_seconds, kwargs=None):
+                seen.append((job_id, interval_seconds))
+
+            mgr.add_job = _spy
+            await mgr.add_source_job({"id": "src-x", "source_type": "web_scrape"})
+            assert seen == [("collect_src-x", default)]
+
+    async def test_remove_source_job_removes_collect_job(self):
+        with patch("app.scheduler.manager.AsyncIOScheduler") as mock_cls:
+            sched = _make_mock_scheduler()
+            sched.get_job = MagicMock(return_value=MagicMock())
+            mock_cls.return_value = sched
+            mgr = AsyncSchedulerManager()
+            await mgr.remove_source_job("src-abc")
+            sched.remove_job.assert_called_once_with("collect_src-abc")
+
+    async def test_remove_source_job_empty_id_noop(self):
+        with patch("app.scheduler.manager.AsyncIOScheduler") as mock_cls:
+            sched = _make_mock_scheduler()
+            mock_cls.return_value = sched
+            mgr = AsyncSchedulerManager()
+            await mgr.remove_source_job("")
+            sched.remove_job.assert_not_called()
+
+
 # ── pause / resume / reschedule ──────────────────────────────────
 class TestPauseResume:
     async def test_pause_job(self):

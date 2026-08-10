@@ -68,7 +68,8 @@ class TestErrorCode:
         assert ErrorCode.ADMIN_LOGIN_DISABLED == "ADMIN_LOGIN_DISABLED"
 
     def test_all_values_count(self):
-        assert len(ErrorCode) == 18
+        # NO_COLLECTOR_AVAILABLE added for the source-enable collector pre-flight
+        assert len(ErrorCode) == 19
 
 
 class TestErrorDetail:

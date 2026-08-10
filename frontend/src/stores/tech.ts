@@ -1,12 +1,7 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
-import type {
-  TechNewsItem,
-  TechTopic,
-  TechDomain,
-  TechSort,
-  SSEEventType,
-} from "@/types";
+import type { TechNewsItem, TechTopic, TechDomain, TechSort } from "@/types";
+import { SSEEventType } from "@/types";
 import { apiGet, getApiErrorMessage } from "@/utils/api";
 import { SSEConnection, SSEConnectionState } from "@/utils/sse.ts";
 import { useAuthStore } from "./auth";

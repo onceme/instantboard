@@ -132,6 +132,34 @@ class AsyncSchedulerManager:
             _source_category_cache.pop(job_id.replace("collect_", ""), None)
             logger.info(f"Job {job_id} removed")
 
+    async def add_source_job(self, source: dict) -> None:
+        # Runtime hook for the worker's source-status listener (source_enabled event):
+        # schedule collection for a single source without restarting the worker. The
+        # dict is the full source payload published by SourceService, so no DB read
+        # is needed to build the job.
+        source_id = str(source.get("id") or "")
+        if not source_id:
+            logger.warning("add_source_job called with a payload missing source id")
+            return
+
+        category_slug = source.get("category_slug") or ""
+        if category_slug:
+            _source_category_cache[source_id] = category_slug
+
+        await self.add_collection_job(
+            source_id=source_id,
+            interval_seconds=source.get("refresh_interval_seconds") or 0,
+            source_type=source.get("source_type") or "",
+        )
+
+    async def remove_source_job(self, source_id: str) -> None:
+        # Runtime hook for the worker's source-status listener (source_disabled /
+        # source_deleted events): stop collecting the source immediately.
+        source_id = str(source_id or "")
+        if not source_id:
+            return
+        await self.remove_job(f"collect_{source_id}")
+
     async def pause_job(self, job_id: str) -> None:
         job = self.scheduler.get_job(job_id)
         if job:

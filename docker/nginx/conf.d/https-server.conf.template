@@ -10,8 +10,14 @@ server {
     ssl_protocols TLSv1.3;
     ssl_prefer_server_ciphers off;
 
-    # HSTS
-    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+    # HSTS — max-age is configurable via HSTS_MAX_AGE (default applied by
+    # entrypoint.sh: 31536000 = 1 year). DO NOT add `preload`: the site is
+    # served on a non-standard public port and preload lists are keyed by host
+    # name only — a preload entry would force HTTPS for this domain on ALL
+    # ports forever, poisoning any future use of the domain on other ports.
+    # Keep max-age moderate for staging/transitional deployments; consider a
+    # longer max-age only after production HTTPS has proven stable.
+    add_header Strict-Transport-Security "max-age=${HSTS_MAX_AGE}; includeSubDomains" always;
 
     ssl_session_cache shared:SSL:10m;
     ssl_session_timeout 1d;
@@ -28,11 +34,15 @@ server {
     }
 
     # --- Auth endpoints ---
+    # Longest-prefix match wins over /api/. X-Forwarded-For is OVERWRITTEN (not
+    # appended) with the direct peer address: login rate limiting and lockout in the
+    # backend are keyed on this header, so it must contain only nginx-observed data.
+    # A client-supplied X-Forwarded-For chain is discarded here.
     location /api/v1/auth/ {
         proxy_pass http://api;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header X-Request-ID $request_id;
     }

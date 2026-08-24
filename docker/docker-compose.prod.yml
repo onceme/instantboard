@@ -16,12 +16,23 @@ services:
       - HTTP_PORT=${HTTP_PORT:-80}
       - HTTPS_PORT=${HTTPS_PORT:-443}
       - ENABLE_HTTPS=${ENABLE_HTTPS:-false}
+      # Externally visible site origin used as the HTTP->HTTPS 301 target
+      # (e.g. https://ib.bithollow.org:65533 — the PUBLIC port, not the
+      # host/container port). When empty, entrypoint.sh falls back to
+      # https://$host, which is only correct on the standard port 443.
+      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-}
+      - HSTS_MAX_AGE=${HSTS_MAX_AGE:-31536000}
     command: /entrypoint.sh
     depends_on:
       api:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:${HTTP_PORT:-80}/"]
+      # Probe the dedicated /healthz endpoint (defined in both the http-server
+      # and http-redirect templates), which always returns 200. GET / cannot be
+      # used: with ENABLE_HTTPS=true the HTTP listener is a pure 301 redirector
+      # and busybox wget follows the Location into https://, which it cannot
+      # load — the healthcheck would flap unhealthy.
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:${HTTP_PORT:-80}/healthz"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -49,10 +60,11 @@ services:
       # scheduler must be disabled to avoid duplicate collection by two schedulers.
       # environment takes precedence over env_file, overriding SCHEDULER_ENABLED=true in .env.
       - SCHEDULER_ENABLED=false
-      - DATABASE_URL=${PROD_DATABASE_URL:-postgresql+asyncpg://instantboard:prodpass123@postgres:5432/instantboard}
-      - REDIS_URL=${PROD_REDIS_URL:-redis://:prodredis123@redis:6379/0}
-      - SECRET_KEY=${PROD_SECRET_KEY:-change-this-prod-secret-key-at-least-32-chars}
-    ports: []
+      # Secrets must be provided explicitly; refuse to start with missing
+      # credentials instead of silently falling back to well-known defaults.
+      - DATABASE_URL=${PROD_DATABASE_URL:?PROD_DATABASE_URL must be set}
+      - REDIS_URL=${PROD_REDIS_URL:?PROD_REDIS_URL must be set}
+      - SECRET_KEY=${PROD_SECRET_KEY:?PROD_SECRET_KEY must be set}
     command: >-
       gunicorn app.main:app
       --bind 0.0.0.0:8000
@@ -73,8 +85,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
-    volumes:
-      - ../backend/seed_data.py:/app/seed_data.py:ro
     deploy:
       resources:
         limits:
@@ -94,9 +104,11 @@ services:
       - ../.env
     environment:
       - ENV=production
-      - DATABASE_URL=${PROD_DATABASE_URL:-postgresql+asyncpg://instantboard:prodpass123@postgres:5432/instantboard}
-      - REDIS_URL=${PROD_REDIS_URL:-redis://:prodredis123@redis:6379/0}
-      - SECRET_KEY=${PROD_SECRET_KEY:-change-this-prod-secret-key-at-least-32-chars}
+      # Secrets must be provided explicitly; refuse to start with missing
+      # credentials instead of silently falling back to well-known defaults.
+      - DATABASE_URL=${PROD_DATABASE_URL:?PROD_DATABASE_URL must be set}
+      - REDIS_URL=${PROD_REDIS_URL:?PROD_REDIS_URL must be set}
+      - SECRET_KEY=${PROD_SECRET_KEY:?PROD_SECRET_KEY must be set}
     depends_on:
       postgres:
         condition: service_healthy
@@ -104,11 +116,20 @@ services:
         condition: service_healthy
     command: python -m app.scheduler.worker
     healthcheck:
-      test: ["CMD-SHELL", "ps aux | grep 'scheduler.worker' | grep -v grep || exit 1"]
+      # Validate the worker heartbeat freshness in Redis instead of a mere process
+      # check: a hung worker keeps its process alive but stops refreshing the key.
+      # The worker writes scheduler:worker:heartbeat every 15s with a 45s TTL
+      # (app/scheduler/worker.py; contract: docs/design/infrastructure.md §3.5
+      # "Worker 心跳机制"). Key name must match app/core/redis.py RedisKeys.WORKER_HEARTBEAT.
+      test:
+        [
+          "CMD-SHELL",
+          "python -c 'import datetime,json,os,urllib.parse,sys; u=urllib.parse.urlparse(os.environ.get(\"REDIS_URL\",\"\")); import redis; r=redis.Redis(host=u.hostname or \"127.0.0.1\", port=u.port or 6379, username=u.username or None, password=urllib.parse.unquote(u.password) if u.password else None, db=int(u.path.lstrip(\"/\") or 0), socket_connect_timeout=5, socket_timeout=5); raw=r.get(\"scheduler:worker:heartbeat\"); assert raw; ts=datetime.datetime.fromisoformat(json.loads(raw)[\"timestamp\"]); ts=ts if ts.tzinfo else ts.replace(tzinfo=datetime.timezone.utc); age=(datetime.datetime.now(datetime.timezone.utc)-ts).total_seconds(); sys.exit(0 if age<45 else 1)'",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 30s
+      start_period: 60s
     deploy:
       resources:
         limits:
@@ -125,8 +146,9 @@ services:
       dockerfile: Dockerfile
       target: prod
     command: ["/entrypoint.sh"]
-    ports:
-      - "${FRONTEND_PORT:-3000}:80"
+    # No host port publication: production traffic reaches the frontend
+    # through nginx only. (A dev/debug publication lives in
+    # docker-compose.override.yml, which prod merges never load.)
     volumes:
       - frontend_static:/usr/share/nginx/html
     depends_on:
@@ -141,12 +163,20 @@ services:
 
   # --- Infrastructure services ---
   postgres:
-    image: postgres:15-alpine
+    # PostgreSQL 17, Debian-based image on purpose (NOT alpine): staging's data
+    # directory was initialized by a Debian-based PostgreSQL 17.7 image and is
+    # reused as-is (no in-place downgrade possible). The alpine variant uses
+    # musl instead of glibc, whose collation differences can silently change
+    # string ordering and invalidate existing string indexes. Same major
+    # version + same libc family keeps the existing data directory compatible.
+    image: postgres:17
     environment:
       POSTGRES_DB: ${PROD_POSTGRES_DB:-instantboard}
       POSTGRES_USER: ${PROD_POSTGRES_USER:-instantboard}
-      POSTGRES_PASSWORD: ${PROD_DB_PASSWORD:-prodpass123}
-    ports: []
+      # Refuse to start without an explicit password; never fall back to a
+      # well-known default. Note: changing this value does NOT rotate the
+      # password of an already-initialized volume (see deployment docs).
+      POSTGRES_PASSWORD: ${PROD_DB_PASSWORD:?PROD_DB_PASSWORD must be set}
     volumes:
       - postgres_prod_data:/var/lib/postgresql/data
       - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
@@ -166,13 +196,13 @@ services:
 
   redis:
     image: redis:7-alpine
-    ports: []
     volumes:
       - redis_prod_data:/data
       - ./redis/redis.conf:/usr/local/etc/redis/redis.conf
-    command: redis-server /usr/local/etc/redis/redis.conf --requirepass ${PROD_REDIS_PASSWORD:-prodredis123}
+    # Must match the password embedded in PROD_REDIS_URL.
+    command: redis-server /usr/local/etc/redis/redis.conf --requirepass ${PROD_REDIS_PASSWORD:?PROD_REDIS_PASSWORD must be set}
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${PROD_REDIS_PASSWORD:-prodredis123}", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${PROD_REDIS_PASSWORD:?PROD_REDIS_PASSWORD must be set}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -187,10 +217,9 @@ services:
 
   mongodb:
     image: mongo:6
-    ports: []
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${PROD_MONGO_USER:-instantboard}
-      MONGO_INITDB_ROOT_PASSWORD: ${PROD_MONGO_PASSWORD:-prodmongo123}
+      MONGO_INITDB_ROOT_PASSWORD: ${PROD_MONGO_PASSWORD:?PROD_MONGO_PASSWORD must be set}
     volumes:
       - mongodb_prod_data:/data/db
     profiles:

@@ -18,17 +18,21 @@ server {
     }
 
     # --- Auth endpoints ---
+    # Longest-prefix match wins over /api/. X-Forwarded-For is OVERWRITTEN (not
+    # appended) with the direct peer address: login rate limiting and lockout in the
+    # backend are keyed on this header, so it must contain only nginx-observed data.
+    # A client-supplied X-Forwarded-For chain is discarded here.
     location /api/v1/auth/ {
         proxy_pass http://api;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header X-Request-ID $request_id;
 
         proxy_connect_timeout 10s;
         proxy_send_timeout 30s;
-        proxy_read_timeout 30s;
+        proxy_read_timeout 60s;
     }
 
     # --- SSE stream ---
@@ -62,6 +66,16 @@ server {
         proxy_pass http://api;
         proxy_set_header Host $host;
         access_log off;
+    }
+
+    # Dedicated nginx health-check endpoint for the container healthcheck
+    # (docker-compose.prod.yml). Mirrors the /healthz location of the
+    # http-redirect template so the probe command works identically in both
+    # ENABLE_HTTPS modes.
+    location = /healthz {
+        access_log off;
+        add_header Content-Type text/plain;
+        return 200 "ok";
     }
 
     # --- Frontend static files ---

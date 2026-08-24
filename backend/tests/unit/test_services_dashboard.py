@@ -1,10 +1,11 @@
 import json
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app.core.redis import RedisKeys
 from app.services.dashboard import DashboardService, start_metrics_collection, stop_metrics_collection
 
 
@@ -96,9 +97,12 @@ class TestGetSystemInfo:
 
 
 class TestGetServicesHealth:
+    @patch("app.services.dashboard.settings")
     @patch("app.services.dashboard.event_router")
     @patch("app.services.dashboard.scheduler_manager")
-    async def test_services_all_healthy(self, mock_sched, mock_router):
+    async def test_services_all_healthy(self, mock_sched, mock_router, mock_settings):
+        # Embedded (dev) mode: the in-process scheduler singleton is the truth source.
+        mock_settings.scheduler_enabled = True
         db, mock_result = _mock_db()
 
         call_count = 0
@@ -120,9 +124,7 @@ class TestGetServicesHealth:
         db.execute = execute_side_effect
 
         mock_sched._running = True
-        mock_sched.get_jobs_status = AsyncMock(return_value=[
-            {"job_id": "test", "pending": False}
-        ])
+        mock_sched.get_jobs_status = AsyncMock(return_value=[{"job_id": "test", "pending": False}])
         mock_router.get_stats.return_value = {
             "total_connections": 5,
             "total_events_pushed": 100,
@@ -147,15 +149,21 @@ class TestGetServicesHealth:
         sse = next(s for s in result if s["service"] == "sse")
         assert sse["status"] == "healthy"
 
+    @patch("app.services.dashboard.settings")
     @patch("app.services.dashboard.event_router")
     @patch("app.services.dashboard.scheduler_manager")
-    async def test_services_pg_down(self, mock_sched, mock_router):
+    async def test_services_pg_down(self, mock_sched, mock_router, mock_settings):
+        mock_settings.scheduler_enabled = True
         db, mock_result = _mock_db()
         db.execute = AsyncMock(side_effect=Exception("connection refused"))
 
         mock_sched._running = False
         mock_sched.get_jobs_status = AsyncMock(return_value=[])
-        mock_router.get_stats.return_value = {"total_connections": 0, "total_events_pushed": 0, "avg_connection_duration_seconds": 0}
+        mock_router.get_stats.return_value = {
+            "total_connections": 0,
+            "total_events_pushed": 0,
+            "avg_connection_duration_seconds": 0,
+        }
 
         service = DashboardService(db, None)
         result = await service.get_services_health()
@@ -169,9 +177,11 @@ class TestGetServicesHealth:
         sched = next(s for s in result if s["service"] == "scheduler")
         assert sched["status"] == "down"
 
+    @patch("app.services.dashboard.settings")
     @patch("app.services.dashboard.event_router")
     @patch("app.services.dashboard.scheduler_manager")
-    async def test_services_redis_error(self, mock_sched, mock_router):
+    async def test_services_redis_error(self, mock_sched, mock_router, mock_settings):
+        mock_settings.scheduler_enabled = True
         db, mock_result = _mock_db()
 
         call_count = 0
@@ -187,7 +197,11 @@ class TestGetServicesHealth:
 
         mock_sched._running = True
         mock_sched.get_jobs_status = AsyncMock(return_value=[{"job_id": "j", "pending": False}])
-        mock_router.get_stats.return_value = {"total_connections": 1, "total_events_pushed": 10, "avg_connection_duration_seconds": 5}
+        mock_router.get_stats.return_value = {
+            "total_connections": 1,
+            "total_events_pushed": 10,
+            "avg_connection_duration_seconds": 5,
+        }
 
         redis = _mock_redis()
         redis.ping = AsyncMock(side_effect=Exception("Redis error"))
@@ -198,6 +212,104 @@ class TestGetServicesHealth:
         redis_svc = next(s for s in result if s["service"] == "redis")
         assert redis_svc["status"] == "down"
 
+    @patch("app.services.dashboard.settings")
+    @patch("app.services.dashboard.event_router")
+    @patch("app.services.dashboard.scheduler_manager")
+    async def test_services_sse_zero_connections_healthy(self, mock_sched, mock_router, mock_settings):
+        # Regression: zero SSE connections is a normal load state (nobody has the
+        # real-time board open), not a health signal. The old rule reported
+        # "degraded" whenever the scheduler was running with 0 connections and
+        # false-fired on every dashboard page load.
+        mock_settings.scheduler_enabled = True
+        db, mock_result = _mock_db()
+
+        call_count = 0
+
+        async def execute_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            mock_r = MagicMock()
+            if call_count == 1:
+                mock_r.scalar.return_value = 1
+            elif call_count == 2:
+                mock_r.scalar.return_value = 5
+            elif call_count == 3:
+                mock_r.scalar.return_value = 1024 * 1024 * 100
+            elif call_count == 4:
+                mock_r.scalar.return_value = "PostgreSQL 15.0"
+            return mock_r
+
+        db.execute = execute_side_effect
+
+        mock_sched._running = True
+        mock_sched.get_jobs_status = AsyncMock(return_value=[{"job_id": "test", "pending": False}])
+        mock_router.get_stats.return_value = {
+            "total_connections": 0,
+            "total_events_pushed": 0,
+            "avg_connection_duration_seconds": 0,
+        }
+
+        service = DashboardService(db, _mock_redis())
+        result = await service.get_services_health()
+
+        sse = next(s for s in result if s["service"] == "sse")
+        assert sse["status"] == "healthy"
+        assert sse["connection_count"] == 0
+        assert sse["details"]["active_connections"] == 0
+
+    @patch("app.services.dashboard.settings")
+    @patch("app.services.dashboard.event_router")
+    @patch("app.services.dashboard.scheduler_manager")
+    async def test_services_sse_zero_connections_healthy_prod_mode(self, mock_sched, mock_router, mock_settings):
+        # Same zero-connection contract when the scheduler runs in the worker
+        # container (prod mode): SSE status must stay independent of it.
+        mock_settings.scheduler_enabled = False
+        db, mock_result = _mock_db()
+
+        call_count = 0
+
+        async def execute_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            mock_r = MagicMock()
+            mock_r.scalar.return_value = 1
+            return mock_r
+
+        db.execute = execute_side_effect
+        mock_router.get_stats.return_value = {
+            "total_connections": 0,
+            "total_events_pushed": 0,
+            "avg_connection_duration_seconds": 0,
+        }
+
+        service = DashboardService(db, _mock_redis())
+        result = await service.get_services_health()
+
+        sse = next(s for s in result if s["service"] == "sse")
+        assert sse["status"] == "healthy"
+        assert sse["connection_count"] == 0
+
+    @patch("app.services.dashboard.settings")
+    @patch("app.services.dashboard.event_router")
+    @patch("app.services.dashboard.scheduler_manager")
+    async def test_services_sse_router_error_down(self, mock_sched, mock_router, mock_settings):
+        # event_router unable to report stats = SSE service unavailable -> down.
+        mock_settings.scheduler_enabled = True
+        db, mock_result = _mock_db()
+        db.execute = AsyncMock(side_effect=Exception("connection refused"))
+
+        mock_sched._running = True
+        mock_sched.get_jobs_status = AsyncMock(return_value=[{"job_id": "test", "pending": False}])
+        mock_router.get_stats.side_effect = RuntimeError("router stats unavailable")
+
+        service = DashboardService(db, None)
+        result = await service.get_services_health()
+
+        sse = next(s for s in result if s["service"] == "sse")
+        assert sse["status"] == "down"
+        assert sse["connection_count"] == 0
+        assert "router stats unavailable" in sse["details"]["error"]
+
 
 class TestGetDataSourcesHealthSummary:
     @patch("app.services.dashboard.SourceService")
@@ -206,9 +318,9 @@ class TestGetDataSourcesHealthSummary:
         redis = _mock_redis()
 
         mock_ss = AsyncMock()
-        mock_ss.get_all_sources_health_summary = AsyncMock(return_value={
-            "total_sources": 10, "healthy": 8, "degraded": 1, "down": 1
-        })
+        mock_ss.get_all_sources_health_summary = AsyncMock(
+            return_value={"total_sources": 10, "healthy": 8, "degraded": 1, "down": 1}
+        )
         mock_ss_class.return_value = mock_ss
 
         mock_result.all.return_value = []
@@ -357,28 +469,33 @@ class TestGetDataSourceHealthDetail:
 
 
 class TestGetSchedulerStatus:
+    @patch("app.services.dashboard.settings")
     @patch("app.services.dashboard.scheduler_manager")
-    async def test_get_status(self, mock_sched):
-        mock_sched.get_jobs_status = AsyncMock(return_value=[
-            {
-                "job_id": "collect_src-123",
-                "name": "Collect RSS",
-                "trigger": "interval[0:05:00]",
-                "original_interval": 300,
-                "adaptive_multiplier": 1.0,
-                "next_run": "2024-01-01 12:00:00",
-                "pending": False,
-            },
-            {
-                "job_id": "collect_src-456",
-                "name": "Collect API",
-                "trigger": "interval[0:10:00]",
-                "original_interval": 600,
-                "adaptive_multiplier": 2.0,
-                "next_run": None,
-                "pending": True,
-            },
-        ])
+    async def test_get_status(self, mock_sched, mock_settings):
+        # Embedded (dev) mode: job list comes from the in-process scheduler.
+        mock_settings.scheduler_enabled = True
+        mock_sched.get_jobs_status = AsyncMock(
+            return_value=[
+                {
+                    "job_id": "collect_src-123",
+                    "name": "Collect RSS",
+                    "trigger": "interval[0:05:00]",
+                    "original_interval": 300,
+                    "adaptive_multiplier": 1.0,
+                    "next_run": "2024-01-01 12:00:00",
+                    "pending": False,
+                },
+                {
+                    "job_id": "collect_src-456",
+                    "name": "Collect API",
+                    "trigger": "interval[0:10:00]",
+                    "original_interval": 600,
+                    "adaptive_multiplier": 2.0,
+                    "next_run": None,
+                    "pending": True,
+                },
+            ]
+        )
 
         db, _ = _mock_db()
         redis = _mock_redis()
@@ -390,6 +507,10 @@ class TestGetSchedulerStatus:
         assert len(result["running_jobs"]) == 1
         assert len(result["paused_jobs"]) == 1
         assert len(result["all_jobs"]) == 2
+        # Embedded mode mirrors the list lengths in the count fields.
+        assert result["running_jobs_count"] == 1
+        assert result["paused_jobs_count"] == 1
+        assert result["last_heartbeat"] is None
 
         paused = result["paused_jobs"][0]
         assert paused["status"] == "paused"
@@ -465,6 +586,7 @@ class TestCollectAndPushMetrics:
         db, _ = _mock_db()
 
         from app.services.dashboard import _last_metrics
+
         _last_metrics.clear()
 
         service = DashboardService(db, _mock_redis())
@@ -486,6 +608,7 @@ class TestCollectAndPushMetrics:
         redis = _mock_redis()
 
         from app.services import dashboard as dash_mod
+
         dash_mod._last_metrics = {
             "cpu_usage_percent": 35.0,
             "memory_usage_percent": 55.0,
@@ -512,6 +635,7 @@ class TestCollectAndPushMetrics:
         redis = _mock_redis()
 
         from app.services import dashboard as dash_mod
+
         dash_mod._last_metrics = {
             "cpu_usage_percent": 30.0,
             "memory_usage_percent": 50.0,
@@ -537,6 +661,7 @@ class TestCollectAndPushMetrics:
         db, _ = _mock_db()
 
         from app.services import dashboard as dash_mod
+
         dash_mod._last_metrics.clear()
 
         service = DashboardService(db, _mock_redis())
@@ -544,10 +669,12 @@ class TestCollectAndPushMetrics:
 
 
 class TestArchiveSnapshot:
+    @patch("app.services.dashboard.settings")
     @patch("app.services.dashboard.scheduler_manager")
     @patch("app.services.dashboard.event_router")
     @patch("app.services.dashboard.psutil")
-    async def test_archive_success(self, mock_psutil, mock_router, mock_sched):
+    async def test_archive_success(self, mock_psutil, mock_router, mock_sched, mock_settings):
+        mock_settings.scheduler_enabled = True
         mock_psutil.virtual_memory.return_value = MagicMock(total=8 * 1024**3, used=4 * 1024**3)
         mock_psutil.disk_usage.return_value = MagicMock(total=500 * 1024**3, used=200 * 1024**3)
 
@@ -561,11 +688,16 @@ class TestArchiveSnapshot:
         service = DashboardService(db, _mock_redis())
         await service.archive_snapshot()
         db.add.assert_called_once()
+        # Embedded mode: active jobs counted from the in-process scheduler
+        snapshot = db.add.call_args.args[0]
+        assert snapshot.scheduler_jobs_active == 1
 
+    @patch("app.services.dashboard.settings")
     @patch("app.services.dashboard.scheduler_manager")
     @patch("app.services.dashboard.event_router")
     @patch("app.services.dashboard.psutil")
-    async def test_archive_db_error(self, mock_psutil, mock_router, mock_sched):
+    async def test_archive_db_error(self, mock_psutil, mock_router, mock_sched, mock_settings):
+        mock_settings.scheduler_enabled = True
         mock_psutil.virtual_memory.return_value = MagicMock(total=8 * 1024**3, used=4 * 1024**3)
         mock_psutil.disk_usage.return_value = MagicMock(total=500 * 1024**3, used=200 * 1024**3)
 
@@ -578,17 +710,22 @@ class TestArchiveSnapshot:
         service = DashboardService(db, _mock_redis())
         await service.archive_snapshot()
         db.add.assert_called_once()
+        # No jobs scheduled -> 0 active jobs recorded
+        snapshot = db.add.call_args.args[0]
+        assert snapshot.scheduler_jobs_active == 0
 
 
 class TestStartStopMetricsCollection:
     def test_stop_no_task(self):
         from app.services import dashboard as dash_mod
+
         dash_mod._metrics_collection_task = None
         stop_metrics_collection()
         assert dash_mod._metrics_collection_task is None
 
     def test_stop_done_task(self):
         from app.services import dashboard as dash_mod
+
         mock_task = MagicMock()
         mock_task.done.return_value = True
         dash_mod._metrics_collection_task = mock_task
@@ -596,6 +733,7 @@ class TestStartStopMetricsCollection:
 
     def test_stop_running_task(self):
         from app.services import dashboard as dash_mod
+
         mock_task = MagicMock()
         mock_task.done.return_value = False
         mock_task.cancel = MagicMock()
@@ -669,9 +807,9 @@ class TestDataSourceHealthSummaryRows:
         redis = _mock_redis()
 
         mock_ss = AsyncMock()
-        mock_ss.get_all_sources_health_summary = AsyncMock(return_value={
-            "total_sources": 2, "healthy": 1, "degraded": 1, "down": 0
-        })
+        mock_ss.get_all_sources_health_summary = AsyncMock(
+            return_value={"total_sources": 2, "healthy": 1, "degraded": 1, "down": 0}
+        )
         mock_ss_class.return_value = mock_ss
 
         # Create mock source and health row
@@ -713,9 +851,9 @@ class TestDataSourceHealthSummaryRows:
         redis = _mock_redis()
 
         mock_ss = AsyncMock()
-        mock_ss.get_all_sources_health_summary = AsyncMock(return_value={
-            "total_sources": 1, "healthy": 1, "degraded": 0, "down": 0
-        })
+        mock_ss.get_all_sources_health_summary = AsyncMock(
+            return_value={"total_sources": 1, "healthy": 1, "degraded": 0, "down": 0}
+        )
         mock_ss_class.return_value = mock_ss
 
         src = MagicMock()
@@ -822,6 +960,7 @@ class TestCollectAndPushMetricsExtraPaths:
         db, _ = _mock_db()
 
         from app.services import dashboard as dash_mod
+
         dash_mod._last_metrics.clear()
 
         service = DashboardService(db, _mock_redis())
@@ -830,10 +969,12 @@ class TestCollectAndPushMetricsExtraPaths:
 
 
 class TestSchedulerDegradedStatus:
+    @patch("app.services.dashboard.settings")
     @patch("app.services.dashboard.event_router")
     @patch("app.services.dashboard.scheduler_manager")
-    async def test_scheduler_degraded(self, mock_sched, mock_router):
-        """Scheduler is running but no running jobs -> degraded."""
+    async def test_scheduler_degraded(self, mock_sched, mock_router, mock_settings):
+        """Scheduler is running but no running jobs -> degraded (embedded mode)."""
+        mock_settings.scheduler_enabled = True
         db, mock_result = _mock_db()
 
         call_count = 0
@@ -849,7 +990,11 @@ class TestSchedulerDegradedStatus:
 
         mock_sched._running = True
         mock_sched.get_jobs_status = AsyncMock(return_value=[])
-        mock_router.get_stats.return_value = {"total_connections": 0, "total_events_pushed": 0, "avg_connection_duration_seconds": 0}
+        mock_router.get_stats.return_value = {
+            "total_connections": 0,
+            "total_events_pushed": 0,
+            "avg_connection_duration_seconds": 0,
+        }
 
         redis = _mock_redis()
 
@@ -860,5 +1005,346 @@ class TestSchedulerDegradedStatus:
         assert sched["status"] == "degraded"
 
         sse = next(s for s in result if s["service"] == "sse")
-        # with 0 connections and scheduler running, SSE should be "degraded"
-        assert sse["status"] == "degraded"
+        # 0 connections + scheduler running must NOT degrade SSE: the router is
+        # available, and zero connections is a normal state (the old rule
+        # false-fired during page load, racing the SSE handshake).
+        assert sse["status"] == "healthy"
+        assert sse["connection_count"] == 0
+        assert sse["details"]["active_connections"] == 0
+
+
+class TestSseHealthStatus:
+    """SSE health depends only on router availability, never on the connection
+    count: 0 connections just means nobody has the real-time board open."""
+
+    @patch("app.services.dashboard.settings")
+    @patch("app.services.dashboard.event_router")
+    @patch("app.services.dashboard.scheduler_manager")
+    async def test_sse_healthy_with_zero_connections_scheduler_running(self, mock_sched, mock_router, mock_settings):
+        mock_settings.scheduler_enabled = True
+        db, _ = _mock_db()
+
+        async def execute_side_effect(*args, **kwargs):
+            mock_r = MagicMock()
+            mock_r.scalar.return_value = 1
+            return mock_r
+
+        db.execute = execute_side_effect
+
+        mock_sched._running = True
+        mock_sched.get_jobs_status = AsyncMock(return_value=[{"job_id": "j", "pending": False}])
+        mock_router.get_stats.return_value = {
+            "total_connections": 0,
+            "total_events_pushed": 0,
+            "avg_connection_duration_seconds": 0,
+        }
+
+        service = DashboardService(db, _mock_redis())
+        result = await service.get_services_health()
+
+        sse = next(s for s in result if s["service"] == "sse")
+        assert sse["status"] == "healthy"
+        assert sse["connection_count"] == 0
+        assert sse["details"]["active_connections"] == 0
+        # connection counts still surface in details, just not in the status
+        assert sse["details"]["total_events_pushed"] == 0
+
+    @patch("app.services.dashboard.settings")
+    @patch("app.services.dashboard.event_router")
+    @patch("app.services.dashboard.scheduler_manager")
+    async def test_sse_healthy_with_zero_connections_scheduler_stopped(self, mock_sched, mock_router, mock_settings):
+        mock_settings.scheduler_enabled = True
+        db, _ = _mock_db()
+
+        async def execute_side_effect(*args, **kwargs):
+            mock_r = MagicMock()
+            mock_r.scalar.return_value = 1
+            return mock_r
+
+        db.execute = execute_side_effect
+
+        mock_sched._running = False
+        mock_sched.get_jobs_status = AsyncMock(return_value=[])
+        mock_router.get_stats.return_value = {
+            "total_connections": 0,
+            "total_events_pushed": 0,
+            "avg_connection_duration_seconds": 0,
+        }
+
+        service = DashboardService(db, _mock_redis())
+        result = await service.get_services_health()
+
+        sse = next(s for s in result if s["service"] == "sse")
+        assert sse["status"] == "healthy"
+        assert sse["connection_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Prod mode (SCHEDULER_ENABLED=false): scheduler health comes from the worker
+# heartbeat stored in Redis, not from the in-process scheduler singleton.
+# Contract: docs/design/infrastructure.md §3.5 "Worker 心跳机制".
+# ---------------------------------------------------------------------------
+
+HEARTBEAT_KEY = RedisKeys.worker_heartbeat_key()
+
+
+def _heartbeat_payload(age_seconds: float = 0.0, **overrides) -> str:
+    """Build a realistic worker heartbeat JSON, aged `age_seconds` into the past."""
+    payload = {
+        "timestamp": (datetime.now(UTC) - timedelta(seconds=age_seconds)).isoformat(),
+        "pid": 4242,
+        "scheduler_running": True,
+        "jobs_total": 12,
+        "jobs_running": 10,
+        "jobs_paused": 2,
+        "event_listener_subscribed": True,
+    }
+    payload.update(overrides)
+    return json.dumps(payload)
+
+
+def _redis_with_heartbeat(raw):
+    redis = _mock_redis()
+    redis.get = AsyncMock(return_value=raw)
+    return redis
+
+
+class TestServicesHealthProdMode:
+    """Prod branch of get_services_health: read the worker heartbeat from Redis."""
+
+    @patch("app.services.dashboard.settings")
+    @patch("app.services.dashboard.event_router")
+    @patch("app.services.dashboard.scheduler_manager")
+    async def test_fresh_heartbeat_is_healthy(self, mock_sched, mock_router, mock_settings):
+        mock_settings.scheduler_enabled = False
+        db, _ = _mock_db()
+        db.execute = AsyncMock(side_effect=Exception("pg not reachable"))  # pg branch irrelevant here
+        mock_router.get_stats.return_value = {
+            "total_connections": 3,
+            "total_events_pushed": 1,
+            "avg_connection_duration_seconds": 1,
+        }
+
+        raw = _heartbeat_payload(age_seconds=5)
+        service = DashboardService(db, _redis_with_heartbeat(raw))
+        result = await service.get_services_health()
+
+        sched = next(s for s in result if s["service"] == "scheduler")
+        assert sched["status"] == "healthy"
+        # The embedded scheduler singleton must NOT be consulted in prod mode.
+        mock_sched.get_jobs_status.assert_not_called()
+        # details carry job stats + last heartbeat straight from the payload
+        assert sched["details"]["mode"] == "worker_heartbeat"
+        assert sched["details"]["total_jobs"] == 12
+        assert sched["details"]["running_jobs"] == 10
+        assert sched["details"]["paused_jobs"] == 2
+        assert sched["details"]["is_running"] is True
+        assert sched["details"]["worker_pid"] == 4242
+        assert sched["details"]["last_heartbeat"] is not None
+        assert sched["details"]["last_heartbeat_age_seconds"] >= 0
+
+    @patch("app.services.dashboard.settings")
+    @patch("app.services.dashboard.event_router")
+    @patch("app.services.dashboard.scheduler_manager")
+    async def test_stale_heartbeat_is_down(self, mock_sched, mock_router, mock_settings):
+        mock_settings.scheduler_enabled = False
+        db, _ = _mock_db()
+        db.execute = AsyncMock(side_effect=Exception("pg not reachable"))
+        mock_router.get_stats.return_value = {
+            "total_connections": 0,
+            "total_events_pushed": 0,
+            "avg_connection_duration_seconds": 0,
+        }
+
+        raw = _heartbeat_payload(age_seconds=120)  # 120s > 45s threshold
+        service = DashboardService(db, _redis_with_heartbeat(raw))
+        result = await service.get_services_health()
+
+        sched = next(s for s in result if s["service"] == "scheduler")
+        assert sched["status"] == "down"
+        assert "stale" in sched["details"]["error"]
+        # stale heartbeat still reports when we last heard from the worker
+        assert sched["details"]["last_heartbeat"] is not None
+
+    @patch("app.services.dashboard.settings")
+    @patch("app.services.dashboard.event_router")
+    @patch("app.services.dashboard.scheduler_manager")
+    async def test_missing_heartbeat_is_down(self, mock_sched, mock_router, mock_settings):
+        mock_settings.scheduler_enabled = False
+        db, _ = _mock_db()
+        db.execute = AsyncMock(side_effect=Exception("pg not reachable"))
+        mock_router.get_stats.return_value = {
+            "total_connections": 0,
+            "total_events_pushed": 0,
+            "avg_connection_duration_seconds": 0,
+        }
+
+        service = DashboardService(db, _redis_with_heartbeat(None))  # key absent
+        result = await service.get_services_health()
+
+        sched = next(s for s in result if s["service"] == "scheduler")
+        assert sched["status"] == "down"
+        assert sched["details"]["error"] == "worker heartbeat missing"
+        assert sched["details"]["last_heartbeat"] is None
+
+    @patch("app.services.dashboard.settings")
+    @patch("app.services.dashboard.event_router")
+    @patch("app.services.dashboard.scheduler_manager")
+    async def test_redis_read_failure_degrades_with_redis_status(self, mock_sched, mock_router, mock_settings):
+        """Redis unavailable: scheduler cannot be judged -> down, but the details
+        mirror the redis failure instead of blaming the worker."""
+        mock_settings.scheduler_enabled = False
+        db, _ = _mock_db()
+        db.execute = AsyncMock(side_effect=Exception("pg not reachable"))
+        mock_router.get_stats.return_value = {
+            "total_connections": 0,
+            "total_events_pushed": 0,
+            "avg_connection_duration_seconds": 0,
+        }
+
+        redis = _mock_redis()
+        redis.get = AsyncMock(side_effect=Exception("connection lost"))
+        service = DashboardService(db, redis)
+        result = await service.get_services_health()
+
+        sched = next(s for s in result if s["service"] == "scheduler")
+        assert sched["status"] == "down"
+        assert "redis unavailable" in sched["details"]["error"]
+        assert sched["details"]["last_heartbeat"] is None
+
+    @patch("app.services.dashboard.settings")
+    @patch("app.services.dashboard.event_router")
+    @patch("app.services.dashboard.scheduler_manager")
+    async def test_no_redis_client_is_down(self, mock_sched, mock_router, mock_settings):
+        mock_settings.scheduler_enabled = False
+        db, _ = _mock_db()
+        db.execute = AsyncMock(side_effect=Exception("pg not reachable"))
+        mock_router.get_stats.return_value = {
+            "total_connections": 0,
+            "total_events_pushed": 0,
+            "avg_connection_duration_seconds": 0,
+        }
+
+        service = DashboardService(db, None)  # no redis at all
+        result = await service.get_services_health()
+
+        sched = next(s for s in result if s["service"] == "scheduler")
+        assert sched["status"] == "down"
+        assert sched["details"]["error"] == "Redis client not available"
+
+    @patch("app.services.dashboard.settings")
+    @patch("app.services.dashboard.event_router")
+    @patch("app.services.dashboard.scheduler_manager")
+    async def test_listener_death_visible_in_details(self, mock_sched, mock_router, mock_settings):
+        """A fresh heartbeat whose event listener died must expose that flag."""
+        mock_settings.scheduler_enabled = False
+        db, _ = _mock_db()
+        db.execute = AsyncMock(side_effect=Exception("pg not reachable"))
+        mock_router.get_stats.return_value = {
+            "total_connections": 3,
+            "total_events_pushed": 1,
+            "avg_connection_duration_seconds": 1,
+        }
+
+        raw = _heartbeat_payload(age_seconds=1, event_listener_subscribed=False)
+        service = DashboardService(db, _redis_with_heartbeat(raw))
+        result = await service.get_services_health()
+
+        sched = next(s for s in result if s["service"] == "scheduler")
+        assert sched["status"] == "healthy"  # heartbeat itself is fresh
+        assert sched["details"]["event_listener_subscribed"] is False
+
+
+class TestGetSchedulerStatusProdMode:
+    @patch("app.services.dashboard.settings")
+    @patch("app.services.dashboard.scheduler_manager")
+    async def test_counts_come_from_fresh_heartbeat(self, mock_sched, mock_settings):
+        mock_settings.scheduler_enabled = False
+        db, _ = _mock_db()
+        raw = _heartbeat_payload(age_seconds=2)
+        service = DashboardService(db, _redis_with_heartbeat(raw))
+
+        result = await service.get_scheduler_status()
+
+        # the in-process scheduler must not be touched in prod mode
+        mock_sched.get_jobs_status.assert_not_called()
+        assert result["total_jobs"] == 12
+        assert result["running_jobs_count"] == 10
+        assert result["paused_jobs_count"] == 2
+        # per-job list is empty cross-process; only counts come from the heartbeat
+        assert result["running_jobs"] == []
+        assert result["paused_jobs"] == []
+        assert result["all_jobs"] == []
+        assert result["last_heartbeat"] is not None
+
+    @patch("app.services.dashboard.settings")
+    @patch("app.services.dashboard.scheduler_manager")
+    async def test_stale_heartbeat_yields_zero_counts(self, mock_sched, mock_settings):
+        mock_settings.scheduler_enabled = False
+        db, _ = _mock_db()
+        raw = _heartbeat_payload(age_seconds=300)  # stale
+        service = DashboardService(db, _redis_with_heartbeat(raw))
+
+        result = await service.get_scheduler_status()
+
+        assert result["total_jobs"] == 0
+        assert result["running_jobs_count"] == 0
+        assert result["paused_jobs_count"] == 0
+
+    @patch("app.services.dashboard.settings")
+    @patch("app.services.dashboard.scheduler_manager")
+    async def test_missing_heartbeat_yields_zero_counts(self, mock_sched, mock_settings):
+        mock_settings.scheduler_enabled = False
+        db, _ = _mock_db()
+        service = DashboardService(db, _redis_with_heartbeat(None))
+
+        result = await service.get_scheduler_status()
+
+        assert result["total_jobs"] == 0
+        assert result["running_jobs_count"] == 0
+        assert result["paused_jobs_count"] == 0
+        assert result["last_heartbeat"] is None
+
+
+class TestArchiveSnapshotProdMode:
+    @patch("app.services.dashboard.settings")
+    @patch("app.services.dashboard.scheduler_manager")
+    @patch("app.services.dashboard.event_router")
+    @patch("app.services.dashboard.psutil")
+    async def test_snapshot_uses_heartbeat_jobs_running(self, mock_psutil, mock_router, mock_sched, mock_settings):
+        mock_settings.scheduler_enabled = False
+        mock_psutil.virtual_memory.return_value = MagicMock(total=8 * 1024**3, used=4 * 1024**3)
+        mock_psutil.disk_usage.return_value = MagicMock(total=500 * 1024**3, used=200 * 1024**3)
+        mock_router.get_stats.return_value = {"total_connections": 5, "total_events_pushed": 100}
+
+        db, mock_result = _mock_db()
+        mock_result.all.return_value = [("healthy", 5)]
+
+        raw = _heartbeat_payload(age_seconds=1, jobs_running=7, jobs_total=9, jobs_paused=2)
+        service = DashboardService(db, _redis_with_heartbeat(raw))
+        await service.archive_snapshot()
+
+        # in prod the in-process scheduler has no jobs; must NOT pollute with 0
+        mock_sched.get_jobs_status.assert_not_called()
+        snapshot = db.add.call_args.args[0]
+        assert snapshot.scheduler_jobs_active == 7
+
+    @patch("app.services.dashboard.settings")
+    @patch("app.services.dashboard.scheduler_manager")
+    @patch("app.services.dashboard.event_router")
+    @patch("app.services.dashboard.psutil")
+    async def test_snapshot_stale_heartbeat_is_zero(self, mock_psutil, mock_router, mock_sched, mock_settings):
+        mock_settings.scheduler_enabled = False
+        mock_psutil.virtual_memory.return_value = MagicMock(total=8 * 1024**3, used=4 * 1024**3)
+        mock_psutil.disk_usage.return_value = MagicMock(total=500 * 1024**3, used=200 * 1024**3)
+        mock_router.get_stats.return_value = {"total_connections": 5, "total_events_pushed": 100}
+
+        db, mock_result = _mock_db()
+        mock_result.all.return_value = [("healthy", 5)]
+
+        raw = _heartbeat_payload(age_seconds=300, jobs_running=7)  # stale
+        service = DashboardService(db, _redis_with_heartbeat(raw))
+        await service.archive_snapshot()
+
+        snapshot = db.add.call_args.args[0]
+        assert snapshot.scheduler_jobs_active == 0

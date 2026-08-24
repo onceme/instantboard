@@ -1,6 +1,9 @@
 services:
   postgres-test:
-    image: postgres:15-alpine
+    # Keep in sync with the dev/prod stacks: postgres:17 (Debian-based, not
+    # alpine) so CI/local test runs behave like staging, which runs a
+    # Debian-based PostgreSQL 17.7.
+    image: postgres:17
     environment:
       POSTGRES_DB: instantboard_test
       POSTGRES_USER: instantboard
@@ -46,7 +49,5 @@ services:
       sh -c "
         python -m pytest tests/ -v --cov=app --cov-report=html
       "
-    volumes:
-      - ../backend/seed_data.py:/app/seed_data.py:ro
     profiles:
       - test

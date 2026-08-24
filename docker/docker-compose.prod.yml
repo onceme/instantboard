@@ -163,13 +163,11 @@ services:
 
   # --- Infrastructure services ---
   postgres:
-    # PostgreSQL 17, Debian-based image on purpose (NOT alpine): staging's data
-    # directory was initialized by a Debian-based PostgreSQL 17.7 image and is
-    # reused as-is (no in-place downgrade possible). The alpine variant uses
-    # musl instead of glibc, whose collation differences can silently change
-    # string ordering and invalidate existing string indexes. Same major
-    # version + same libc family keeps the existing data directory compatible.
-    image: postgres:17
+    # The staging/prod data directory (postgres_prod_data) was initialized by
+    # postgres:15-alpine. PostgreSQL refuses to start on a data directory from
+    # a different major version, so we stay on 15. A migration to PG17
+    # requires a pg_dump/restore under planned downtime first.
+    image: postgres:15-alpine
     environment:
       POSTGRES_DB: ${PROD_POSTGRES_DB:-instantboard}
       POSTGRES_USER: ${PROD_POSTGRES_USER:-instantboard}

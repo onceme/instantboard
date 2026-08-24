@@ -79,10 +79,8 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        # Keep in sync with the dev/prod stacks: postgres:17 (Debian-based,
-        # not alpine) so CI behaves like staging, which runs a Debian-based
-        # PostgreSQL 17.7.
-        image: postgres:17
+        # Keep in sync with production: postgres:15-alpine.
+        image: postgres:15-alpine
         env:
           POSTGRES_DB: instantboard_test
           POSTGRES_USER: instantboard

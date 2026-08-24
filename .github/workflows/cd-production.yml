@@ -93,6 +93,7 @@ jobs:
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.PROD_HOST }}
+          port: ${{ secrets.PROD_PORT }}
           username: ${{ secrets.PROD_USER }}
           key: ${{ secrets.PROD_SSH_KEY }}
           script: |
@@ -100,27 +101,49 @@ jobs:
             export IMAGE_PREFIX="${{ env.IMAGE_PREFIX }}"
             export IMAGE_TAG="production-latest"
             cd /opt/instantboard
+            # TODO(cd-parity): same drift risk staging had — the working tree is
+            # NOT synced to the commit being deployed (no git fetch/checkout),
+            # so compose/config files on the host can lag behind the images.
+            # Mirror the `git fetch origin && git checkout <sha>` step from
+            # cd-staging.yml once /opt/instantboard on the production host is
+            # confirmed to be a clean git checkout of this repo. Applies to the
+            # frontend and rollback SSH steps below as well. Deliberately not
+            # changed in this pass.
             # Auto-detect Docker Compose (V2 plugin) or docker-compose (V1 standalone)
             if docker compose version >/dev/null 2>&1; then DC="docker compose"; else DC="docker-compose"; fi
             # Pull latest images
             $DC -f docker/docker-compose.yml -f docker/docker-compose.prod.yml --env-file .env pull api worker
             # Rolling deploy: backend first
             $DC -f docker/docker-compose.yml -f docker/docker-compose.prod.yml --env-file .env up -d --no-deps api worker
-            # Wait for backend health check
+            # Wait for the REAL health signal: the api container's built-in
+            # docker healthcheck (curl http://localhost:8000/api/v1/health run
+            # inside the container, defined in docker-compose.prod.yml).
+            # The old loop curled http://api:8000 from the HOST, where the
+            # container hostname "api" does not resolve, and it exited 0 even
+            # after 30 failures — dead code that gated nothing. Now a timeout
+            # fails the step (and triggers the rollback job).
             echo "Waiting for API health check..."
-            for i in $(seq 1 30); do
-              if curl -sf http://api:8000/api/v1/health; then
+            HEALTHY=0
+            for i in $(seq 1 45); do
+              if $DC -f docker/docker-compose.yml -f docker/docker-compose.prod.yml --env-file .env ps api | grep -q "(healthy)"; then
                 echo "API is healthy"
+                HEALTHY=1
                 break
               fi
-              echo "Waiting... ($i/30)"
+              echo "Waiting... ($i/45)"
               sleep 2
             done
+            if [ "$HEALTHY" -ne 1 ]; then
+              echo "API did not become healthy in time — dumping logs"
+              $DC -f docker/docker-compose.yml -f docker/docker-compose.prod.yml --env-file .env logs --tail=100 api worker
+              exit 1
+            fi
 
       - name: Deploy frontend
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.PROD_HOST }}
+          port: ${{ secrets.PROD_PORT }}
           username: ${{ secrets.PROD_USER }}
           key: ${{ secrets.PROD_SSH_KEY }}
           script: |
@@ -136,9 +159,31 @@ jobs:
 
       - name: Health check
         run: |
+          # Production is expected to serve HTTPS on the standard port. If the
+          # production port mapping or TLS setup ever changes, update the URLs
+          # below accordingly (see the staging smoke test for the HTTP variant).
+          BASE_URL="https://${{ secrets.PROD_DOMAIN }}"
+          echo "Health checking ${BASE_URL}"
           sleep 10
-          HEALTH_STATUS=$(curl -sf https://${{ secrets.PROD_DOMAIN }}/api/v1/health || echo "FAILED")
-          if [ "$HEALTH_STATUS" = "FAILED" ]; then
+          # Retry a few times so slow container startup does not fail the
+          # deploy, but a truly broken one does.
+          health_check() {
+            local url="$1"
+            for attempt in 1 2 3 4 5 6; do
+              if curl -sf --max-time 10 "$url" > /dev/null; then
+                echo "OK: ${url}"
+                return 0
+              fi
+              echo "Attempt ${attempt}/6 failed for ${url}"
+              sleep 5
+            done
+            echo "FAILED: ${url} not reachable after 6 attempts"
+            return 1
+          }
+          FAILED=0
+          health_check "${BASE_URL}/api/v1/health" || FAILED=1
+          health_check "${BASE_URL}/" || FAILED=1
+          if [ "$FAILED" -ne 0 ]; then
             echo "Production health check FAILED!"
             exit 1
           fi
@@ -149,16 +194,31 @@ jobs:
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.PROD_HOST }}
+          port: ${{ secrets.PROD_PORT }}
           username: ${{ secrets.PROD_USER }}
           key: ${{ secrets.PROD_SSH_KEY }}
           script: |
             export IMAGE_REGISTRY="${{ env.REGISTRY }}"
             export IMAGE_PREFIX="${{ env.IMAGE_PREFIX }}"
-            export IMAGE_TAG="production-latest"
+            # The old "rollback" re-exported IMAGE_TAG="production-latest" — the
+            # very image that just failed — so it re-deployed the broken build
+            # and rolled back nothing. There is no persisted "last known good"
+            # production tag on the host yet, so we fall back to staging-latest:
+            # the most recent image soak-tested in the staging environment.
+            # Limitations (known, deliberate — do not over-engineer here):
+            #   1. If the failed release was cut from current staging HEAD,
+            #      staging-latest may contain the same broken commit.
+            #   2. Database migrations applied by the failed release are NOT
+            #      reverted by this rollback.
+            # A proper fix is a last-known-good marker (e.g. write the release
+            # tag to a file on the host only after a successful health check,
+            # and roll back to that tag here).
+            export IMAGE_TAG="staging-latest"
             cd /opt/instantboard
             # Auto-detect Docker Compose (V2 plugin) or docker-compose (V1 standalone)
             if docker compose version >/dev/null 2>&1; then DC="docker compose"; else DC="docker-compose"; fi
-            # Rollback to previous known-good images
+            # Pull the fallback images first, then restart the stack on them
+            $DC -f docker/docker-compose.yml -f docker/docker-compose.prod.yml --env-file .env pull
             $DC -f docker/docker-compose.yml -f docker/docker-compose.prod.yml --env-file .env down
             $DC -f docker/docker-compose.yml -f docker/docker-compose.prod.yml --env-file .env up -d
-            echo "Rollback attempted"
+            echo "Rollback attempted (to staging-latest)"

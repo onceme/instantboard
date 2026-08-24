@@ -433,7 +433,7 @@ graph TD
 |---------|---------|---------|------|
 | `item_update` | `{id, title, summary, url, source_name, category_id, topic_tags, published_at, priority}` | 新新闻条目入库 | 2-5min |
 | `topic_stats_update` | `{tag, count, trending_change}` | 话题热度统计刷新 | 15min |
-| `source_health_update` | `{source_id, status, last_error}` | 数据源健康状态变更 | 实时 |
+| `source_health_update` | `{source_id, name, source_type, status, previous_status, last_error, last_success_at, last_failure_at, avg_response_time_ms, ...}` — 完整行状态契约见[data-flow.md](data-flow.md) §3.5.4 | 数据源健康状态变更 | 实时 |
 | `heartbeat` | `{timestamp}` | 保持连接 | 30s |
 
 ## 4. 关键决策

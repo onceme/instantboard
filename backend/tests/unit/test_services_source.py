@@ -32,9 +32,16 @@ def _mock_redis():
 
 
 def _make_source(
-    source_id=None, tenant_id="tenant-1", category_id=None,
-    name="Test Source", source_type="rss", url="https://example.com/rss",
-    config=None, refresh_interval_seconds=300, is_active=True, priority=5,
+    source_id=None,
+    tenant_id="tenant-1",
+    category_id=None,
+    name="Test Source",
+    source_type="rss",
+    url="https://example.com/rss",
+    config=None,
+    refresh_interval_seconds=300,
+    is_active=True,
+    priority=5,
 ):
     src = MagicMock()
     src.id = source_id or uuid.uuid4()
@@ -57,9 +64,15 @@ def _make_source(
 
 
 def _make_health(
-    source_id=None, status="healthy", consecutive_failures=0,
-    total_fetches_24h=10, success_count_24h=10, avg_response_time_ms=50,
-    last_success_at=None, last_failure_at=None, last_error_message=None,
+    source_id=None,
+    status="healthy",
+    consecutive_failures=0,
+    total_fetches_24h=10,
+    success_count_24h=10,
+    avg_response_time_ms=50,
+    last_success_at=None,
+    last_failure_at=None,
+    last_error_message=None,
 ):
     h = MagicMock()
     h.source_id = source_id or uuid.uuid4()
@@ -1062,221 +1075,6 @@ class TestGetSourceHealth:
         service = SourceService(db, redis)
         with pytest.raises(SourceNotFound, match="not accessible"):
             await service.get_source_health(str(src.id), "tenant-1")
-
-
-class TestUpdateSourceHealth:
-    @patch("app.services.source.redis_publish", new_callable=AsyncMock)
-    @patch("app.services.source.redis_hset", new_callable=AsyncMock)
-    async def test_update_success_healthy(self, mock_hset, mock_publish):
-        db, mock_result = _mock_db()
-        redis = _mock_redis()
-
-        health = _make_health(status="healthy", consecutive_failures=0, total_fetches_24h=5)
-        src = _make_source(tenant_id="tenant-1")
-
-        call_count = 0
-
-        async def execute_side_effect(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            mock_r = MagicMock()
-            if call_count == 1:
-                mock_r.scalar_one_or_none.return_value = health
-            elif call_count == 2:
-                mock_r.scalar_one_or_none.return_value = src
-            return mock_r
-
-        db.execute = execute_side_effect
-
-        from app.schemas.source import HealthCheckResult
-
-        result_obj = HealthCheckResult(success=True, response_time_ms=100)
-
-        service = SourceService(db, redis)
-        result = await service.update_source_health(str(src.id), result_obj)
-        assert result.success is True
-
-    @patch("app.services.source.redis_publish", new_callable=AsyncMock)
-    @patch("app.services.source.redis_hset", new_callable=AsyncMock)
-    async def test_update_failure_degraded(self, mock_hset, mock_publish):
-        db, mock_result = _mock_db()
-        redis = _mock_redis()
-
-        health = _make_health(status="healthy", consecutive_failures=0, total_fetches_24h=5)
-        src = _make_source(tenant_id="tenant-1")
-
-        call_count = 0
-
-        async def execute_side_effect(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            mock_r = MagicMock()
-            if call_count == 1:
-                mock_r.scalar_one_or_none.return_value = health
-            elif call_count == 2:
-                mock_r.scalar_one_or_none.return_value = src
-            return mock_r
-
-        db.execute = execute_side_effect
-
-        from app.schemas.source import HealthCheckResult
-
-        result_obj = HealthCheckResult(success=False, response_time_ms=0, error_message="timeout")
-
-        service = SourceService(db, redis)
-        result = await service.update_source_health(str(src.id), result_obj)
-        assert result.success is True
-
-    @patch("app.services.source.redis_publish", new_callable=AsyncMock)
-    @patch("app.services.source.redis_hset", new_callable=AsyncMock)
-    async def test_update_failure_down(self, mock_hset, mock_publish):
-        db, mock_result = _mock_db()
-        redis = _mock_redis()
-
-        health = _make_health(status="degraded", consecutive_failures=9, total_fetches_24h=15)
-        src = _make_source(tenant_id="tenant-1")
-
-        call_count = 0
-
-        async def execute_side_effect(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            mock_r = MagicMock()
-            if call_count == 1:
-                mock_r.scalar_one_or_none.return_value = health
-            elif call_count == 2:
-                mock_r.scalar_one_or_none.return_value = src
-            return mock_r
-
-        db.execute = execute_side_effect
-
-        from app.schemas.source import HealthCheckResult
-
-        result_obj = HealthCheckResult(success=False, error_message="connection refused")
-
-        service = SourceService(db, redis)
-        result = await service.update_source_health(str(src.id), result_obj)
-        assert result.data.status == "down"
-
-    @patch("app.services.source.redis_publish", new_callable=AsyncMock)
-    @patch("app.services.source.redis_hset", new_callable=AsyncMock)
-    async def test_update_creates_health_if_none(self, mock_hset, mock_publish):
-        db, mock_result = _mock_db()
-        redis = _mock_redis()
-
-        src = _make_source(tenant_id="tenant-1")
-
-        call_count = 0
-
-        async def execute_side_effect(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            mock_r = MagicMock()
-            if call_count == 1:
-                mock_r.scalar_one_or_none.return_value = None
-            return mock_r
-
-        db.execute = execute_side_effect
-
-        from app.schemas.source import HealthCheckResult
-
-        result_obj = HealthCheckResult(success=True, response_time_ms=50)
-
-        service = SourceService(db, redis)
-        result = await service.update_source_health(str(src.id), result_obj)
-        assert result.success is True
-        db.add.assert_called()
-
-    @patch("app.services.source.redis_publish", new_callable=AsyncMock)
-    @patch("app.services.source.redis_hset", new_callable=AsyncMock)
-    async def test_update_status_change_publishes(self, mock_hset, mock_publish):
-        db, mock_result = _mock_db()
-        redis = _mock_redis()
-
-        health = _make_health(status="down", consecutive_failures=5, total_fetches_24h=10)
-        src = _make_source(tenant_id="tenant-1")
-
-        call_count = 0
-
-        async def execute_side_effect(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            mock_r = MagicMock()
-            if call_count == 1:
-                mock_r.scalar_one_or_none.return_value = health
-            elif call_count == 2:
-                mock_r.scalar_one_or_none.return_value = src
-            return mock_r
-
-        db.execute = execute_side_effect
-
-        from app.schemas.source import HealthCheckResult
-
-        result_obj = HealthCheckResult(success=True, response_time_ms=50)
-
-        service = SourceService(db, redis)
-        await service.update_source_health(str(src.id), result_obj)
-        assert mock_publish.call_count == 2
-
-    @patch("app.services.source.redis_publish", new_callable=AsyncMock)
-    @patch("app.services.source.redis_hset", new_callable=AsyncMock)
-    async def test_update_degraded_after_down(self, mock_hset, mock_publish):
-        db, mock_result = _mock_db()
-        redis = _mock_redis()
-
-        health = _make_health(status="down", consecutive_failures=10, total_fetches_24h=20)
-        src = _make_source(tenant_id="tenant-1")
-
-        call_count = 0
-
-        async def execute_side_effect(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            mock_r = MagicMock()
-            if call_count == 1:
-                mock_r.scalar_one_or_none.return_value = health
-            elif call_count == 2:
-                mock_r.scalar_one_or_none.return_value = src
-            return mock_r
-
-        db.execute = execute_side_effect
-
-        from app.schemas.source import HealthCheckResult
-
-        result_obj = HealthCheckResult(success=True, response_time_ms=50)
-
-        service = SourceService(db, redis)
-        result = await service.update_source_health(str(src.id), result_obj)
-        assert result.data.status == "degraded"
-
-    @patch("app.services.source.redis_publish", new_callable=AsyncMock)
-    @patch("app.services.source.redis_hset", new_callable=AsyncMock)
-    async def test_update_no_status_change_no_publish(self, mock_hset, mock_publish):
-        db, mock_result = _mock_db()
-        redis = _mock_redis()
-
-        health = _make_health(status="healthy", consecutive_failures=0, total_fetches_24h=5)
-        src = _make_source(tenant_id="tenant-1")
-
-        call_count = 0
-
-        async def execute_side_effect(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            mock_r = MagicMock()
-            if call_count == 1:
-                mock_r.scalar_one_or_none.return_value = health
-            return mock_r
-
-        db.execute = execute_side_effect
-
-        from app.schemas.source import HealthCheckResult
-
-        result_obj = HealthCheckResult(success=True, response_time_ms=50)
-
-        service = SourceService(db, redis)
-        await service.update_source_health(str(src.id), result_obj)
-        mock_publish.assert_not_called()
 
 
 class TestGetAllSourcesHealthSummary:

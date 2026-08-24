@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app.core.constants import SYSTEM_TENANT_ID
 from app.core.sse_router import (
     SSEConnection,
     SSEEventRouter,
@@ -39,11 +40,7 @@ class TestSSEEventType:
 
 class TestSSEConnection:
     def test_init(self):
-        conn = SSEConnection(
-            client_id="client1",
-            categories=["finance", "tech"],
-            tenant_id="tenant1"
-        )
+        conn = SSEConnection(client_id="client1", categories=["finance", "tech"], tenant_id="tenant1")
         assert conn.client_id == "client1"
         assert conn.categories == ["finance", "tech"]
         assert conn.tenant_id == "tenant1"
@@ -176,11 +173,7 @@ class TestSSEEventRouter:
         conn1 = self.router.register("client1", ["finance"], "tenant1")
         conn2 = self.router.register("client2", ["finance"], "tenant2")
 
-        message = {
-            "event_type": "item_update",
-            "data": {"msg": "test"},
-            "tenant_id": "tenant1"
-        }
+        message = {"event_type": "item_update", "data": {"msg": "test"}, "tenant_id": "tenant1"}
         await self.router._on_redis_message("channel:finance", message)
 
         assert conn1.events_sent_count == 1
@@ -189,33 +182,21 @@ class TestSSEEventRouter:
     async def test_on_redis_message_all_channel(self):
         conn1 = self.router.register("client1", ["all"], "tenant1")
 
-        message = {
-            "event_type": "system_metric_update",
-            "data": {"metric": "cpu"},
-            "tenant_id": "tenant1"
-        }
+        message = {"event_type": "system_metric_update", "data": {"metric": "cpu"}, "tenant_id": "tenant1"}
         await self.router._on_redis_message("channel:all", message)
         assert conn1.events_sent_count == 1
 
     async def test_on_redis_message_all_channel_tenant_filter(self):
         conn_other = self.router.register("client_other", ["all"], "other_tenant")
 
-        message = {
-            "event_type": "system_metric_update",
-            "data": {"metric": "cpu"},
-            "tenant_id": "tenant1"
-        }
+        message = {"event_type": "system_metric_update", "data": {"metric": "cpu"}, "tenant_id": "tenant1"}
         await self.router._on_redis_message("channel:all", message)
         assert conn_other.events_sent_count == 0
 
     async def test_on_redis_message_all_channel_not_duplicate(self):
         conn = self.router.register("client1", ["finance", "all"], "tenant1")
 
-        message = {
-            "event_type": "item_update",
-            "data": {"msg": "test"},
-            "tenant_id": "tenant1"
-        }
+        message = {"event_type": "item_update", "data": {"msg": "test"}, "tenant_id": "tenant1"}
         await self.router._on_redis_message("channel:finance", message)
         assert conn.events_sent_count == 1
 
@@ -223,11 +204,7 @@ class TestSSEEventRouter:
         conn = self.router.register("client1", ["finance"], "tenant1")
         conn.is_active = False
 
-        message = {
-            "event_type": "item_update",
-            "data": {},
-            "tenant_id": "tenant1"
-        }
+        message = {"event_type": "item_update", "data": {}, "tenant_id": "tenant1"}
         await self.router._on_redis_message("channel:finance", message)
         assert conn.events_sent_count == 0
 
@@ -274,7 +251,11 @@ class TestSSEEventRouter:
         mock_pubsub = AsyncMock()
 
         async def mock_listen():
-            yield {"type": "message", "channel": b"channel:finance", "data": '{"event_type": "item_update", "data": {}, "tenant_id": "t1"}'}
+            yield {
+                "type": "message",
+                "channel": b"channel:finance",
+                "data": '{"event_type": "item_update", "data": {}, "tenant_id": "t1"}',
+            }
             raise asyncio.CancelledError()
 
         mock_pubsub.listen = mock_listen
@@ -373,6 +354,78 @@ class TestSSEEventRouter:
         assert stats["total_connections"] == 2
         assert "finance" in stats["connections_by_channel"]
         assert "tech" in stats["connections_by_channel"]
+
+
+class TestSourceHealthTenantRouting:
+    """Tenant forwarding for source_health_update (docs/design/data-flow.md).
+
+    The scheduler publishes health events with tenant_id=str(source.tenant_id);
+    admin sessions belong to the system tenant, so their SSE connections
+    register with tenant_id=str(SYSTEM_TENANT_ID). The router uses exact string
+    matching — these tests pin down that system-source events reach the admin
+    and that the legacy "system" string literal does not match.
+    """
+
+    def setup_method(self):
+        self.router = SSEEventRouter()
+        self.router._connections = {}
+        self.router._subscriptions = {}
+
+    def _health_message(self, tenant_id: str) -> dict:
+        return {
+            "event_type": SSEEventType.SOURCE_HEALTH_UPDATE.value,
+            "channel": "dashboard",
+            "data": {"source_id": "src-1", "status": "down"},
+            "tenant_id": tenant_id,
+        }
+
+    async def test_admin_receives_system_source_health_event(self):
+        admin_conn = self.router.register("admin-1", ["dashboard"], str(SYSTEM_TENANT_ID))
+
+        await self.router._on_redis_message(
+            "channel:dashboard",
+            self._health_message(str(SYSTEM_TENANT_ID)),
+        )
+
+        assert admin_conn.events_sent_count == 1
+        event = await admin_conn.queue.get()
+        assert event["event_type"] == SSEEventType.SOURCE_HEALTH_UPDATE.value
+        assert event["data"]["source_id"] == "src-1"
+
+    async def test_other_tenant_does_not_receive_system_source_health_event(self):
+        other_conn = self.router.register("other-1", ["dashboard"], "tenant-x")
+
+        await self.router._on_redis_message(
+            "channel:dashboard",
+            self._health_message(str(SYSTEM_TENANT_ID)),
+        )
+
+        assert other_conn.events_sent_count == 0
+
+    async def test_legacy_system_string_does_not_match_admin_connection(self):
+        # Regression guard: publishing with the literal "system" tenant (the old
+        # bug) must NOT reach admin connections registered under the UUID string,
+        # which is why the publisher uses str(SYSTEM_TENANT_ID).
+        admin_conn = self.router.register("admin-1", ["dashboard"], str(SYSTEM_TENANT_ID))
+
+        await self.router._on_redis_message(
+            "channel:dashboard",
+            self._health_message("system"),
+        )
+
+        assert admin_conn.events_sent_count == 0
+
+    async def test_tenant_scoped_source_event_reaches_its_own_tenant_only(self):
+        own_conn = self.router.register("t1-1", ["dashboard"], "tenant-1")
+        admin_conn = self.router.register("admin-1", ["dashboard"], str(SYSTEM_TENANT_ID))
+
+        await self.router._on_redis_message(
+            "channel:dashboard",
+            self._health_message("tenant-1"),
+        )
+
+        assert own_conn.events_sent_count == 1
+        assert admin_conn.events_sent_count == 0
 
 
 class TestEventRouterSingleton:

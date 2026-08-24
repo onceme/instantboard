@@ -2,6 +2,7 @@ import hashlib
 import logging
 from typing import Any
 
+from app.core.constants import SYSTEM_TENANT_ID
 from app.core.redis import RedisKeys, redis_sadd, redis_sismember
 from app.processors.base import BaseProcessor
 
@@ -10,7 +11,10 @@ logger = logging.getLogger(__name__)
 
 class DedupProcessor(BaseProcessor):
     async def process(self, item: dict, source: Any) -> dict | None:
-        tenant_id = getattr(source, "tenant_id", "default") or "default"
+        # Tenant ids are UUID strings across the pipeline (SSE routing, DB columns):
+        # fall back to str(SYSTEM_TENANT_ID), never a literal like "default". Unreachable
+        # in practice (Source.tenant_id is NOT NULL).
+        tenant_id = getattr(source, "tenant_id", str(SYSTEM_TENANT_ID)) or str(SYSTEM_TENANT_ID)
         source_id = str(getattr(source, "id", "unknown"))
 
         title = item.get("title", "")

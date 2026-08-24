@@ -1,11 +1,11 @@
 """Unit tests for app/scheduler package."""
+
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from app.scheduler.manager import (
-    DEFAULT_SCHEDULES,
     SOURCE_TYPE_DEFAULT_INTERVALS,
     AsyncSchedulerManager,
     _source_category_cache,
@@ -48,10 +48,6 @@ def _make_mock_scheduler():
 class TestModuleLevel:
     def test_scheduler_manager_exists(self):
         assert isinstance(scheduler_manager, AsyncSchedulerManager)
-
-    def test_default_schedules(self):
-        assert isinstance(DEFAULT_SCHEDULES, dict)
-        assert "tech_rss" in DEFAULT_SCHEDULES
 
     def test_source_type_default_intervals(self):
         assert "rss" in SOURCE_TYPE_DEFAULT_INTERVALS
@@ -575,6 +571,7 @@ class TestWorkerModule:
                     with patch("app.scheduler.worker.asyncio.get_running_loop") as mock_loop:
                         mock_loop.return_value = MagicMock()
                         from app.scheduler.worker import main
+
                         await main()
 
     async def test_worker_shutdown(self):
@@ -582,10 +579,12 @@ class TestWorkerModule:
             mock_mgr.shutdown = AsyncMock()
             with patch("app.scheduler.worker.close_redis", new_callable=AsyncMock):
                 from app.scheduler.worker import shutdown
+
                 await shutdown()
 
     def test_worker_main_block_import(self):
         from app.scheduler import worker as worker_mod
+
         assert hasattr(worker_mod, "main")
         assert hasattr(worker_mod, "shutdown")
 
@@ -696,9 +695,14 @@ class TestRunCollectionExtended:
             mock_chain = AsyncMock()
             mock_process_result = MagicMock()
             mock_process_result.item = {
-                "title": "Item 1", "url": "http://x.com/1", "summary": "Sum",
-                "image_url": "", "topic_tags": [], "extra_data": {}, "priority": 5,
-                "published_at": "2024-01-01T00:00:00Z"
+                "title": "Item 1",
+                "url": "http://x.com/1",
+                "summary": "Sum",
+                "image_url": "",
+                "topic_tags": [],
+                "extra_data": {},
+                "priority": 5,
+                "published_at": "2024-01-01T00:00:00Z",
             }
             mock_process_result.errors = []
             mock_chain.execute = AsyncMock(return_value=[mock_process_result])
@@ -762,6 +766,7 @@ class TestRunCollectionExtended:
             mock_health_session.commit = AsyncMock()
 
             call_count = 0
+
             def get_session():
                 nonlocal call_count
                 call_count += 1
@@ -772,7 +777,11 @@ class TestRunCollectionExtended:
             with (
                 patch("app.db.session.async_session_factory", side_effect=lambda: get_session()),
                 patch("app.collectors.get_collector", return_value=None),
-                patch("app.collectors.finance.yfinance_collector.YFinanceCollector.collect", new_callable=AsyncMock, return_value=mock_collection_result),
+                patch(
+                    "app.collectors.finance.yfinance_collector.YFinanceCollector.collect",
+                    new_callable=AsyncMock,
+                    return_value=mock_collection_result,
+                ),
                 patch("app.scheduler.manager.event_router"),
             ):
                 await mgr._run_collection("src-yf")
@@ -819,6 +828,7 @@ class TestRunCollectionExtended:
             health_session.commit = AsyncMock()
 
             call_count = 0
+
             def get_session():
                 nonlocal call_count
                 call_count += 1
@@ -873,6 +883,7 @@ class TestRunCollectionExtended:
             health_session.commit = AsyncMock()
 
             call_count = 0
+
             def get_session():
                 nonlocal call_count
                 call_count += 1
@@ -931,6 +942,7 @@ class TestRunCollectionExtended:
             health_session.commit = AsyncMock()
 
             call_count = 0
+
             def get_session():
                 nonlocal call_count
                 call_count += 1
@@ -1148,7 +1160,12 @@ class TestUpdateHealthAfterCollection:
             assert mock_health.status == "degraded"
 
     async def test_health_status_change_triggers_sse(self):
-        """Lines 482-491: status change → publish SSE event."""
+        """Lines 482-491: status change → publish SSE event with the full row payload.
+
+        Contract: docs/design/data-flow.md §3.5.4. The event payload must carry
+        every field the dashboard health table renders (keyed by source_id), and the
+        tenant must be the source's own tenant so matching SSE sessions receive it.
+        """
         with patch("app.scheduler.manager.AsyncIOScheduler") as mock_cls:
             mock_cls.return_value = _make_mock_scheduler()
             mgr = AsyncSchedulerManager()
@@ -1156,6 +1173,8 @@ class TestUpdateHealthAfterCollection:
             mock_source = MagicMock()
             mock_source.id = "src-h-sse"
             mock_source.tenant_id = "t1"
+            mock_source.name = "SSE Source"
+            mock_source.source_type = "rss"
 
             mock_result = MagicMock()
             mock_result.success = True
@@ -1169,6 +1188,8 @@ class TestUpdateHealthAfterCollection:
             mock_health.success_count_24h = 3
             mock_health.avg_response_time_ms = 200
             mock_health.last_error_message = "old error"
+            mock_health.last_success_at = None
+            mock_health.last_failure_at = None
 
             mock_session = AsyncMock()
             mock_session.__aenter__ = AsyncMock(return_value=mock_session)
@@ -1200,6 +1221,21 @@ class TestUpdateHealthAfterCollection:
                 await mgr._update_health_after_collection(mock_source, mock_result)
 
             mock_sse.publish_source_health_update.assert_called_once()
+            payload = mock_sse.publish_source_health_update.call_args.args[0]
+            assert payload["source_id"] == "src-h-sse"
+            assert payload["name"] == "SSE Source"
+            assert payload["source_type"] == "rss"
+            assert payload["status"] == "healthy"
+            assert payload["previous_status"] == "degraded"
+            assert payload["last_success_at"] is not None
+            assert payload["last_failure_at"] is None
+            assert payload["consecutive_failures"] == 0
+            assert payload["total_fetches_24h"] == 6
+            assert payload["success_count_24h"] == 4
+            # avg = (200 * 5 + 100) / 6 rounded down
+            assert payload["avg_response_time_ms"] == 183
+            # The source's own tenant scopes delivery to its SSE sessions
+            assert mock_sse.publish_source_health_update.call_args.kwargs["tenant_id"] == "t1"
 
     async def test_health_update_exception(self):
         """Lines 495-496: exception during health update is caught."""

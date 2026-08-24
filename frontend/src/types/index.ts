@@ -289,9 +289,32 @@ export interface DataSourceHealthSummary {
   sources: DataSourceHealthDetail[];
 }
 
+// SSE payload of "source_health_update" (dashboard channel).
+// Contract: docs/design/data-flow.md §3.5.4; built by backend
+// app/services/sse.py build_source_health_update_payload(). The health table
+// row is matched by source_id === DataSourceHealthDetail.id.
+export interface SourceHealthUpdateEvent {
+  source_id: string;
+  name: string;
+  source_type: string | null;
+  status: "healthy" | "degraded" | "down";
+  previous_status: string;
+  last_error: string | null;
+  last_success_at: string | null;
+  last_failure_at: string | null;
+  avg_response_time_ms: number;
+  consecutive_failures: number;
+  success_count_24h: number;
+  total_fetches_24h: number;
+  success_rate_24h: number | null;
+  timestamp: string;
+}
+
 export interface DataSourceHealthDetail {
   id: string;
   name: string;
+  // Backend schemas/dashboard.py DataSourceHealthDetail: str | None
+  source_type?: string | null;
   status: "healthy" | "degraded" | "down";
   success_rate_24h: number;
   avg_response_time_ms: number;

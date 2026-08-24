@@ -56,7 +56,6 @@ from app.schemas.finance import (
 )
 from app.schemas.item import ItemResponse
 from app.schemas.source import (
-    HealthCheckResult,
     SourceCreate,
     SourceHealthResponse,
     SourceListParams,
@@ -84,9 +83,7 @@ class TestSSOLoginRequest:
 
 class TestTokenResponse:
     def test_with_all_fields(self):
-        user = UserResponse(
-            id="u1", email="e@e.com", name="N", tenant_id="t1", role="admin", sso_provider="google"
-        )
+        user = UserResponse(id="u1", email="e@e.com", name="N", tenant_id="t1", role="admin", sso_provider="google")
         resp = TokenResponse(
             access_token="at",
             refresh_token="rt",
@@ -165,9 +162,15 @@ class TestCategoryCreate:
 
     def test_full(self):
         c = CategoryCreate(
-            name="Finance", slug="finance", description="Finance news", icon="dollar",
-            color="#FF0000", type="finance", refresh_interval_seconds=60,
-            keywords_filter=["stock", "bond"], is_active=False,
+            name="Finance",
+            slug="finance",
+            description="Finance news",
+            icon="dollar",
+            color="#FF0000",
+            type="finance",
+            refresh_interval_seconds=60,
+            keywords_filter=["stock", "bond"],
+            is_active=False,
         )
         assert c.slug == "finance"
         assert c.keywords_filter == ["stock", "bond"]
@@ -226,9 +229,18 @@ class TestCategoryResponse:
     def test_full(self):
         now = datetime.now()
         r = CategoryResponse(
-            id="c1", name="Tech", slug="tech", description=None, icon="folder",
-            color="#3B82F6", type="tech", refresh_interval_seconds=300,
-            is_active=True, source_count=5, created_at=now, updated_at=now,
+            id="c1",
+            name="Tech",
+            slug="tech",
+            description=None,
+            icon="folder",
+            color="#3B82F6",
+            type="tech",
+            refresh_interval_seconds=300,
+            is_active=True,
+            source_count=5,
+            created_at=now,
+            updated_at=now,
         )
         assert r.id == "c1"
         assert r.source_count == 5
@@ -237,9 +249,17 @@ class TestCategoryResponse:
     def test_default_source_count(self):
         now = datetime.now()
         r = CategoryResponse(
-            id="c1", name="Tech", slug="tech", description=None, icon="folder",
-            color="#3B82F6", type="tech", refresh_interval_seconds=300,
-            is_active=True, created_at=now, updated_at=now,
+            id="c1",
+            name="Tech",
+            slug="tech",
+            description=None,
+            icon="folder",
+            color="#3B82F6",
+            type="tech",
+            refresh_interval_seconds=300,
+            is_active=True,
+            created_at=now,
+            updated_at=now,
         )
         assert r.source_count == 0
 
@@ -248,9 +268,17 @@ class TestCategoryWithSourcesResponse:
     def test_default_sources(self):
         now = datetime.now()
         r = CategoryWithSourcesResponse(
-            id="c1", name="T", slug="t", description=None, icon="folder",
-            color="#3B82F6", type="tech", refresh_interval_seconds=300,
-            is_active=True, created_at=now, updated_at=now,
+            id="c1",
+            name="T",
+            slug="t",
+            description=None,
+            icon="folder",
+            color="#3B82F6",
+            type="tech",
+            refresh_interval_seconds=300,
+            is_active=True,
+            created_at=now,
+            updated_at=now,
         )
         assert r.sources == []
         assert r.source_count == 0
@@ -302,8 +330,13 @@ class TestSourceCreate:
 
     def test_all_fields(self):
         s = SourceCreate(
-            name="API", category_id="c2", source_type="api", url="https://api.com",
-            config={"key": "val"}, refresh_interval_seconds=60, is_active=False,
+            name="API",
+            category_id="c2",
+            source_type="api",
+            url="https://api.com",
+            config={"key": "val"},
+            refresh_interval_seconds=60,
+            is_active=False,
         )
         assert s.config == {"key": "val"}
         assert s.is_active is False
@@ -355,10 +388,20 @@ class TestSourceResponse:
     def test_full(self):
         now = datetime.now()
         r = SourceResponse(
-            id="s1", name="Src", category_id="c1", source_type="rss",
-            url="http://a", config={}, refresh_interval_seconds=300,
-            is_active=True, priority=5, health_status="healthy",
-            last_fetch_at=now, last_error=None, created_at=now, updated_at=now,
+            id="s1",
+            name="Src",
+            category_id="c1",
+            source_type="rss",
+            url="http://a",
+            config={},
+            refresh_interval_seconds=300,
+            is_active=True,
+            priority=5,
+            health_status="healthy",
+            last_fetch_at=now,
+            last_error=None,
+            created_at=now,
+            updated_at=now,
         )
         assert r.id == "s1"
         assert r.health_status == "healthy"
@@ -366,9 +409,17 @@ class TestSourceResponse:
     def test_optional_health_fields(self):
         now = datetime.now()
         r = SourceResponse(
-            id="s1", name="Src", category_id="c1", source_type="rss",
-            url="http://a", config={}, refresh_interval_seconds=300,
-            is_active=True, priority=5, created_at=now, updated_at=now,
+            id="s1",
+            name="Src",
+            category_id="c1",
+            source_type="rss",
+            url="http://a",
+            config={},
+            refresh_interval_seconds=300,
+            is_active=True,
+            priority=5,
+            created_at=now,
+            updated_at=now,
         )
         assert r.health_status is None
         assert r.last_fetch_at is None
@@ -378,33 +429,28 @@ class TestSourceResponse:
 class TestSourceHealthResponse:
     def test_full(self):
         r = SourceHealthResponse(
-            source_id="src1", status="healthy", success_rate_24h=99.5,
-            avg_response_time_ms=150, last_success_at=datetime.now(),
-            last_failure_at=None, consecutive_failures=0,
-            total_fetches_24h=100, last_error=None,
+            source_id="src1",
+            status="healthy",
+            success_rate_24h=99.5,
+            avg_response_time_ms=150,
+            last_success_at=datetime.now(),
+            last_failure_at=None,
+            consecutive_failures=0,
+            total_fetches_24h=100,
+            last_error=None,
         )
         assert r.status == "healthy"
         assert r.success_rate_24h == 99.5
 
     def test_optional_fields(self):
         r = SourceHealthResponse(
-            source_id="src1", status="down", consecutive_failures=5, total_fetches_24h=0,
+            source_id="src1",
+            status="down",
+            consecutive_failures=5,
+            total_fetches_24h=0,
         )
         assert r.success_rate_24h is None
         assert r.last_error is None
-
-
-class TestHealthCheckResult:
-    def test_success(self):
-        r = HealthCheckResult(success=True)
-        assert r.success is True
-        assert r.response_time_ms == 0
-        assert r.error_message is None
-
-    def test_failure(self):
-        r = HealthCheckResult(success=False, response_time_ms=500, error_message="timeout")
-        assert r.success is False
-        assert r.error_message == "timeout"
 
 
 class TestSourceListParams:
@@ -434,10 +480,18 @@ class TestSourceListParams:
 class TestItemResponse:
     def test_full(self):
         r = ItemResponse(
-            id="i1", title="Test", summary="A summary", url="http://example.com",
-            image_url="http://img.com/a.png", source_name="Src", source_id="s1",
-            category_id="c1", topic_tags=["ai", "news"],
-            published_at=datetime.now(), fetched_at=datetime.now(), priority=5,
+            id="i1",
+            title="Test",
+            summary="A summary",
+            url="http://example.com",
+            image_url="http://img.com/a.png",
+            source_name="Src",
+            source_id="s1",
+            category_id="c1",
+            topic_tags=["ai", "news"],
+            published_at=datetime.now(),
+            fetched_at=datetime.now(),
+            priority=5,
         )
         assert r.title == "Test"
         assert r.topic_tags == ["ai", "news"]
@@ -445,10 +499,18 @@ class TestItemResponse:
 
     def test_optional_fields(self):
         r = ItemResponse(
-            id="i1", title="T", summary=None, url="http://x.com",
-            image_url=None, source_name=None, source_id="s1",
-            category_id="c1", topic_tags=[],
-            published_at=datetime.now(), fetched_at=datetime.now(), priority=1,
+            id="i1",
+            title="T",
+            summary=None,
+            url="http://x.com",
+            image_url=None,
+            source_name=None,
+            source_id="s1",
+            category_id="c1",
+            topic_tags=[],
+            published_at=datetime.now(),
+            fetched_at=datetime.now(),
+            priority=1,
         )
         assert r.summary is None
         assert r.image_url is None
@@ -458,16 +520,28 @@ class TestItemResponse:
 class TestFinanceSearchResult:
     def test_full(self):
         r = FinanceSearchResult(
-            symbol="AAPL", name="Apple Inc.", type="stock", market="US",
-            exchange="NASDAQ", current_price=150.5, change_percent=1.2, currency="USD",
+            symbol="AAPL",
+            name="Apple Inc.",
+            type="stock",
+            market="US",
+            exchange="NASDAQ",
+            current_price=150.5,
+            change_percent=1.2,
+            currency="USD",
         )
         assert r.symbol == "AAPL"
         assert r.current_price == 150.5
 
     def test_optional_fields(self):
         r = FinanceSearchResult(
-            symbol="ETH", name="Ethereum", type="currency", market="Crypto",
-            exchange=None, current_price=None, change_percent=None, currency="USD",
+            symbol="ETH",
+            name="Ethereum",
+            type="currency",
+            market="Crypto",
+            exchange=None,
+            current_price=None,
+            change_percent=None,
+            currency="USD",
         )
         assert r.exchange is None
         assert r.current_price is None
@@ -476,11 +550,21 @@ class TestFinanceSearchResult:
 class TestFinanceQuoteResponse:
     def test_full(self):
         r = FinanceQuoteResponse(
-            symbol="AAPL", name="Apple", current_price=150.0, open=148.0,
-            high=152.0, low=147.0, close_previous=148.5, volume=1000000,
-            change=1.5, change_percent=1.0, market_cap=2000000000, pe_ratio=25.5,
+            symbol="AAPL",
+            name="Apple",
+            current_price=150.0,
+            open=148.0,
+            high=152.0,
+            low=147.0,
+            close_previous=148.5,
+            volume=1000000,
+            change=1.5,
+            change_percent=1.0,
+            market_cap=2000000000,
+            pe_ratio=25.5,
             **{"52_week_high": 180.0, "52_week_low": 120.0},
-            timestamp=datetime.now(), source="yfinance",
+            timestamp=datetime.now(),
+            source="yfinance",
         )
         assert r.symbol == "AAPL"
         assert r.week_high_52 == 180.0
@@ -488,12 +572,22 @@ class TestFinanceQuoteResponse:
 
     def test_populate_by_name(self):
         r = FinanceQuoteResponse(
-            symbol="AAPL", name="Apple",
-            current_price=None, open=None, high=None, low=None,
-            close_previous=None, volume=None, change=None, change_percent=None,
-            market_cap=None, pe_ratio=None,
-            week_high_52=None, week_low_52=None,
-            timestamp=None, source=None,
+            symbol="AAPL",
+            name="Apple",
+            current_price=None,
+            open=None,
+            high=None,
+            low=None,
+            close_previous=None,
+            volume=None,
+            change=None,
+            change_percent=None,
+            market_cap=None,
+            pe_ratio=None,
+            week_high_52=None,
+            week_low_52=None,
+            timestamp=None,
+            source=None,
         )
         assert r.week_high_52 is None
 
@@ -518,8 +612,14 @@ class TestFinanceQuoteResponse:
 class TestMarketIndexResponse:
     def test_full(self):
         r = MarketIndexResponse(
-            symbol="SPX", name="S&P 500", value=4500.5, change=20.3,
-            change_percent=0.45, market_status="open", region="US", timestamp=datetime.now(),
+            symbol="SPX",
+            name="S&P 500",
+            value=4500.5,
+            change=20.3,
+            change_percent=0.45,
+            market_status="open",
+            region="US",
+            timestamp=datetime.now(),
         )
         assert r.symbol == "SPX"
         assert r.market_status == "open"
@@ -528,8 +628,13 @@ class TestMarketIndexResponse:
 class TestCommodityResponse:
     def test_full(self):
         r = CommodityResponse(
-            symbol="GC=F", name="Gold", value=1800.5, change=-5.2,
-            change_percent=-0.29, unit="USD/oz", timestamp=datetime.now(),
+            symbol="GC=F",
+            name="Gold",
+            value=1800.5,
+            change=-5.2,
+            change_percent=-0.29,
+            unit="USD/oz",
+            timestamp=datetime.now(),
         )
         assert r.unit == "USD/oz"
 
@@ -555,10 +660,15 @@ class TestFundNAVResponse:
     def test_full(self):
         idx = UnderlyingIndexInfo(symbol="SPX", name="S&P 500", current_value=4500.0, change_percent=0.5)
         r = FundNAVResponse(
-            symbol="VOO", name="Vanguard S&P 500", nav_official=400.5,
-            nav_official_date="2024-01-01", nav_estimate=401.0,
-            nav_estimate_deviation_percent=0.12, estimate_method="index",
-            estimate_timestamp=datetime.now(), underlying_index=idx,
+            symbol="VOO",
+            name="Vanguard S&P 500",
+            nav_official=400.5,
+            nav_official_date="2024-01-01",
+            nav_estimate=401.0,
+            nav_estimate_deviation_percent=0.12,
+            estimate_method="index",
+            estimate_timestamp=datetime.now(),
+            underlying_index=idx,
         )
         assert r.underlying_index.symbol == "SPX"
 
@@ -578,7 +688,10 @@ class TestWatchlistItemCreate:
 
     def test_full(self):
         c = WatchlistItemCreate(
-            symbol_id="s1", display_order=3, notes="My note", alert_threshold_percent=5.0,
+            symbol_id="s1",
+            display_order=3,
+            notes="My note",
+            alert_threshold_percent=5.0,
         )
         assert c.notes == "My note"
 
@@ -608,9 +721,16 @@ class TestWatchlistReorderRequest:
 class TestWatchlistItemResponse:
     def test_full(self):
         r = WatchlistItemResponse(
-            id="wi1", symbol_id="s1", symbol="AAPL", name="Apple",
-            display_order=0, notes="Hold", alert_threshold_percent=5.0,
-            current_price=150.0, change=2.0, change_percent=1.35,
+            id="wi1",
+            symbol_id="s1",
+            symbol="AAPL",
+            name="Apple",
+            display_order=0,
+            notes="Hold",
+            alert_threshold_percent=5.0,
+            current_price=150.0,
+            change=2.0,
+            change_percent=1.35,
         )
         assert r.symbol == "AAPL"
 
@@ -625,10 +745,22 @@ class TestWatchlistItemResponse:
 class TestQuoteDetailResponse:
     def test_full(self):
         r = QuoteDetailResponse(
-            symbol="AAPL", name="Apple", current_price=150.0, open=148.0,
-            high=152.0, low=147.0, close_previous=148.5, volume=1000000,
-            change=1.5, change_percent=1.0, market_cap=2000000000, pe_ratio=25.5,
-            week_high_52=180.0, week_low_52=120.0, timestamp=datetime.now(), source="yfinance",
+            symbol="AAPL",
+            name="Apple",
+            current_price=150.0,
+            open=148.0,
+            high=152.0,
+            low=147.0,
+            close_previous=148.5,
+            volume=1000000,
+            change=1.5,
+            change_percent=1.0,
+            market_cap=2000000000,
+            pe_ratio=25.5,
+            week_high_52=180.0,
+            week_low_52=120.0,
+            timestamp=datetime.now(),
+            source="yfinance",
         )
         assert r.market_cap == 2000000000
 
@@ -642,11 +774,21 @@ class TestQuoteDetailResponse:
 class TestTechNewsResponse:
     def test_full(self):
         r = TechNewsResponse(
-            id="i1", title="AI News", summary="Details", url="http://a.com",
-            source_name="TechCrunch", source_id="s1", category_id="c1",
-            topic_tags=["ai", "ml"], domain_tag="AI", published_at=datetime.now(),
-            fetched_at=datetime.now(), image_url=None, priority=5,
-            extra_data={"key": "val"}, hot_score=95.5,
+            id="i1",
+            title="AI News",
+            summary="Details",
+            url="http://a.com",
+            source_name="TechCrunch",
+            source_id="s1",
+            category_id="c1",
+            topic_tags=["ai", "ml"],
+            domain_tag="AI",
+            published_at=datetime.now(),
+            fetched_at=datetime.now(),
+            image_url=None,
+            priority=5,
+            extra_data={"key": "val"},
+            hot_score=95.5,
         )
         assert r.domain_tag == "AI"
         assert r.hot_score == 95.5
@@ -654,11 +796,21 @@ class TestTechNewsResponse:
 
     def test_nullable(self):
         r = TechNewsResponse(
-            id="i1", title="T", summary=None, url="http://x.com",
-            source_name=None, source_id="s1", category_id="c1",
-            topic_tags=[], domain_tag=None, published_at=datetime.now(),
-            fetched_at=datetime.now(), image_url=None, priority=1,
-            extra_data=None, hot_score=None,
+            id="i1",
+            title="T",
+            summary=None,
+            url="http://x.com",
+            source_name=None,
+            source_id="s1",
+            category_id="c1",
+            topic_tags=[],
+            domain_tag=None,
+            published_at=datetime.now(),
+            fetched_at=datetime.now(),
+            image_url=None,
+            priority=1,
+            extra_data=None,
+            hot_score=None,
         )
         assert r.summary is None
         assert r.domain_tag is None
@@ -769,7 +921,9 @@ class TestDatabaseStatus:
 class TestSystemInfoResponse:
     def test_minimal(self):
         r = SystemInfoResponse(
-            uptime_seconds=3600, environment="production", python_version="3.11.5",
+            uptime_seconds=3600,
+            environment="production",
+            python_version="3.11.5",
         )
         assert r.version == "1.0.0"
         assert r.uptime_seconds == 3600
@@ -789,8 +943,11 @@ class TestSystemInfoResponse:
         cpu = CpuMemoryInfo(cpu_usage_percent=30.0, cpu_count=4)
         disk = DiskInfo(disk_total_gb=500.0)
         r = SystemInfoResponse(
-            uptime_seconds=7200, environment="dev", python_version="3.12",
-            cpu=cpu, disk=disk,
+            uptime_seconds=7200,
+            environment="dev",
+            python_version="3.12",
+            cpu=cpu,
+            disk=disk,
         )
         assert r.cpu.cpu_usage_percent == 30.0
         assert r.disk.disk_total_gb == 500.0
@@ -803,8 +960,11 @@ class TestSystemInfoResponse:
 class TestServiceHealthResponse:
     def test_full(self):
         r = ServiceHealthResponse(
-            service="redis", status="healthy", response_time_ms=5,
-            connection_count=3, details={"version": "7.0"},
+            service="redis",
+            status="healthy",
+            response_time_ms=5,
+            connection_count=3,
+            details={"version": "7.0"},
         )
         assert r.service == "redis"
         assert r.details == {"version": "7.0"}
@@ -819,10 +979,18 @@ class TestServiceHealthResponse:
 class TestDataSourceHealthDetail:
     def test_full(self):
         r = DataSourceHealthDetail(
-            id="s1", name="Src", source_type="rss", category_id="c1",
-            status="healthy", success_rate_24h=99.0, avg_response_time_ms=100,
-            last_success_at=datetime.now(), last_failure_at=None,
-            consecutive_failures=0, total_fetches_24h=50, last_error=None,
+            id="s1",
+            name="Src",
+            source_type="rss",
+            category_id="c1",
+            status="healthy",
+            success_rate_24h=99.0,
+            avg_response_time_ms=100,
+            last_success_at=datetime.now(),
+            last_failure_at=None,
+            consecutive_failures=0,
+            total_fetches_24h=50,
+            last_error=None,
         )
         assert r.success_rate_24h == 99.0
 
@@ -844,7 +1012,11 @@ class TestDataSourceHealthResponse:
     def test_full(self):
         detail = DataSourceHealthDetail(id="s1", name="S", status="healthy")
         r = DataSourceHealthResponse(
-            total_sources=1, healthy=1, degraded=0, down=0, sources=[detail],
+            total_sources=1,
+            healthy=1,
+            degraded=0,
+            down=0,
+            sources=[detail],
         )
         assert len(r.sources) == 1
         assert r.sources[0].name == "S"
@@ -857,11 +1029,18 @@ class TestDataSourceHealthResponse:
 class TestDataSourceHealthDetailResponse:
     def test_full(self):
         r = DataSourceHealthDetailResponse(
-            source_id="s1", name="Src", source_type="rss", status="healthy",
-            success_rate_24h=95.0, avg_response_time_ms=200,
-            last_success_at=datetime.now(), last_failure_at=None,
-            consecutive_failures=0, total_fetches_24h=100,
-            last_error=None, health_history=[{"ts": "2024"}],
+            source_id="s1",
+            name="Src",
+            source_type="rss",
+            status="healthy",
+            success_rate_24h=95.0,
+            avg_response_time_ms=200,
+            last_success_at=datetime.now(),
+            last_failure_at=None,
+            consecutive_failures=0,
+            total_fetches_24h=100,
+            last_error=None,
+            health_history=[{"ts": "2024"}],
             response_time_trend=[{"ts": "2024", "ms": 100}],
         )
         assert r.health_history == [{"ts": "2024"}]
@@ -876,10 +1055,18 @@ class TestDataSourceHealthDetailResponse:
 class TestSchedulerJobInfo:
     def test_full(self):
         r = SchedulerJobInfo(
-            job_id="j1", source_id="s1", name="Fetch RSS",
-            schedule="*/5 * * * *", original_interval=300, current_interval=300,
-            adaptive_multiplier=1.0, last_run="2024-01-01", next_run="2024-01-02",
-            status="running", success_count_24h=100, failure_count_24h=0,
+            job_id="j1",
+            source_id="s1",
+            name="Fetch RSS",
+            schedule="*/5 * * * *",
+            original_interval=300,
+            current_interval=300,
+            adaptive_multiplier=1.0,
+            last_run="2024-01-01",
+            next_run="2024-01-02",
+            status="running",
+            success_count_24h=100,
+            failure_count_24h=0,
         )
         assert r.job_id == "j1"
         assert r.adaptive_multiplier == 1.0
@@ -896,7 +1083,10 @@ class TestSchedulerStatusResponse:
     def test_full(self):
         job = SchedulerJobInfo(job_id="j1", name="J", status="running")
         r = SchedulerStatusResponse(
-            total_jobs=1, running_jobs=[job], paused_jobs=[], all_jobs=[job],
+            total_jobs=1,
+            running_jobs=[job],
+            paused_jobs=[],
+            all_jobs=[job],
         )
         assert r.total_jobs == 1
         assert len(r.running_jobs) == 1
@@ -910,17 +1100,23 @@ class TestSchedulerStatusResponse:
 class TestSSEStatsResponse:
     def test_full(self):
         r = SSEStatsResponse(
-            total_connections=50, connections_by_channel={"news": 30, "tech": 20},
-            peak_connections_24h=100, peak_connections_today=80,
-            total_connections_today=500, total_events_pushed=10000,
-            average_events_per_minute=15.5, avg_connection_duration_seconds=300.0,
+            total_connections=50,
+            connections_by_channel={"news": 30, "tech": 20},
+            peak_connections_24h=100,
+            peak_connections_today=80,
+            total_connections_today=500,
+            total_events_pushed=10000,
+            average_events_per_minute=15.5,
+            avg_connection_duration_seconds=300.0,
         )
         assert r.connections_by_channel == {"news": 30, "tech": 20}
         assert r.peak_connections_24h == 100
 
     def test_optional(self):
         r = SSEStatsResponse(
-            total_connections=1, connections_by_channel={}, peak_connections_24h=1,
+            total_connections=1,
+            connections_by_channel={},
+            peak_connections_24h=1,
         )
         assert r.peak_connections_today is None
         assert r.total_events_pushed is None
@@ -959,8 +1155,13 @@ class TestTenantCreate:
 
     def test_full(self):
         t = TenantCreate(
-            name="Pro Co", slug="pro-co", plan="pro",
-            settings={"custom": True}, max_users=100, max_categories=50, max_sources=500,
+            name="Pro Co",
+            slug="pro-co",
+            plan="pro",
+            settings={"custom": True},
+            max_users=100,
+            max_categories=50,
+            max_sources=500,
         )
         assert t.plan == "pro"
         assert t.max_users == 100
@@ -1011,9 +1212,17 @@ class TestTenantResponse:
     def test_full(self):
         now = datetime.now()
         r = TenantResponse(
-            id="t1", name="Acme", slug="acme", plan="free",
-            settings={}, max_users=5, max_categories=10, max_sources=50,
-            is_active=True, created_at=now, updated_at=now,
+            id="t1",
+            name="Acme",
+            slug="acme",
+            plan="free",
+            settings={},
+            max_users=5,
+            max_categories=10,
+            max_sources=50,
+            is_active=True,
+            created_at=now,
+            updated_at=now,
         )
         assert r.id == "t1"
         assert r.plan == "free"
@@ -1023,8 +1232,12 @@ class TestTenantResponse:
 class TestTenantStatsResponse:
     def test_full(self):
         r = TenantStatsResponse(
-            tenant_id="t1", user_count=5, category_count=3,
-            source_count=10, item_count=100, active_sse_connections=2,
+            tenant_id="t1",
+            user_count=5,
+            category_count=3,
+            source_count=10,
+            item_count=100,
+            active_sse_connections=2,
         )
         assert r.tenant_id == "t1"
         assert r.item_count == 100
@@ -1033,4 +1246,5 @@ class TestTenantStatsResponse:
 class TestSchemasInit:
     def test_empty_init(self):
         import app.schemas
+
         assert app.schemas.__file__.endswith("__init__.py")

@@ -5,7 +5,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.services.sse import SSEService
+from app.core.constants import SYSTEM_TENANT_ID
+from app.core.sse_router import SSEEventType
+from app.models.source import SourceHealth
+from app.services.sse import SSEService, build_source_health_update_payload
 
 
 class TestConnect:
@@ -175,19 +178,133 @@ class TestGetSSEStats:
         assert result["total_connections"] == 10
 
 
+def _make_source() -> MagicMock:
+    source = MagicMock()
+    source.id = uuid.uuid4()
+    source.name = "Hacker News"
+    source.source_type = "rss"
+    return source
+
+
+def _make_health(**overrides) -> SourceHealth:
+    health = SourceHealth(
+        source_id=uuid.uuid4(),
+        status="down",
+        last_success_at=datetime(2026, 8, 11, 8, 0, tzinfo=UTC),
+        last_failure_at=datetime(2026, 8, 11, 8, 5, tzinfo=UTC),
+        last_error_message="connection timeout",
+        consecutive_failures=12,
+        total_fetches_24h=20,
+        success_count_24h=8,
+        avg_response_time_ms=450,
+    )
+    for key, value in overrides.items():
+        setattr(health, key, value)
+    return health
+
+
+class TestBuildSourceHealthUpdatePayload:
+    """Contract tests: docs/design/data-flow.md §3.5.4."""
+
+    def test_payload_carries_full_row_state(self):
+        source = _make_source()
+        health = _make_health()
+
+        payload = build_source_health_update_payload(source, health, "degraded")
+
+        assert payload["source_id"] == str(source.id)
+        assert payload["name"] == "Hacker News"
+        assert payload["source_type"] == "rss"
+        assert payload["status"] == "down"
+        assert payload["previous_status"] == "degraded"
+        assert payload["last_error"] == "connection timeout"
+        assert payload["last_success_at"] == "2026-08-11T08:00:00+00:00"
+        assert payload["last_failure_at"] == "2026-08-11T08:05:00+00:00"
+        assert payload["avg_response_time_ms"] == 450
+        assert payload["consecutive_failures"] == 12
+        assert payload["success_count_24h"] == 8
+        assert payload["total_fetches_24h"] == 20
+        assert payload["success_rate_24h"] == pytest.approx(8 / 20)
+        # Publish time must be a parseable ISO-8601 timestamp
+        datetime.fromisoformat(payload["timestamp"])
+
+    def test_payload_includes_every_frontend_table_field(self):
+        # Regression: the old minimal payload ({source_id, status, last_error,
+        # timestamp}) lacked every field rendered by DataSourcesHealth.vue
+        # (last_success_at / last_failure_at / avg_response_time_ms / ...), so
+        # the dashboard health table could never refresh from the SSE event.
+        source = _make_source()
+        health = _make_health()
+
+        payload = build_source_health_update_payload(source, health, "degraded")
+
+        required = {
+            "source_id",
+            "name",
+            "source_type",
+            "status",
+            "previous_status",
+            "last_error",
+            "last_success_at",
+            "last_failure_at",
+            "avg_response_time_ms",
+            "consecutive_failures",
+            "success_count_24h",
+            "total_fetches_24h",
+            "success_rate_24h",
+            "timestamp",
+        }
+        assert required <= payload.keys()
+
+    def test_payload_null_times_and_zero_fetches(self):
+        source = _make_source()
+        health = _make_health(
+            last_success_at=None,
+            last_failure_at=None,
+            last_error_message=None,
+            total_fetches_24h=0,
+            success_count_24h=0,
+        )
+
+        payload = build_source_health_update_payload(source, health, "healthy")
+
+        assert payload["last_success_at"] is None
+        assert payload["last_failure_at"] is None
+        assert payload["last_error"] is None
+        assert payload["success_rate_24h"] is None
+
+
 class TestPublishSourceHealthUpdate:
     @patch("app.services.sse.event_router")
-    async def test_publish(self, mock_router):
+    async def test_publish_pushes_contract_payload_on_dashboard_channel(self, mock_router):
+        mock_router.push_event = AsyncMock()
+        payload = build_source_health_update_payload(_make_source(), _make_health(), "degraded")
+
+        service = SSEService()
+        await service.publish_source_health_update(payload, tenant_id="tenant-1")
+
+        mock_router.push_event.assert_awaited_once_with(
+            category="dashboard",
+            event_type=SSEEventType.SOURCE_HEALTH_UPDATE,
+            data=payload,
+            tenant_id="tenant-1",
+        )
+
+    @patch("app.services.sse.event_router")
+    async def test_publish_defaults_to_system_tenant(self, mock_router):
+        # System-tenant scoping is what lets admin sessions (whose JWT tenant
+        # claim is the system tenant) receive health events of system sources.
         mock_router.push_event = AsyncMock()
 
         service = SSEService()
-        await service.publish_source_health_update(
-            source_id="src-1",
-            status="healthy",
-            last_error=None,
-            tenant_id="tenant-1",
+        await service.publish_source_health_update({"source_id": "src-1", "status": "healthy"})
+
+        mock_router.push_event.assert_awaited_once_with(
+            category="dashboard",
+            event_type=SSEEventType.SOURCE_HEALTH_UPDATE,
+            data={"source_id": "src-1", "status": "healthy"},
+            tenant_id=str(SYSTEM_TENANT_ID),
         )
-        mock_router.push_event.assert_called_once()
 
 
 class TestPublishItemUpdate:

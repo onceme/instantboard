@@ -7,22 +7,11 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy.orm import selectinload
 
+from app.core.constants import SYSTEM_TENANT_ID
 from app.core.sse_router import event_router
 from app.models.source import Source, SourceHealth
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_SCHEDULES = {
-    "finance_stock_quote": 30,
-    "finance_cn_stock": 30,
-    "finance_market_indices": 30,
-    "finance_commodities": 60,
-    "finance_nav": 120,
-    "tech_rss": 300,
-    "tech_hackernews": 120,
-    "tech_arxiv": 1800,
-    "tech_web_scrape": 1800,
-}
 
 SOURCE_TYPE_DEFAULT_INTERVALS = {
     "finance_quote": 30,
@@ -388,7 +377,12 @@ class AsyncSchedulerManager:
                 results = await chain.execute(collection_result.items, source)
 
                 sse_service = SSEService()
-                tenant_id = str(source.tenant_id) if source.tenant_id else "default"
+                # Fallback must be str(SYSTEM_TENANT_ID), never a literal like "default":
+                # SSE routing forwards events only on exact tenant_id string match, so a
+                # non-UUID literal could never equal a registered connection's tenant_id.
+                # Unreachable in practice (Source.tenant_id is NOT NULL); contract:
+                # docs/design/data-flow.md §3.5.4.
+                tenant_id = str(source.tenant_id) if source.tenant_id else str(SYSTEM_TENANT_ID)
                 category_slug = _source_category_cache.get(str(source.id), "")
                 if not category_slug and source.category:
                     category_slug = source.category.slug
@@ -527,14 +521,21 @@ class AsyncSchedulerManager:
                     previous_status = "healthy"
 
                 if health.status != previous_status:
-                    from app.services.sse import SSEService
+                    from app.services.sse import SSEService, build_source_health_update_payload
 
                     sse_service = SSEService()
+                    # Contract: docs/design/data-flow.md §3.5.4 — publish the full
+                    # source_health row state so the dashboard health table can match the
+                    # row by source_id and refresh status/times/latency in place.
+                    # Tenant scoping: str(source.tenant_id) equals the admin JWT tenant
+                    # claim for system-tenant sources, so admin sessions receive it.
+                    # Fallback must be str(SYSTEM_TENANT_ID), never a literal like
+                    # "default": exact-string tenant routing would drop the event.
+                    # Unreachable in practice (Source.tenant_id is NOT NULL); contract:
+                    # docs/design/data-flow.md §3.5.4.
                     await sse_service.publish_source_health_update(
-                        source_id=str(source.id),
-                        status=health.status,
-                        last_error=health.last_error_message,
-                        tenant_id=str(source.tenant_id) if source.tenant_id else "default",
+                        build_source_health_update_payload(source, health, previous_status),
+                        tenant_id=str(source.tenant_id) if source.tenant_id else str(SYSTEM_TENANT_ID),
                     )
 
                 await self.adaptive_reschedule(str(source.id), health.status)

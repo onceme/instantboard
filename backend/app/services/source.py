@@ -1,5 +1,4 @@
 import logging
-from datetime import UTC, datetime
 
 from redis.asyncio import Redis
 from sqlalchemy import and_, func, or_, select
@@ -24,7 +23,6 @@ from app.models.source import Source, SourceHealth
 from app.models.tenant import Tenant
 from app.schemas.base import PaginatedMeta, PaginatedResponse, SuccessResponse
 from app.schemas.source import (
-    HealthCheckResult,
     SourceCreate,
     SourceHealthResponse,
     SourceResponse,
@@ -469,103 +467,6 @@ class SourceService:
             raise SourceNotFound()
         if str(source.tenant_id) != tenant_id and source.tenant_id != SYSTEM_TENANT_ID:
             raise SourceNotFound(message="Source not accessible for this tenant")
-
-        return SuccessResponse(
-            success=True,
-            data=_health_to_response(health),
-        )
-
-    async def update_source_health(
-        self,
-        source_id: str,
-        result: HealthCheckResult,
-    ) -> SuccessResponse[SourceHealthResponse]:
-        stmt = select(SourceHealth).where(SourceHealth.source_id == source_id)
-        health = (await self.db.execute(stmt)).scalar_one_or_none()
-
-        if health is None:
-            health = SourceHealth(
-                source_id=source_id,
-                status="healthy",
-                total_fetches_24h=0,
-                success_count_24h=0,
-                avg_response_time_ms=0,
-                consecutive_failures=0,
-            )
-            self.db.add(health)
-            await self.db.flush()
-
-        previous_status = health.status
-
-        now = datetime.now(UTC)
-        health.total_fetches_24h += 1
-
-        if result.success:
-            health.consecutive_failures = 0
-            health.last_success_at = now
-            health.success_count_24h += 1
-
-            if result.response_time_ms > 0:
-                current_avg = health.avg_response_time_ms
-                total = health.total_fetches_24h
-                health.avg_response_time_ms = int((current_avg * (total - 1) + result.response_time_ms) / total)
-
-            if health.consecutive_failures == 0:
-                if previous_status == "down" or previous_status == "degraded":
-                    health.status = "degraded"
-                elif previous_status != "healthy":
-                    health.status = "healthy"
-                else:
-                    health.status = "healthy"
-        else:
-            health.consecutive_failures += 1
-            health.last_failure_at = now
-            health.last_error_message = result.error_message
-
-            if health.consecutive_failures >= 10:
-                health.status = "down"
-            elif health.consecutive_failures >= 3:
-                health.status = "degraded"
-            else:
-                health.status = previous_status
-
-        health.updated_at = now
-        await self.db.flush()
-
-        redis_key = RedisKeys.source_health_key(str(source_id))
-        await redis_hset(
-            redis_key,
-            mapping={
-                "status": health.status,
-                "consecutive_failures": str(health.consecutive_failures),
-                "avg_response_time_ms": str(health.avg_response_time_ms),
-                "last_error": health.last_error_message or "",
-            },
-        )
-
-        if health.status != previous_status:
-            source_stmt = select(Source).where(Source.id == source_id).options(selectinload(Source.category))
-            source = (await self.db.execute(source_stmt)).scalar_one_or_none()
-            category_slug = source.category.slug if source and source.category else "unknown"
-            await redis_publish(
-                RedisKeys.channel_key(category_slug),
-                {
-                    "event": "source_health_update",
-                    "source_id": str(source_id),
-                    "status": health.status,
-                    "previous_status": previous_status,
-                    "last_error": health.last_error_message,
-                },
-            )
-            await redis_publish(
-                RedisKeys.channel_key("dashboard"),
-                {
-                    "event": "source_health_update",
-                    "source_id": str(source_id),
-                    "status": health.status,
-                    "previous_status": previous_status,
-                },
-            )
 
         return SuccessResponse(
             success=True,

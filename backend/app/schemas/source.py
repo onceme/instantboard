@@ -55,12 +55,6 @@ class SourceHealthResponse(BaseModel):
     last_error: str | None = None
 
 
-class HealthCheckResult(BaseModel):
-    success: bool
-    response_time_ms: int = Field(default=0)
-    error_message: str | None = None
-
-
 class SourceListParams(BaseModel):
     category_id: str | None = None
     source_type: str | None = Field(default=None, pattern="^(rss|api|web_scrape|social)$")

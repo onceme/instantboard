@@ -2,6 +2,7 @@
 Integration tests conftest.
 Handles lifespan mocking, dependency overrides, and auth helpers.
 """
+
 import uuid
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -69,6 +70,7 @@ async def _mock_lifespan(app):
     from datetime import UTC, datetime
 
     import app.main as main_mod
+
     main_mod._start_time = datetime.now(UTC)
     yield
 
@@ -128,6 +130,7 @@ def app_with_overrides():
 
     async def mock_redis_set(key, value, ex=None):
         import json
+
         if isinstance(value, (dict, list)):
             value = json.dumps(value)
         mock_redis._data[key] = value
@@ -163,8 +166,8 @@ def app_with_overrides():
     redis_mod.redis_sismember = mock_redis_sismember
     redis_mod.get_redis_client = mock_get_redis_client
 
-    sec_original_get = getattr(security_mod, 'redis_get', None)
-    sec_original_set = getattr(security_mod, 'redis_set', None)
+    sec_original_get = getattr(security_mod, "redis_get", None)
+    sec_original_set = getattr(security_mod, "redis_set", None)
     if sec_original_get is not None:
         security_mod.redis_get = mock_redis_get
     if sec_original_set is not None:
@@ -201,13 +204,15 @@ def client(app_with_overrides):
 def make_auth_header(role="admin", provider="github"):
     tenant_id = str(uuid.uuid4())
     user_id = str(uuid.uuid4())
-    token = create_access_token({
-        "sub": user_id,
-        "tenant_id": tenant_id,
-        "role": role,
-        "provider": provider,
-        "type": "access",
-    })
+    token = create_access_token(
+        {
+            "sub": user_id,
+            "tenant_id": tenant_id,
+            "role": role,
+            "provider": provider,
+            "type": "access",
+        }
+    )
     return {"Authorization": f"Bearer {token}"}, tenant_id, user_id
 
 

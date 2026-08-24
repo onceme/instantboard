@@ -10,6 +10,7 @@ Note: the chain order [eastmoney, yfinance] for market indices is asserted in
 tests/unit/test_services_finance.py::TestGetFailoverChain::test_market_index,
 and the merge-by-symbol behavior in test_fetch_indices_with_failover_merge.
 """
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.collectors.base import CollectionResult
@@ -66,11 +67,17 @@ class TestYFinanceRateLimit:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
-            "chart": {"result": [{"meta": {
-                "regularMarketPrice": 150,
-                "chartPreviousClose": 148,
-                "shortName": "Apple",
-            }}]}
+            "chart": {
+                "result": [
+                    {
+                        "meta": {
+                            "regularMarketPrice": 150,
+                            "chartPreviousClose": 148,
+                            "shortName": "Apple",
+                        }
+                    }
+                ]
+            }
         }
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(return_value=mock_response)
@@ -117,10 +124,14 @@ class TestRateLimitAdvancesFailoverChain:
             new_callable=AsyncMock,
             side_effect=[None, items],
         ):
-            result = await service._fetch_with_failover_batch("tenant-1", ["^GSPC"], [
-                {"name": "eastmoney", "collector": "eastmoney"},
-                {"name": "yfinance", "collector": "yfinance"},
-            ])
+            result = await service._fetch_with_failover_batch(
+                "tenant-1",
+                ["^GSPC"],
+                [
+                    {"name": "eastmoney", "collector": "eastmoney"},
+                    {"name": "yfinance", "collector": "yfinance"},
+                ],
+            )
 
         assert result == items
 
@@ -134,17 +145,19 @@ class TestEastmoneyBatchSymbolRemap:
 
         fake_collector_cls = MagicMock()
         collector = MagicMock()
-        collector.collect = AsyncMock(return_value=CollectionResult(
-            items=[
-                # secid form -> must be remapped to 000001.SS
-                {"symbol": "1.000001", "current_price": 3500},
-                # already a standard symbol -> identity entry keeps it as-is
-                {"symbol": "399001.SZ", "current_price": 11000},
-                # not requested -> dropped
-                {"symbol": "9.999999", "current_price": 1},
-            ],
-            success=True,
-        ))
+        collector.collect = AsyncMock(
+            return_value=CollectionResult(
+                items=[
+                    # secid form -> must be remapped to 000001.SS
+                    {"symbol": "1.000001", "current_price": 3500},
+                    # already a standard symbol -> identity entry keeps it as-is
+                    {"symbol": "399001.SZ", "current_price": 11000},
+                    # not requested -> dropped
+                    {"symbol": "9.999999", "current_price": 1},
+                ],
+                success=True,
+            )
+        )
         fake_collector_cls.return_value = collector
 
         registry = {"eastmoney": fake_collector_cls}

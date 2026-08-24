@@ -6,6 +6,7 @@ pausing; otherwise every source would be paused permanently after its first
 collection round ("no SSE subscribers"). Also locks down that newly added jobs
 fire immediately (next_run_time=now) instead of waiting a full interval.
 """
+
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 

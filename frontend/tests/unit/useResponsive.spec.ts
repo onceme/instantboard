@@ -21,7 +21,9 @@ interface FirstFrame {
 // plus the returned refs (kept in an outer holder) for later assertions.
 function setupAt(width: number) {
   const captured: { value: FirstFrame | null } = { value: null };
-  const holder: { value: ReturnType<typeof useResponsive> | null } = { value: null };
+  const holder: { value: ReturnType<typeof useResponsive> | null } = {
+    value: null,
+  };
 
   const Host = defineComponent({
     setup() {

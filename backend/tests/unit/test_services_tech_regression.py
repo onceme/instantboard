@@ -4,6 +4,7 @@ A tenant without a seeded tech category used to crash with AttributeError on
 tech_category.id (bare 500). get_news/get_topics must return empty success
 responses instead, and must not run item/aggregation queries.
 """
+
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 

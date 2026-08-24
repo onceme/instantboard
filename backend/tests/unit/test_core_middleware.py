@@ -22,6 +22,7 @@ class TestSetupCors:
         app.add_middleware.assert_called_once()
         call_args = app.add_middleware.call_args
         from fastapi.middleware.cors import CORSMiddleware
+
         assert call_args[0][0] == CORSMiddleware
         assert call_args[1]["allow_credentials"] is True
         assert "GET" in call_args[1]["allow_methods"]
@@ -138,6 +139,7 @@ class TestRequestLoggingMiddleware:
         middleware = RequestLoggingMiddleware(app=MagicMock())
 
         import app.core.middleware as mw
+
         old_count = mw._total_request_count
         mw._total_request_count = 999
 
@@ -229,6 +231,7 @@ class TestSetupMiddlewares:
 class TestGlobalCounters:
     def test_request_log_deque(self):
         from collections import deque
+
         assert isinstance(_request_log, deque)
         assert _request_log.maxlen == 1000
 

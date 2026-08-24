@@ -15,6 +15,7 @@ Skipped when DATABASE_URL is not PostgreSQL (jsonb operators are PG-specific).
 Everything runs inside the db_session fixture's transaction and is rolled
 back, so no state persists.
 """
+
 import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch

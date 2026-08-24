@@ -101,15 +101,15 @@ test-docker:    ## Run the Docker test environment
 # ========================================
 
 lint:           ## Run code checks (ruff + eslint)
-	cd backend && ruff check app/ tests/ && ruff format --check app/
+	cd backend && ruff check app/ tests/ && ruff format --check app/ tests/
 	cd frontend && npx eslint src/ && npx prettier --check src/
 
 lint-fix:       ## Auto-fix lint issues
-	cd backend && ruff check --fix app/ tests/ && ruff format app/
+	cd backend && ruff check --fix app/ tests/ && ruff format app/ tests/
 	cd frontend && npx eslint --fix src/ && npx prettier --write src/
 
 format:         ## Format code (ruff format + prettier)
-	cd backend && ruff format app/
+	cd backend && ruff format app/ tests/
 	cd frontend && npx prettier --write src/
 
 # ========================================

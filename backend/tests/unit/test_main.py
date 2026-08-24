@@ -1,4 +1,5 @@
 """Unit tests for app/main.py."""
+
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -9,18 +10,22 @@ from fastapi import FastAPI
 class TestAppCreation:
     def test_app_title(self):
         from app.main import app
+
         assert app.title == "InstantBoard"
 
     def test_app_version(self):
         from app.main import app
+
         assert app.version == "1.0.0"
 
     def test_app_description(self):
         from app.main import app
+
         assert app.description == "Real-time information aggregation message board"
 
     def test_app_has_root_route(self):
         from app.main import app as _app
+
         route_paths = []
         for r in _app.routes:
             if hasattr(r, "path"):
@@ -31,10 +36,12 @@ class TestAppCreation:
 class TestRootEndpoint:
     async def test_root_with_no_start_time(self):
         import app.main as main_mod
+
         main_mod._start_time = None
         response = await main_mod.root()
         assert response.body is not None
         import json
+
         body = json.loads(response.body)
         assert body["name"] == "InstantBoard"
         assert body["version"] == "1.0.0"
@@ -44,9 +51,11 @@ class TestRootEndpoint:
         from datetime import UTC, datetime
 
         import app.main as main_mod
+
         main_mod._start_time = datetime.now(UTC)
         response = await main_mod.root()
         import json
+
         body = json.loads(response.body)
         assert body["name"] == "InstantBoard"
         assert body["uptime_seconds"] >= 0
@@ -84,7 +93,11 @@ class TestLifespan:
                 mock_settings.env = "development"
                 with (
                     patch("asyncio.create_task", return_value=mock_task),
-                    patch("app.services.dashboard.start_metrics_collection", new_callable=AsyncMock, return_value=mock_task),
+                    patch(
+                        "app.services.dashboard.start_metrics_collection",
+                        new_callable=AsyncMock,
+                        return_value=mock_task,
+                    ),
                     patch("app.services.dashboard.stop_metrics_collection"),
                     patch("app.main.close_redis", new_callable=AsyncMock),
                 ):
@@ -125,7 +138,11 @@ class TestLifespan:
                 mock_settings.env = "development"
                 with (
                     patch("asyncio.create_task", return_value=mock_task),
-                    patch("app.services.dashboard.start_metrics_collection", new_callable=AsyncMock, return_value=mock_task),
+                    patch(
+                        "app.services.dashboard.start_metrics_collection",
+                        new_callable=AsyncMock,
+                        return_value=mock_task,
+                    ),
                     patch("app.services.dashboard.stop_metrics_collection"),
                     patch("app.main.close_redis", new_callable=AsyncMock),
                     patch("app.scheduler.manager.scheduler_manager") as mock_sched_mgr,

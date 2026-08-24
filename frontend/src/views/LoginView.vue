@@ -22,8 +22,7 @@ onMounted(async () => {
   // Show the error coming from the SSO callback and clear the query so it doesn't persist after refresh
   const queryError = route.query.error;
   if (typeof queryError === "string" && queryError) {
-    loginError.value =
-      QUERY_ERROR_MESSAGES[queryError] || "登录失败，请重试。";
+    loginError.value = QUERY_ERROR_MESSAGES[queryError] || "登录失败，请重试。";
     router.replace({ query: {} });
   }
 

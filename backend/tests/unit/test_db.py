@@ -1,4 +1,5 @@
 """Unit tests for app/db package."""
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -8,10 +9,12 @@ import pytest
 class TestSessionModule:
     def test_engine_import(self):
         from app.db.session import engine
+
         assert engine is not None
 
     def test_async_session_factory(self):
         from app.db.session import async_session_factory
+
         assert async_session_factory is not None
 
     async def test_get_db_session_generator(self):
@@ -36,6 +39,7 @@ class TestSessionModule:
 class TestInitDBModule:
     def test_finance_sources_constant(self):
         from app.db.init_db import FINANCE_SOURCES
+
         assert isinstance(FINANCE_SOURCES, list)
         assert len(FINANCE_SOURCES) > 0
         first = FINANCE_SOURCES[0]
@@ -47,6 +51,7 @@ class TestInitDBModule:
 
     def test_tech_sources_constants(self):
         from app.db.init_db import TECH_AI_SOURCES, TECH_EMBEDDED_SOURCES, TECH_ROBOTICS_SOURCES, TECH_SPACE_SOURCES
+
         assert isinstance(TECH_AI_SOURCES, list)
         assert isinstance(TECH_ROBOTICS_SOURCES, list)
         assert isinstance(TECH_EMBEDDED_SOURCES, list)
@@ -58,6 +63,7 @@ class TestInitDBModule:
 
     def test_cross_domain_sources(self):
         from app.db.init_db import TECH_CROSS_DOMAIN_SOURCES
+
         assert isinstance(TECH_CROSS_DOMAIN_SOURCES, list)
         assert len(TECH_CROSS_DOMAIN_SOURCES) > 0
 
@@ -236,6 +242,7 @@ class TestInitDBModule:
             patch("app.db.init_db.seed_default_data", new_callable=AsyncMock) as mock_seed,
         ):
             from app.db.init_db import init_db
+
             await init_db()
             mock_create.assert_called_once()
             mock_seed.assert_called_once()
@@ -490,10 +497,18 @@ class TestInitDBModule:
             TECH_ROBOTICS_SOURCES,
             TECH_SPACE_SOURCES,
         )
-        total_tech = len(TECH_AI_SOURCES) + len(TECH_ROBOTICS_SOURCES) + len(TECH_EMBEDDED_SOURCES) + len(TECH_SPACE_SOURCES) + len(TECH_CROSS_DOMAIN_SOURCES)
+
+        total_tech = (
+            len(TECH_AI_SOURCES)
+            + len(TECH_ROBOTICS_SOURCES)
+            + len(TECH_EMBEDDED_SOURCES)
+            + len(TECH_SPACE_SOURCES)
+            + len(TECH_CROSS_DOMAIN_SOURCES)
+        )
         expected_sources = len(FINANCE_SOURCES) + total_tech
         # Count Source objects added (excluding tenants and categories)
         from app.models.source import Source, SourceHealth
+
         source_count = sum(1 for obj in added_objects if isinstance(obj, Source))
         health_count = sum(1 for obj in added_objects if isinstance(obj, SourceHealth))
         assert source_count == expected_sources

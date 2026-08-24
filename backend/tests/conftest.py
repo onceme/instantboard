@@ -62,12 +62,16 @@ def _restore_server_defaults(stripped: list[tuple]) -> None:
 TEST_DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite+aiosqlite:///./test.db")
 
 _is_sqlite = TEST_DATABASE_URL.startswith("sqlite")
-_engine_kwargs = {
-    "connect_args": {"check_same_thread": False},
-    "poolclass": StaticPool,
-} if _is_sqlite else {
-    "poolclass": NullPool,
-}
+_engine_kwargs = (
+    {
+        "connect_args": {"check_same_thread": False},
+        "poolclass": StaticPool,
+    }
+    if _is_sqlite
+    else {
+        "poolclass": NullPool,
+    }
+)
 
 test_engine = create_async_engine(
     TEST_DATABASE_URL,
@@ -114,6 +118,7 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
 @pytest.fixture
 def redis_mock():
     """Mock Redis client for tests."""
+
     class MockRedis:
         def __init__(self):
             self._data = {}

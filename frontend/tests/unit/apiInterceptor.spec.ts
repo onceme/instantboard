@@ -31,8 +31,17 @@ function errorResponse(
   );
 }
 
-function okResponse(config: InternalAxiosRequestConfig, data: unknown): AxiosResponse {
-  return { status: 200, statusText: "OK", data, headers: {}, config } as AxiosResponse;
+function okResponse(
+  config: InternalAxiosRequestConfig,
+  data: unknown,
+): AxiosResponse {
+  return {
+    status: 200,
+    statusText: "OK",
+    data,
+    headers: {},
+    config,
+  } as AxiosResponse;
 }
 
 // The auth header may live on an AxiosHeaders instance or a plain object.
@@ -41,7 +50,8 @@ function authHeader(config: InternalAxiosRequestConfig): string | undefined {
     Authorization?: string;
     get?: (name: string) => string;
   };
-  if (typeof headers?.get === "function") return headers.get("Authorization") ?? undefined;
+  if (typeof headers?.get === "function")
+    return headers.get("Authorization") ?? undefined;
   return headers?.Authorization;
 }
 
@@ -72,7 +82,9 @@ describe("401 exemptions for login flows", () => {
     apiClient.defaults.adapter = async (config) => {
       requestedUrls.push(config.url ?? "");
       throw errorResponse(401, config, {
-        detail: { error: { code: "INVALID_CREDENTIALS", message: "SSO login failed" } },
+        detail: {
+          error: { code: "INVALID_CREDENTIALS", message: "SSO login failed" },
+        },
       });
     };
     axios.defaults.adapter = async (config) => {
@@ -96,7 +108,9 @@ describe("401 exemptions for login flows", () => {
     apiClient.defaults.adapter = async (config) => {
       requestedUrls.push(config.url ?? "");
       throw errorResponse(401, config, {
-        detail: { error: { code: "INVALID_CREDENTIALS", message: "账号或密码错误" } },
+        detail: {
+          error: { code: "INVALID_CREDENTIALS", message: "账号或密码错误" },
+        },
       });
     };
     axios.defaults.adapter = async (config) => {
@@ -182,7 +196,10 @@ describe("non-exempt 401 handling", () => {
     };
     axios.defaults.adapter = async (config) => {
       expect(config.url).toBe("/api/v1/auth/refresh");
-      return okResponse(config, { success: true, data: { access_token: "fresh" } });
+      return okResponse(config, {
+        success: true,
+        data: { access_token: "fresh" },
+      });
     };
 
     const result = await apiGet("/tech/news");

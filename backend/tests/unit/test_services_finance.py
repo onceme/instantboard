@@ -36,8 +36,15 @@ def _mock_redis():
 
 
 def _make_finance_symbol(
-    sym_id=None, tenant_id="tenant-1", symbol="AAPL", name="Apple Inc",
-    type_="stock", market="US", exchange="NASDAQ", currency="USD", is_active=True
+    sym_id=None,
+    tenant_id="tenant-1",
+    symbol="AAPL",
+    name="Apple Inc",
+    type_="stock",
+    market="US",
+    exchange="NASDAQ",
+    currency="USD",
+    is_active=True,
 ):
     fs = MagicMock()
     fs.id = sym_id or uuid.uuid4()
@@ -53,8 +60,13 @@ def _make_finance_symbol(
 
 
 def _make_watchlist_item(
-    item_id=None, tenant_id="tenant-1", user_id="user-1",
-    symbol_id=None, display_order=0, notes=None, alert_threshold_percent=None
+    item_id=None,
+    tenant_id="tenant-1",
+    user_id="user-1",
+    symbol_id=None,
+    display_order=0,
+    notes=None,
+    alert_threshold_percent=None,
 ):
     item = MagicMock()
     item.id = item_id or uuid.uuid4()
@@ -75,10 +87,20 @@ class TestSearchSymbols:
         db, mock_result = _mock_db()
         redis = _mock_redis()
 
-        cached_data = json.dumps([
-            {"symbol": "AAPL", "name": "Apple", "type": "stock", "market": "US",
-             "exchange": "NASDAQ", "current_price": 150.0, "change_percent": 1.5, "currency": "USD"}
-        ])
+        cached_data = json.dumps(
+            [
+                {
+                    "symbol": "AAPL",
+                    "name": "Apple",
+                    "type": "stock",
+                    "market": "US",
+                    "exchange": "NASDAQ",
+                    "current_price": 150.0,
+                    "change_percent": 1.5,
+                    "currency": "USD",
+                }
+            ]
+        )
         mock_redis_get.return_value = cached_data
 
         service = FinanceService(db, redis)
@@ -98,7 +120,12 @@ class TestSearchSymbols:
         scalars.all.return_value = [fs]
         mock_result.scalars.return_value = scalars
 
-        with patch.object(FinanceService, "_get_cached_quote", new_callable=AsyncMock, return_value={"current_price": 150, "change_percent": 1.5}):
+        with patch.object(
+            FinanceService,
+            "_get_cached_quote",
+            new_callable=AsyncMock,
+            return_value={"current_price": 150, "change_percent": 1.5},
+        ):
             service = FinanceService(db, redis)
             result = await service.search_symbols("tenant-1", "AAPL")
 
@@ -130,11 +157,21 @@ class TestSearchSymbols:
         mock_result.scalars.return_value = scalars
 
         external_results = [
-            {"symbol": "AAPL", "name": "Apple", "type": "stock", "market": "US",
-             "exchange": "NASDAQ", "current_price": None, "change_percent": None, "currency": "USD"}
+            {
+                "symbol": "AAPL",
+                "name": "Apple",
+                "type": "stock",
+                "market": "US",
+                "exchange": "NASDAQ",
+                "current_price": None,
+                "change_percent": None,
+                "currency": "USD",
+            }
         ]
 
-        with patch.object(FinanceService, "_search_symbols_external", new_callable=AsyncMock, return_value=external_results):
+        with patch.object(
+            FinanceService, "_search_symbols_external", new_callable=AsyncMock, return_value=external_results
+        ):
             service = FinanceService(db, redis)
             result = await service.search_symbols("tenant-1", "AAPL")
             assert result["meta"]["total"] == 1
@@ -161,10 +198,12 @@ class TestGetQuote:
 
         quote_data = {"symbol": "AAPL", "current_price": 150, "name": "Apple", "change": 2.5}
 
-        with patch.object(FinanceService, "_get_cached_quote", new_callable=AsyncMock, return_value=None), \
-             patch.object(FinanceService, "_fetch_quote_with_failover", new_callable=AsyncMock, return_value=quote_data), \
-             patch.object(FinanceService, "_store_quote_to_db", new_callable=AsyncMock), \
-             patch.object(FinanceService, "_cache_quote", new_callable=AsyncMock):
+        with (
+            patch.object(FinanceService, "_get_cached_quote", new_callable=AsyncMock, return_value=None),
+            patch.object(FinanceService, "_fetch_quote_with_failover", new_callable=AsyncMock, return_value=quote_data),
+            patch.object(FinanceService, "_store_quote_to_db", new_callable=AsyncMock),
+            patch.object(FinanceService, "_cache_quote", new_callable=AsyncMock),
+        ):
             service = FinanceService(db, redis)
             result = await service.get_quote("tenant-1", "AAPL")
             assert result["symbol"] == "AAPL"
@@ -173,8 +212,10 @@ class TestGetQuote:
         db, mock_result = _mock_db()
         redis = _mock_redis()
 
-        with patch.object(FinanceService, "_get_cached_quote", new_callable=AsyncMock, return_value=None), \
-             patch.object(FinanceService, "_fetch_quote_with_failover", new_callable=AsyncMock, return_value=None):
+        with (
+            patch.object(FinanceService, "_get_cached_quote", new_callable=AsyncMock, return_value=None),
+            patch.object(FinanceService, "_fetch_quote_with_failover", new_callable=AsyncMock, return_value=None),
+        ):
             service = FinanceService(db, redis)
             with pytest.raises(SymbolNotFound, match="Quote not available"):
                 await service.get_quote("tenant-1", "INVALID")
@@ -193,7 +234,9 @@ class TestGetMarketIndices:
             {"symbol": "^GSPC", "current_price": 5000, "change": 10, "change_percent": 0.2, "timestamp": "2024-01-01"},
         ]
 
-        with patch.object(FinanceService, "_fetch_indices_with_failover", new_callable=AsyncMock, return_value=indices_data):
+        with patch.object(
+            FinanceService, "_fetch_indices_with_failover", new_callable=AsyncMock, return_value=indices_data
+        ):
             service = FinanceService(db, redis)
             result = await service.get_market_indices("tenant-1")
             assert len(result) > 0
@@ -236,7 +279,9 @@ class TestGetCommodities:
             {"symbol": "GC=F", "current_price": 2000, "change": 5, "change_percent": 0.25, "timestamp": "2024-01-01"},
         ]
 
-        with patch.object(FinanceService, "_fetch_commodities_with_failover", new_callable=AsyncMock, return_value=commodities_data):
+        with patch.object(
+            FinanceService, "_fetch_commodities_with_failover", new_callable=AsyncMock, return_value=commodities_data
+        ):
             service = FinanceService(db, redis)
             result = await service.get_commodities("tenant-1")
             assert len(result) > 0
@@ -259,7 +304,9 @@ class TestGetCommodities:
         db, mock_result = _mock_db()
         redis = _mock_redis()
 
-        with patch.object(FinanceService, "_fetch_commodities_with_failover", new_callable=AsyncMock, return_value=None):
+        with patch.object(
+            FinanceService, "_fetch_commodities_with_failover", new_callable=AsyncMock, return_value=None
+        ):
             service = FinanceService(db, redis)
             with pytest.raises(ServiceUnavailable):
                 await service.get_commodities("tenant-1")
@@ -411,7 +458,12 @@ class TestGetWatchlist:
         scalars.all.return_value = [item]
         mock_result.scalars.return_value = scalars
 
-        with patch.object(FinanceService, "_get_cached_quote", new_callable=AsyncMock, return_value={"current_price": 150, "change": 2, "change_percent": 1.3}):
+        with patch.object(
+            FinanceService,
+            "_get_cached_quote",
+            new_callable=AsyncMock,
+            return_value={"current_price": 150, "change": 2, "change_percent": 1.3},
+        ):
             service = FinanceService(db, redis)
             result = await service.get_watchlist("tenant-1", "user-1")
             assert len(result) == 1
@@ -570,10 +622,14 @@ class TestReorderWatchlist:
         db.execute = execute_side_effect
 
         service = FinanceService(db, redis)
-        await service.reorder_watchlist("tenant-1", "user-1", [
-            {"item_id": str(item1.id), "display_order": 1},
-            {"item_id": str(item2.id), "display_order": 0},
-        ])
+        await service.reorder_watchlist(
+            "tenant-1",
+            "user-1",
+            [
+                {"item_id": str(item1.id), "display_order": 1},
+                {"item_id": str(item2.id), "display_order": 0},
+            ],
+        )
         assert item1.display_order == 1
         assert item2.display_order == 0
 
@@ -584,9 +640,13 @@ class TestReorderWatchlist:
         mock_result.scalar_one_or_none.return_value = None
 
         service = FinanceService(db, redis)
-        await service.reorder_watchlist("tenant-1", "user-1", [
-            {"item_id": "nonexistent", "display_order": 0},
-        ])
+        await service.reorder_watchlist(
+            "tenant-1",
+            "user-1",
+            [
+                {"item_id": "nonexistent", "display_order": 0},
+            ],
+        )
         db.commit.assert_called_once()
 
 
@@ -600,9 +660,18 @@ class TestGetWatchlistQuotes:
             {"symbol": "GOOG", "symbol_id": str(uuid.uuid4())},
         ]
 
-        with patch.object(FinanceService, "get_watchlist", new_callable=AsyncMock, return_value=watchlist_items), \
-             patch.object(FinanceService, "_get_cached_quote", new_callable=AsyncMock, side_effect=[{"symbol": "AAPL", "price": 150}, None]), \
-             patch.object(FinanceService, "get_quote", new_callable=AsyncMock, return_value={"symbol": "GOOG", "price": 2800}):
+        with (
+            patch.object(FinanceService, "get_watchlist", new_callable=AsyncMock, return_value=watchlist_items),
+            patch.object(
+                FinanceService,
+                "_get_cached_quote",
+                new_callable=AsyncMock,
+                side_effect=[{"symbol": "AAPL", "price": 150}, None],
+            ),
+            patch.object(
+                FinanceService, "get_quote", new_callable=AsyncMock, return_value={"symbol": "GOOG", "price": 2800}
+            ),
+        ):
             service = FinanceService(db, redis)
             result = await service.get_watchlist_quotes("tenant-1", "user-1")
             assert len(result) == 2
@@ -613,9 +682,11 @@ class TestGetWatchlistQuotes:
 
         watchlist_items = [{"symbol": "INVALID", "symbol_id": str(uuid.uuid4())}]
 
-        with patch.object(FinanceService, "get_watchlist", new_callable=AsyncMock, return_value=watchlist_items), \
-             patch.object(FinanceService, "_get_cached_quote", new_callable=AsyncMock, return_value=None), \
-             patch.object(FinanceService, "get_quote", new_callable=AsyncMock, side_effect=SymbolNotFound()):
+        with (
+            patch.object(FinanceService, "get_watchlist", new_callable=AsyncMock, return_value=watchlist_items),
+            patch.object(FinanceService, "_get_cached_quote", new_callable=AsyncMock, return_value=None),
+            patch.object(FinanceService, "get_quote", new_callable=AsyncMock, side_effect=SymbolNotFound()),
+        ):
             service = FinanceService(db, redis)
             result = await service.get_watchlist_quotes("tenant-1", "user-1")
             assert len(result) == 0
@@ -757,13 +828,29 @@ class TestStoreQuoteToDb:
         db.execute = execute_side_effect
 
         service = FinanceService(db, redis)
-        await service._store_quote_to_db("tenant-1", "AAPL", {
-            "name": "Apple", "current_price": 150, "open": 148, "high": 152,
-            "low": 147, "volume": 1000000, "change": 2, "change_percent": 1.3,
-            "market_cap": 3000000000, "pe_ratio": 25, "52_week_high": 180,
-            "52_week_low": 120, "source": "yfinance", "type": "stock",
-            "market": "US", "exchange": "NASDAQ", "currency": "USD"
-        })
+        await service._store_quote_to_db(
+            "tenant-1",
+            "AAPL",
+            {
+                "name": "Apple",
+                "current_price": 150,
+                "open": 148,
+                "high": 152,
+                "low": 147,
+                "volume": 1000000,
+                "change": 2,
+                "change_percent": 1.3,
+                "market_cap": 3000000000,
+                "pe_ratio": 25,
+                "52_week_high": 180,
+                "52_week_low": 120,
+                "source": "yfinance",
+                "type": "stock",
+                "market": "US",
+                "exchange": "NASDAQ",
+                "currency": "USD",
+            },
+        )
         assert db.add.call_count == 2
 
     async def test_store_quote_existing_symbol(self):
@@ -785,9 +872,7 @@ class TestStoreQuoteToDb:
         db.execute = execute_side_effect
 
         service = FinanceService(db, redis)
-        await service._store_quote_to_db("tenant-1", "AAPL", {
-            "current_price": 150, "source": "yfinance"
-        })
+        await service._store_quote_to_db("tenant-1", "AAPL", {"current_price": 150, "source": "yfinance"})
         assert db.add.call_count == 1
 
 
@@ -859,7 +944,13 @@ class TestSearchSymbolsExternal:
         mock_response.status_code = 200
         mock_response.json.return_value = {
             "quotes": [
-                {"symbol": "AAPL", "shortname": "Apple Inc", "quoteType": "EQUITY", "exchange": "NASDAQ", "currency": "USD"},
+                {
+                    "symbol": "AAPL",
+                    "shortname": "Apple Inc",
+                    "quoteType": "EQUITY",
+                    "exchange": "NASDAQ",
+                    "currency": "USD",
+                },
             ]
         }
         mock_client = AsyncMock()
@@ -870,7 +961,9 @@ class TestSearchSymbolsExternal:
         mock_httpx_module.AsyncClient.return_value.__aexit__ = AsyncMock(return_value=False)
 
         mock_yf_module = MagicMock()
-        with patch.dict("sys.modules", {"httpx": mock_httpx_module, "app.collectors.finance.yfinance_collector": mock_yf_module}):
+        with patch.dict(
+            "sys.modules", {"httpx": mock_httpx_module, "app.collectors.finance.yfinance_collector": mock_yf_module}
+        ):
             service = FinanceService(db, redis)
 
             with patch.object(db, "commit", new_callable=AsyncMock):
@@ -895,14 +988,18 @@ class TestFetchMethods:
 
         with patch.object(FinanceService, "_try_collector", new_callable=AsyncMock, side_effect=Exception("fail")):
             service = FinanceService(db, redis)
-            result = await service._fetch_with_failover("tenant-1", "AAPL", [{"name": "yfinance", "collector": "yfinance"}])
+            result = await service._fetch_with_failover(
+                "tenant-1", "AAPL", [{"name": "yfinance", "collector": "yfinance"}]
+            )
             assert result is None
 
     async def test_fetch_with_failover_batch_all_fail(self):
         db, _ = _mock_db()
         redis = _mock_redis()
 
-        with patch.object(FinanceService, "_try_collector_batch", new_callable=AsyncMock, side_effect=Exception("fail")):
+        with patch.object(
+            FinanceService, "_try_collector_batch", new_callable=AsyncMock, side_effect=Exception("fail")
+        ):
             service = FinanceService(db, redis)
             result = await service._fetch_with_failover_batch(
                 "tenant-1", ["^GSPC"], [{"name": "yfinance", "collector": "yfinance"}]
@@ -977,7 +1074,9 @@ class TestFetchFailoverSuccessPaths:
         service = FinanceService(db, redis)
 
         commodities = [{"symbol": "GC=F", "current_price": 2000}]
-        with patch.object(FinanceService, "_fetch_with_failover_batch", new_callable=AsyncMock, return_value=commodities):
+        with patch.object(
+            FinanceService, "_fetch_with_failover_batch", new_callable=AsyncMock, return_value=commodities
+        ):
             result = await service._fetch_commodities_with_failover("tenant-1")
             assert len(result) == 1
 
@@ -1007,7 +1106,9 @@ class TestFetchFailoverSuccessPaths:
             {"name": "yfinance", "collector": "yfinance"},
             {"name": "alpha_vantage", "collector": "alpha_vantage"},
         ]
-        with patch.object(FinanceService, "_try_collector", new_callable=AsyncMock, side_effect=[Exception("fail"), quote]):
+        with patch.object(
+            FinanceService, "_try_collector", new_callable=AsyncMock, side_effect=[Exception("fail"), quote]
+        ):
             result = await service._fetch_with_failover("tenant-1", "AAPL", chain)
             assert result == quote
 
@@ -1056,9 +1157,7 @@ class TestTryCollector:
         mock_collector_class = MagicMock(return_value=mock_collector)
 
         with patch("app.collectors.COLLECTOR_REGISTRY", {"yfinance": mock_collector_class}):
-            result = await service._try_collector(
-                "tenant-1", "AAPL", {"name": "yfinance", "collector": "yfinance"}
-            )
+            result = await service._try_collector("tenant-1", "AAPL", {"name": "yfinance", "collector": "yfinance"})
             assert result is not None
             assert result["symbol"] == "AAPL"
             assert result["source"] == "yfinance"
@@ -1078,9 +1177,7 @@ class TestTryCollector:
         mock_collector_class = MagicMock(return_value=mock_collector)
 
         with patch("app.collectors.COLLECTOR_REGISTRY", {"yfinance": mock_collector_class}):
-            result = await service._try_collector(
-                "tenant-1", "AAPL", {"name": "yfinance", "collector": "yfinance"}
-            )
+            result = await service._try_collector("tenant-1", "AAPL", {"name": "yfinance", "collector": "yfinance"})
             assert result is not None
             assert result["symbol"] == "MSFT"
 
@@ -1098,9 +1195,7 @@ class TestTryCollector:
         mock_collector_class = MagicMock(return_value=mock_collector)
 
         with patch("app.collectors.COLLECTOR_REGISTRY", {"yfinance": mock_collector_class}):
-            result = await service._try_collector(
-                "tenant-1", "AAPL", {"name": "yfinance", "collector": "yfinance"}
-            )
+            result = await service._try_collector("tenant-1", "AAPL", {"name": "yfinance", "collector": "yfinance"})
             assert result is None
 
     async def test_try_collector_failed_result(self):
@@ -1117,9 +1212,7 @@ class TestTryCollector:
         mock_collector_class = MagicMock(return_value=mock_collector)
 
         with patch("app.collectors.COLLECTOR_REGISTRY", {"yfinance": mock_collector_class}):
-            result = await service._try_collector(
-                "tenant-1", "AAPL", {"name": "yfinance", "collector": "yfinance"}
-            )
+            result = await service._try_collector("tenant-1", "AAPL", {"name": "yfinance", "collector": "yfinance"})
             assert result is None
 
     async def test_try_collector_not_registered(self):
@@ -1128,9 +1221,7 @@ class TestTryCollector:
         service = FinanceService(db, redis)
 
         with patch("app.collectors.COLLECTOR_REGISTRY", {}):
-            result = await service._try_collector(
-                "tenant-1", "AAPL", {"name": "unknown", "collector": "unknown"}
-            )
+            result = await service._try_collector("tenant-1", "AAPL", {"name": "unknown", "collector": "unknown"})
             assert result is None
 
 
@@ -1252,7 +1343,9 @@ class TestCacheDecodeErrors:
 
         mock_redis_get.return_value = "broken-json"
 
-        with patch.object(FinanceService, "_fetch_commodities_with_failover", new_callable=AsyncMock, return_value=None):
+        with patch.object(
+            FinanceService, "_fetch_commodities_with_failover", new_callable=AsyncMock, return_value=None
+        ):
             service = FinanceService(db, redis)
             with pytest.raises(ServiceUnavailable):
                 await service.get_commodities("tenant-1")
@@ -1283,8 +1376,20 @@ class TestSearchExternalEmptySymbol:
         mock_response.status_code = 200
         mock_response.json.return_value = {
             "quotes": [
-                {"symbol": "", "shortname": "Empty Symbol", "quoteType": "EQUITY", "exchange": "NYSE", "currency": "USD"},
-                {"symbol": "AAPL", "shortname": "Apple Inc", "quoteType": "EQUITY", "exchange": "NASDAQ", "currency": "USD"},
+                {
+                    "symbol": "",
+                    "shortname": "Empty Symbol",
+                    "quoteType": "EQUITY",
+                    "exchange": "NYSE",
+                    "currency": "USD",
+                },
+                {
+                    "symbol": "AAPL",
+                    "shortname": "Apple Inc",
+                    "quoteType": "EQUITY",
+                    "exchange": "NASDAQ",
+                    "currency": "USD",
+                },
             ]
         }
         mock_client = AsyncMock()
@@ -1295,7 +1400,9 @@ class TestSearchExternalEmptySymbol:
         mock_httpx_module.AsyncClient.return_value.__aexit__ = AsyncMock(return_value=False)
 
         mock_yf_module = MagicMock()
-        with patch.dict("sys.modules", {"httpx": mock_httpx_module, "app.collectors.finance.yfinance_collector": mock_yf_module}):
+        with patch.dict(
+            "sys.modules", {"httpx": mock_httpx_module, "app.collectors.finance.yfinance_collector": mock_yf_module}
+        ):
             service = FinanceService(db, redis)
             with patch.object(db, "commit", new_callable=AsyncMock):
                 result = await service._search_symbols_external("test", "tenant-1")

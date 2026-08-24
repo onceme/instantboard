@@ -1,4 +1,5 @@
 """Tests for /api/v1/admin endpoints."""
+
 import uuid
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
@@ -7,13 +8,15 @@ from app.core.security import create_access_token
 
 
 def _token(role="admin", tenant_id=None):
-    return create_access_token({
-        "sub": str(uuid.uuid4()),
-        "tenant_id": tenant_id or str(uuid.uuid4()),
-        "role": role,
-        "provider": "github",
-        "type": "access",
-    })
+    return create_access_token(
+        {
+            "sub": str(uuid.uuid4()),
+            "tenant_id": tenant_id or str(uuid.uuid4()),
+            "role": role,
+            "provider": "github",
+            "type": "access",
+        }
+    )
 
 
 def _admin_headers():

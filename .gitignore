@@ -48,6 +48,9 @@ coverage.xml
 htmlcov/
 .coverage
 
+# Tool caches
+.ruff_cache/
+
 # Temprate
 *.bak
 *~

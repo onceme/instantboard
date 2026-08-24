@@ -114,11 +114,7 @@ fetchCategories();
       </button>
     </div>
 
-    <ErrorAlert
-      v-if="errorMessage"
-      :key="errorKey"
-      :message="errorMessage"
-    />
+    <ErrorAlert v-if="errorMessage" :key="errorKey" :message="errorMessage" />
 
     <div v-if="showAddForm" class="add-form card">
       <input v-model="newSource.name" type="text" placeholder="数据源名称" />

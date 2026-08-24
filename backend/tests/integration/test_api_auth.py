@@ -1,4 +1,5 @@
 """Tests for /api/v1/auth endpoints."""
+
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 

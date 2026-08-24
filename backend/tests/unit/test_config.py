@@ -25,7 +25,7 @@ class TestParseListStr:
         assert result == ["a", "b", "c"]
 
     def test_json_array_with_numbers(self):
-        result = _parse_list_str('[1, 2, 3]')
+        result = _parse_list_str("[1, 2, 3]")
         assert result == ["1", "2", "3"]
 
     def test_comma_separated(self):

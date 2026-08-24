@@ -83,7 +83,10 @@ describe("add error paths", () => {
       if (method(config) === "post" && config.url === "/categories") {
         throw errorResponse(409, config, {
           detail: {
-            error: { code: "DUPLICATE_CATEGORY", message: "分类名称已存在：科技" },
+            error: {
+              code: "DUPLICATE_CATEGORY",
+              message: "分类名称已存在：科技",
+            },
           },
         });
       }

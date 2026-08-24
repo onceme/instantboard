@@ -1,4 +1,5 @@
 """Tests for /api/v1/sources endpoints."""
+
 import uuid
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
@@ -9,13 +10,15 @@ NOW = datetime.now(UTC).isoformat()
 
 
 def _token(role="admin", tenant_id=None):
-    return create_access_token({
-        "sub": str(uuid.uuid4()),
-        "tenant_id": tenant_id or str(uuid.uuid4()),
-        "role": role,
-        "provider": "github",
-        "type": "access",
-    })
+    return create_access_token(
+        {
+            "sub": str(uuid.uuid4()),
+            "tenant_id": tenant_id or str(uuid.uuid4()),
+            "role": role,
+            "provider": "github",
+            "type": "access",
+        }
+    )
 
 
 def _headers(tid=None):
@@ -64,7 +67,9 @@ class TestListSources:
     def test_list_with_filters(self, mock_svc_fn, client):
         mock_svc = AsyncMock()
         mock_svc.list_sources.return_value = {
-            "success": True, "data": [], "meta": {"total": 0, "page": 1, "page_size": 20},
+            "success": True,
+            "data": [],
+            "meta": {"total": 0, "page": 1, "page_size": 20},
         }
         mock_svc_fn.return_value = mock_svc
 
@@ -131,6 +136,7 @@ class TestGetSource:
     @patch("app.api.v1.sources._get_source_service")
     def test_get_not_found(self, mock_svc_fn, client):
         from app.core.exceptions import SourceNotFound
+
         mock_svc = AsyncMock()
         mock_svc.get_source.side_effect = SourceNotFound()
         mock_svc_fn.return_value = mock_svc
@@ -145,7 +151,8 @@ class TestUpdateSource:
         sid = str(uuid.uuid4())
         mock_svc = AsyncMock()
         mock_svc.update_source.return_value = {
-            "success": True, "data": _source_response(id=sid, name="Updated"),
+            "success": True,
+            "data": _source_response(id=sid, name="Updated"),
         }
         mock_svc_fn.return_value = mock_svc
 

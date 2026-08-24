@@ -28,8 +28,7 @@ export interface ApiErrorDetail {
 export function getApiErrorMessage(err: unknown, fallback: string): string {
   if (axios.isAxiosError(err)) {
     const data = err.response?.data as
-      | { detail?: { error?: ApiErrorDetail } | string }
-      | undefined;
+      { detail?: { error?: ApiErrorDetail } | string } | undefined;
     const detail = data?.detail;
     if (typeof detail === "string") return detail || fallback;
     if (detail?.error?.message) return detail.error.message;
@@ -42,8 +41,7 @@ export function getApiErrorMessage(err: unknown, fallback: string): string {
 export function getApiErrorCode(err: unknown): string | undefined {
   if (axios.isAxiosError(err)) {
     const data = err.response?.data as
-      | { detail?: { error?: ApiErrorDetail } }
-      | undefined;
+      { detail?: { error?: ApiErrorDetail } } | undefined;
     return data?.detail?.error?.code;
   }
   return undefined;

@@ -1,4 +1,5 @@
 """Tests for /api/v1/tech endpoints."""
+
 import uuid
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock
@@ -12,13 +13,15 @@ NOW = datetime.now(UTC).isoformat()
 
 
 def _token(role="admin", tenant_id=None):
-    return create_access_token({
-        "sub": str(uuid.uuid4()),
-        "tenant_id": tenant_id or str(uuid.uuid4()),
-        "role": role,
-        "provider": "github",
-        "type": "access",
-    })
+    return create_access_token(
+        {
+            "sub": str(uuid.uuid4()),
+            "tenant_id": tenant_id or str(uuid.uuid4()),
+            "role": role,
+            "provider": "github",
+            "type": "access",
+        }
+    )
 
 
 def _headers(tid=None):
@@ -75,7 +78,8 @@ class TestTechNews:
 
     def test_news_with_domain_sort(self, client, mock_tech_svc):
         mock_tech_svc.get_news.return_value = {
-            "data": [], "meta": {"total": 0, "page": 1, "page_size": 20},
+            "data": [],
+            "meta": {"total": 0, "page": 1, "page_size": 20},
         }
 
         resp = client.get(
@@ -86,7 +90,8 @@ class TestTechNews:
 
     def test_news_with_subcategory_source_since(self, client, mock_tech_svc):
         mock_tech_svc.get_news.return_value = {
-            "data": [], "meta": {"total": 0, "page": 1, "page_size": 20},
+            "data": [],
+            "meta": {"total": 0, "page": 1, "page_size": 20},
         }
 
         resp = client.get(
@@ -101,10 +106,12 @@ class TestTechNews:
 
     def test_news_string_timestamps(self, client, mock_tech_svc):
         mock_tech_svc.get_news.return_value = {
-            "data": [_news_item(
-                published_at="2024-01-15T10:30:00Z",
-                fetched_at="2024-01-15T11:00:00Z",
-            )],
+            "data": [
+                _news_item(
+                    published_at="2024-01-15T10:30:00Z",
+                    fetched_at="2024-01-15T11:00:00Z",
+                )
+            ],
             "meta": {"total": 1, "page": 1, "page_size": 20},
         }
 

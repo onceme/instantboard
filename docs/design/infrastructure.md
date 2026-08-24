@@ -687,9 +687,27 @@ worker 容器里（`python -m app.scheduler.worker`）。仪表盘的服务健�
   total/running/paused 数量取心跳值，并返回 `last_heartbeat`；
 - `archive_snapshot`：prod 模式 `scheduler_jobs_active` 取心跳 `jobs_running`，
   消除恒 0 污染；
-- docker `worker` 服务 healthcheck：由 `ps grep` 升级为在容器内用 `python -c` 解析
-  `REDIS_URL`、读心跳键并比对 45s 新鲜度，失败 exit 1（interval 30s / retries 3 /
-  start_period 60s）。进程假死但停止刷心跳的情况也会被判定不健康。
+- docker `worker` 服务 healthcheck：由 `ps grep` 升级为探测 Redis 中的**真实心跳
+  键**，利用 TTL 语义判定新鲜度：worker 每 **15s** 重写心跳键、TTL **45s**，因此
+  **键存在 ⇔ 心跳新鲜（≤45s）**；worker 死亡或假死后键在 45s 内自然过期。探测
+  命令为 `redis-cli -u <url> --no-auth-warning exists scheduler:worker:heartbeat`
+  （输出 `1` → 健康；输出 `0`、连接失败或无输出 → 不健康，失败时向 stderr 打印
+  一行原因，便于从 `docker inspect ...State.Health` 定位）。参数：**interval 30s /
+  timeout 10s** / retries 3 / start_period 60s。Redis 不可达同样判不健康，覆盖原
+  脚本的连接检查语义；连接参数取应用自身使用的 `$REDIS_URL`（`app/core/redis.py`），
+  但需做一次 URL 归一化：项目标准格式 `redis://:password@host`（空用户名）会被
+  redis-cli 当成真实 ACL 用户导致 AUTH 失败（redis-cli 8 实测 WRONGPASS，而
+  redis-py 连接正常），故 healthcheck 先将其改写为 `redis://password@host` 再
+  传给 `-u`。`redis-tools` 已在 production 镜像中（backend Dockerfile 运行阶段，
+  entrypoint.sh 的 Redis 等待循环也在用）。
+  - **为什么不用 Python 探针（2026-08 演进记录）**：第一版在容器内用 `python -c`
+    读键并解析时间戳。staging 是树莓派 2（Cortex-A7 @ 900MHz / 1GB RAM，worker
+    限制 `cpus: 0.5`），CPython + redis-py 冷启动超过任何合理的健康检查超时，被
+    Docker 逐次杀掉（`Health check exceeded timeout (10s)`，FailingStreak=180+，
+    同栈其余 5 个容器的 curl/内置工具探针 300–400ms 全部健康）；中途把 timeout
+    放宽到 30s、interval 放宽到 60s 仍属勉强，且每次冷启动都挤占 worker 的 0.5
+    CPU 配额、干扰采集任务。故改为 redis-cli 探针：C 二进制毫秒级启动，新鲜度
+    判定完全交给 TTL，与原来的时间戳比较（< 45s）语义等价。
 
 **心跳任务的可靠性约定**：心跳写入的任何异常都被捕获并记日志，绝不杀死 worker 进程；
 心跳键带 TTL，崩溃的 worker 会在 45s 内自然转为 stale/down，无需外部清理。

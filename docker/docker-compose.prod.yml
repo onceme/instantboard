@@ -121,10 +121,36 @@ services:
       # The worker writes scheduler:worker:heartbeat every 15s with a 45s TTL
       # (app/scheduler/worker.py; contract: docs/design/infrastructure.md §3.5
       # "Worker 心跳机制"). Key name must match app/core/redis.py RedisKeys.WORKER_HEARTBEAT.
+      #
+      # Probe = `redis-cli exists <key>`, NOT a Python script. TTL semantics make
+      # this equivalent to the timestamp comparison: the worker rewrites the key
+      # every 15s with a 45s TTL, so key EXISTS ⇔ heartbeat fresh (≤ 45s); a dead
+      # or hung worker's key expires on its own within 45s. The earlier python -c
+      # probe was functionally correct but fatal on the staging host (Raspberry
+      # Pi 2, Cortex-A7 @ 900MHz, 1GB RAM, worker capped at cpus 0.5): cold
+      # CPython + redis-py import overshot any reasonable healthcheck timeout
+      # ("Health check exceeded timeout (10s)", FailingStreak=180+) while the
+      # worker itself was healthy — and even a 30s budget stayed marginal while
+      # every cold start competed with the 17 collection jobs for the 0.5 CPU
+      # quota. redis-cli is a C binary that starts in milliseconds (redis-tools
+      # ships in the production image; it also serves entrypoint.sh's Redis wait
+      # loop) and doubles as the connectivity check: unreachable Redis fails the
+      # probe too. Connection parameters come straight from $REDIS_URL (-u), the
+      # same URL the worker app uses (app/core/redis.py). On failure one
+      # diagnostic line is printed so `docker inspect --format
+      # '{{json .State.Health}}'` shows the reason.
+      # NOTE: the double dollars ($$) are deliberate — docker compose would
+      # otherwise interpolate $REDIS_URL/$out from the HOST .env at config time;
+      # $$ defers expansion to the container's shell at healthcheck runtime.
+      # The case statement normalizes the project-standard URL form
+      # redis://:password@host (empty username) to redis://password@host:
+      # redis-cli treats an empty username as a real ACL user and then AUTH
+      # fails against a requirepass-only server (verified with redis-cli 8.0.2),
+      # while redis-py (the worker app) connects fine with that form.
       test:
         [
           "CMD-SHELL",
-          "python -c 'import datetime,json,os,urllib.parse,sys; u=urllib.parse.urlparse(os.environ.get(\"REDIS_URL\",\"\")); import redis; r=redis.Redis(host=u.hostname or \"127.0.0.1\", port=u.port or 6379, username=u.username or None, password=urllib.parse.unquote(u.password) if u.password else None, db=int(u.path.lstrip(\"/\") or 0), socket_connect_timeout=5, socket_timeout=5); raw=r.get(\"scheduler:worker:heartbeat\"); assert raw; ts=datetime.datetime.fromisoformat(json.loads(raw)[\"timestamp\"]); ts=ts if ts.tzinfo else ts.replace(tzinfo=datetime.timezone.utc); age=(datetime.datetime.now(datetime.timezone.utc)-ts).total_seconds(); sys.exit(0 if age<45 else 1)'",
+          "url=\"$$REDIS_URL\"; case \"$${url#redis://}\" in :*@*) url=\"redis://$${url#redis://:}\";; esac; out=$$(redis-cli -u \"$$url\" --no-auth-warning exists scheduler:worker:heartbeat); test \"$$out\" = \"1\" || { echo \"worker-healthcheck: heartbeat missing or Redis unreachable (redis-cli output: $${out:-<none>})\" >&2; exit 1; }",
         ]
       interval: 30s
       timeout: 10s

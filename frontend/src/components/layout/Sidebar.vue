@@ -35,7 +35,8 @@ const navItems = computed(() => {
   if (authStore.sessionEntry === "admin") return ADMIN_NAV_ITEMS;
   // /dashboard requires the admin role (see router guard); hide the entry from
   // regular SSO users so the menu matches what they can actually open.
-  // Settings stays visible for everyone — the /settings route has no admin gate.
+  // Settings stays visible for everyone — the route has no admin gate;
+  // SettingsView splits its sections by session entry instead.
   return FRONT_NAV_ITEMS.filter(
     (item) => item.path !== "/dashboard" || authStore.isAdmin,
   );

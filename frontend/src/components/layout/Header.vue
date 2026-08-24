@@ -74,6 +74,11 @@ const sseColorClass = computed(() => {
 const userName = computed(() => authStore.user?.name || "用户");
 const userEmail = computed(() => authStore.user?.email || "");
 
+// Admin-entry sessions have no personal settings; the menu entry then points
+// at the back-office settings instead (same /settings route, whose sections
+// are filtered by session entry inside SettingsView)
+const isAdminSession = computed(() => authStore.sessionEntry === "admin");
+
 // ── User dropdown menu ─────────────────────────────────────────
 const userMenuOpen = ref(false);
 const userMenuRef = ref<HTMLElement | null>(null);
@@ -107,7 +112,7 @@ onBeforeUnmount(() => {
   document.removeEventListener("keydown", onKeydown);
 });
 
-function goToProfileSettings() {
+function goToSettings() {
   closeUserMenu();
   router.push("/settings");
 }
@@ -174,13 +179,9 @@ async function handleLogout() {
               }}</span>
             </div>
           </div>
-          <button
-            class="dropdown-item"
-            role="menuitem"
-            @click="goToProfileSettings"
-          >
+          <button class="dropdown-item" role="menuitem" @click="goToSettings">
             <Settings :size="16" aria-hidden="true" />
-            个人设置
+            {{ isAdminSession ? "系统设置" : "个人设置" }}
           </button>
           <button
             class="dropdown-item danger"

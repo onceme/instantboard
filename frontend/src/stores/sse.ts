@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { ref, computed } from "vue";
+import { ref } from "vue";
 import { SSEConnectionState } from "@/types";
 
 export const useSSEStore = defineStore("sse", () => {
@@ -8,26 +8,6 @@ export const useSSEStore = defineStore("sse", () => {
   const dashboardState = ref<SSEConnectionState>(
     SSEConnectionState.DISCONNECTED,
   );
-
-  // Overall = "is any live push channel up right now?". Views only keep their own
-  // channel connected while mounted, so requiring every channel to be connected
-  // (the old logic) reported DISCONNECTED/CONNECTING almost all the time.
-  const overallState = computed(() => {
-    const states = [financeState.value, techState.value, dashboardState.value];
-    if (states.some((s) => s === SSEConnectionState.CONNECTED)) {
-      return SSEConnectionState.CONNECTED;
-    }
-    if (
-      states.some(
-        (s) =>
-          s === SSEConnectionState.RECONNECTING ||
-          s === SSEConnectionState.CONNECTING,
-      )
-    ) {
-      return SSEConnectionState.RECONNECTING;
-    }
-    return SSEConnectionState.DISCONNECTED;
-  });
 
   function setFinanceState(state: SSEConnectionState) {
     financeState.value = state;
@@ -45,7 +25,6 @@ export const useSSEStore = defineStore("sse", () => {
     financeState,
     techState,
     dashboardState,
-    overallState,
     setFinanceState,
     setTechState,
     setDashboardState,

@@ -1,25 +1,38 @@
 import asyncio
 import os
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
 
 import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
-from httpx import AsyncClient, ASGITransport
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import Text, event, text
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.ext.compiler import compiles
-from sqlalchemy.pool import StaticPool, NullPool
+from sqlalchemy.pool import NullPool, StaticPool
+from sqlalchemy.sql.sqltypes import UUID, Uuid
 
+from app.config import settings
 from app.main import app
 from app.models.base import Base
-from app.config import settings
 
 
 @compiles(JSONB, "sqlite")
 def _compile_jsonb_sqlite(element, compiler, **kw):
     return "JSON"
+
+
+def _uuid_sqlite_ddl(element, compiler, **kw):
+    # Render UUID columns as CHAR(32) (TEXT affinity) on SQLite. The default "UUID"
+    # declaration gets NUMERIC affinity, so the all-zero SYSTEM_TENANT_ID hex string
+    # ("000...0") is coerced to integer 0 on write and breaks uuid.UUID() on read.
+    return "CHAR(32)"
+
+
+# Uuid and UUID have different __visit_name__ values, so register both.
+compiles(Uuid, "sqlite")(_uuid_sqlite_ddl)
+compiles(UUID, "sqlite")(_uuid_sqlite_ddl)
 
 
 class _PgDefaultSentinel:
@@ -49,12 +62,16 @@ def _restore_server_defaults(stripped: list[tuple]) -> None:
 TEST_DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite+aiosqlite:///./test.db")
 
 _is_sqlite = TEST_DATABASE_URL.startswith("sqlite")
-_engine_kwargs = {
-    "connect_args": {"check_same_thread": False},
-    "poolclass": StaticPool,
-} if _is_sqlite else {
-    "poolclass": NullPool,
-}
+_engine_kwargs = (
+    {
+        "connect_args": {"check_same_thread": False},
+        "poolclass": StaticPool,
+    }
+    if _is_sqlite
+    else {
+        "poolclass": NullPool,
+    }
+)
 
 test_engine = create_async_engine(
     TEST_DATABASE_URL,
@@ -101,6 +118,7 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
 @pytest.fixture
 def redis_mock():
     """Mock Redis client for tests."""
+
     class MockRedis:
         def __init__(self):
             self._data = {}
@@ -116,6 +134,14 @@ def redis_mock():
 
         async def delete(self, key):
             self._data.pop(key, None)
+
+        async def incr(self, key):
+            value = int(self._data.get(key, 0)) + 1
+            self._data[key] = value
+            return value
+
+        async def expire(self, key, seconds):
+            return key in self._data
 
         async def publish(self, channel, message):
             pass

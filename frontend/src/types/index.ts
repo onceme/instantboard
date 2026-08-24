@@ -111,8 +111,8 @@ export interface MarketIndex {
   change: number;
   change_percent: number;
   market_status: "open" | "closed" | "pre_market" | "post_market";
-  region:
-    "US" | "CN" | "HK" | "JP" | "EU_LONDON" | "EU_FRANKFURT" | "KR" | "IN";
+  // Must match the region values in the backend MARKET_INDICES_CONFIG (GB=FTSE 100, DE=DAX, FR=CAC 40)
+  region: "US" | "CN" | "HK" | "JP" | "GB" | "DE" | "FR" | "KR" | "IN";
   timestamp: string;
 }
 
@@ -289,9 +289,32 @@ export interface DataSourceHealthSummary {
   sources: DataSourceHealthDetail[];
 }
 
+// SSE payload of "source_health_update" (dashboard channel).
+// Contract: docs/design/data-flow.md §3.5.4; built by backend
+// app/services/sse.py build_source_health_update_payload(). The health table
+// row is matched by source_id === DataSourceHealthDetail.id.
+export interface SourceHealthUpdateEvent {
+  source_id: string;
+  name: string;
+  source_type: string | null;
+  status: "healthy" | "degraded" | "down";
+  previous_status: string;
+  last_error: string | null;
+  last_success_at: string | null;
+  last_failure_at: string | null;
+  avg_response_time_ms: number;
+  consecutive_failures: number;
+  success_count_24h: number;
+  total_fetches_24h: number;
+  success_rate_24h: number | null;
+  timestamp: string;
+}
+
 export interface DataSourceHealthDetail {
   id: string;
   name: string;
+  // Backend schemas/dashboard.py DataSourceHealthDetail: str | None
+  source_type?: string | null;
   status: "healthy" | "degraded" | "down";
   success_rate_24h: number;
   avg_response_time_ms: number;
@@ -347,6 +370,9 @@ export interface Source {
   refresh_interval_seconds: number;
   is_active: boolean;
   health_status: "healthy" | "degraded" | "down";
+  // Backend schemas/source.py: false = no collector registered for this source
+  // type (cannot be enabled); undefined = legacy payloads, treat as unknown
+  collector_available?: boolean;
   last_fetch_at?: string;
   last_error?: string;
   created_at: string;
@@ -358,6 +384,7 @@ export type FinancePanel =
   "overview" | "watchlist" | "search" | "indices" | "commodities";
 
 // Market region groups
+// Region values align with the backend MARKET_INDICES_CONFIG: GB=FTSE 100/London, DE=DAX, FR=CAC 40, grouped under Europe
 export const MARKET_REGION_GROUPS: Record<
   string,
   { label: string; regions: string[] }
@@ -365,7 +392,7 @@ export const MARKET_REGION_GROUPS: Record<
   US: { label: "美国", regions: ["US"] },
   CN: { label: "中国", regions: ["CN", "HK"] },
   APAC: { label: "亚太", regions: ["JP", "KR", "IN"] },
-  EU: { label: "欧洲", regions: ["EU_LONDON", "EU_FRANKFURT"] },
+  EU: { label: "欧洲", regions: ["GB", "DE", "FR"] },
 };
 
 export const COMMODITY_GROUPS: Record<

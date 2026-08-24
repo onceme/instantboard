@@ -28,6 +28,19 @@ class ValidationError(AppException):
         )
 
 
+class NoCollectorAvailable(AppException):
+    # Raised when a source is about to be activated (create with is_active=True or an
+    # update that flips is_active to True) but no collector can run for it: the
+    # source_type has no registered collector and config.library names none either.
+    # Without this check the source would be "active" forever without collecting.
+    def __init__(self, message: str = "No collector available for this source type"):
+        super().__init__(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            error_code=ErrorCode.NO_COLLECTOR_AVAILABLE,
+            message=message,
+        )
+
+
 class InvalidOAuthCode(AppException):
     def __init__(self, message: str = "Invalid OAuth authorization code"):
         super().__init__(
@@ -64,12 +77,36 @@ class InvalidRefreshToken(AppException):
         )
 
 
-class SSOProviderError(AppException):
-    def __init__(self, message: str = "SSO provider returned an error"):
+class InvalidCredentials(AppException):
+    # Unified 401 for local admin login failures (wrong password, unknown email, or
+    # active brute-force lock). The message never reveals which reason applied.
+    def __init__(self, message: str = "Incorrect email or password"):
         super().__init__(
             status_code=status.HTTP_401_UNAUTHORIZED,
+            error_code=ErrorCode.INVALID_CREDENTIALS,
+            message=message,
+        )
+
+
+class AdminLoginDisabled(AppException):
+    def __init__(self, message: str = "Admin login is not enabled"):
+        super().__init__(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            error_code=ErrorCode.ADMIN_LOGIN_DISABLED,
+            message=message,
+        )
+
+
+class SSOProviderError(AppException):
+    # Fix: upstream SSO provider failures are gateway/upstream errors and should return
+    # 502, not 401. A 401 triggers the frontend axios interceptor to hard-redirect to the
+    # login page, misleadingly presenting an upstream outage as an expired session.
+    def __init__(self, message: str = "SSO provider returned an error", details: list[dict] | None = None):
+        super().__init__(
+            status_code=status.HTTP_502_BAD_GATEWAY,
             error_code=ErrorCode.SSO_PROVIDER_ERROR,
             message=message,
+            details=details,
         )
 
 

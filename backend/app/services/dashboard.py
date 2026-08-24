@@ -11,13 +11,18 @@ from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+
+# Fix: import SYSTEM_TENANT_ID directly from core.constants (single source of truth, a
+# UUID constant). It used to be re-exported indirectly via source.py, and hardcoded
+# literals were scattered across call sites.
+from app.core.constants import SYSTEM_TENANT_ID
 from app.core.redis import RedisKeys, redis_get, redis_set
 from app.core.sse_router import SSEEventType, event_router
 from app.models.dashboard import DashboardSnapshot
 from app.models.source import Source, SourceHealth
 from app.models.sse import SSEConnection as SSEConnectionModel
 from app.scheduler.manager import scheduler_manager
-from app.services.source import SYSTEM_TENANT_ID, SourceService
+from app.services.source import SourceService
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +30,32 @@ METRIC_THRESHOLDS = {
     "cpu_change_percent": 5.0,
     "memory_change_percent": 5.0,
 }
+
+# Worker heartbeat contract (writer: app/scheduler/worker.py heartbeat_loop). In
+# prod (SCHEDULER_ENABLED=false in the api process) the worker publishes
+# scheduler:worker:heartbeat to Redis every 15s with a 45s TTL. A heartbeat
+# younger than the TTL (= 3x the write interval) means the worker is alive.
+# Contract: docs/design/infrastructure.md §3.5 "Worker 心跳机制".
+WORKER_HEARTBEAT_FRESH_SECONDS = RedisKeys.WORKER_HEARTBEAT_TTL
+
+
+def worker_heartbeat_age_seconds(payload: dict | None) -> float | None:
+    """Seconds elapsed since the heartbeat timestamp, or None when missing/invalid."""
+    if not payload:
+        return None
+    try:
+        heartbeat_time = datetime.fromisoformat(payload.get("timestamp"))
+    except (TypeError, ValueError):
+        return None
+    if heartbeat_time.tzinfo is None:
+        heartbeat_time = heartbeat_time.replace(tzinfo=UTC)
+    return (datetime.now(UTC) - heartbeat_time).total_seconds()
+
+
+def worker_heartbeat_is_fresh(payload: dict | None) -> bool:
+    age = worker_heartbeat_age_seconds(payload)
+    return age is not None and age < WORKER_HEARTBEAT_FRESH_SECONDS
+
 
 _metrics_collection_task: asyncio.Task | None = None
 _last_metrics: dict = {}
@@ -34,6 +65,33 @@ class DashboardService:
     def __init__(self, db: AsyncSession, redis: Redis | None):
         self.db = db
         self.redis = redis
+
+    async def _read_worker_heartbeat(self) -> tuple[dict | None, str | None]:
+        """Read the worker heartbeat written by app/scheduler/worker.py.
+
+        Returns a (payload, error) tuple:
+        - (dict, None)   -> heartbeat key present and parseable.
+        - (None, None)   -> key absent (worker never started / TTL expired).
+        - (None, str)    -> Redis unavailable or payload malformed; the string
+                            describes the failure so callers can degrade gracefully.
+        """
+        if self.redis is None:
+            return None, "Redis client not available"
+        try:
+            raw = await self.redis.get(RedisKeys.worker_heartbeat_key())
+        except Exception as e:
+            logger.warning(f"Failed to read worker heartbeat: {e}")
+            return None, f"redis unavailable: {e}"
+        if raw is None:
+            return None, None
+        try:
+            payload = json.loads(raw)
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.warning(f"Worker heartbeat payload is not valid JSON: {e}")
+            return None, f"invalid heartbeat payload: {e}"
+        if not isinstance(payload, dict):
+            return None, "invalid heartbeat payload: not a JSON object"
+        return payload, None
 
     async def get_system_info(self, start_time: datetime) -> dict:
         uptime = int((datetime.now(UTC) - start_time).total_seconds())
@@ -179,47 +237,116 @@ class DashboardService:
                 }
             )
 
-        scheduler_running = scheduler_manager._running
-        jobs_status = await scheduler_manager.get_jobs_status()
-        running_jobs = [j for j in jobs_status if not j.get("pending", False)]
-        paused_jobs = [j for j in jobs_status if j.get("pending", False)]
+        if settings.scheduler_enabled:
+            # Dev / embedded mode: the scheduler lives inside this api process,
+            # so query the in-process singleton directly (legacy behaviour).
+            scheduler_running = scheduler_manager._running
+            jobs_status = await scheduler_manager.get_jobs_status()
+            running_jobs = [j for j in jobs_status if not j.get("pending", False)]
+            paused_jobs = [j for j in jobs_status if j.get("pending", False)]
 
-        services.append(
-            {
-                "service": "scheduler",
-                "status": "healthy"
-                if scheduler_running and running_jobs
-                else "degraded"
-                if scheduler_running
-                else "down",
-                "response_time_ms": 0,
-                "connection_count": None,
-                "details": {
-                    "is_running": scheduler_running,
-                    "total_jobs": len(jobs_status),
-                    "running_jobs": len(running_jobs),
-                    "paused_jobs": len(paused_jobs),
-                },
-            }
-        )
+            services.append(
+                {
+                    "service": "scheduler",
+                    "status": "healthy"
+                    if scheduler_running and running_jobs
+                    else "degraded"
+                    if scheduler_running
+                    else "down",
+                    "response_time_ms": 0,
+                    "connection_count": None,
+                    "details": {
+                        "is_running": scheduler_running,
+                        "total_jobs": len(jobs_status),
+                        "running_jobs": len(running_jobs),
+                        "paused_jobs": len(paused_jobs),
+                    },
+                }
+            )
+        else:
+            # Prod mode: the scheduler runs in a separate worker container and this
+            # process's scheduler singleton is stopped. Health comes from the worker
+            # heartbeat stored in Redis (written by app/scheduler/worker.py).
+            payload, read_error = await self._read_worker_heartbeat()
+            is_fresh = worker_heartbeat_is_fresh(payload)
 
-        sse_stats = event_router.get_stats()
-        sse_active_count = sse_stats.get("total_connections", 0)
-        sse_status = "healthy" if sse_active_count > 0 else "degraded" if scheduler_running else "healthy"
+            if is_fresh:
+                age = worker_heartbeat_age_seconds(payload)
+                details = {
+                    "mode": "worker_heartbeat",
+                    "last_heartbeat": payload.get("timestamp"),
+                    "last_heartbeat_age_seconds": round(age, 1) if age is not None else None,
+                    "is_running": bool(payload.get("scheduler_running")),
+                    "event_listener_subscribed": payload.get("event_listener_subscribed"),
+                    "worker_pid": payload.get("pid"),
+                    "total_jobs": payload.get("jobs_total", 0),
+                    "running_jobs": payload.get("jobs_running", 0),
+                    "paused_jobs": payload.get("jobs_paused", 0),
+                }
+                status = "healthy"
+            else:
+                status = "down"
+                details = {"mode": "worker_heartbeat", "is_running": False}
+                if read_error is not None:
+                    # Redis itself is unavailable: the heartbeat cannot be read at all.
+                    # Mirror the redis service state instead of blaming the worker.
+                    details["error"] = read_error
+                    details["last_heartbeat"] = None
+                elif payload is not None:
+                    details["error"] = (
+                        f"worker heartbeat stale (age={round(worker_heartbeat_age_seconds(payload) or 0, 1)}s, "
+                        f"threshold={WORKER_HEARTBEAT_FRESH_SECONDS}s)"
+                    )
+                    details["last_heartbeat"] = payload.get("timestamp")
+                else:
+                    details["error"] = "worker heartbeat missing"
+                    details["last_heartbeat"] = None
 
-        services.append(
-            {
-                "service": "sse",
-                "status": sse_status,
-                "response_time_ms": 0,
-                "connection_count": sse_active_count,
-                "details": {
-                    "active_connections": sse_active_count,
-                    "total_events_pushed": sse_stats.get("total_events_pushed", 0),
-                    "avg_connection_duration_seconds": sse_stats.get("avg_connection_duration_seconds", 0),
-                },
-            }
-        )
+            services.append(
+                {
+                    "service": "scheduler",
+                    "status": status,
+                    "response_time_ms": 0,
+                    "connection_count": None,
+                    "details": details,
+                }
+            )
+
+        # SSE health = event_router availability, nothing else. The router is an
+        # in-process singleton: if get_stats() returns, the service is up. The
+        # connection count is a load metric, not a health metric — zero active
+        # connections is a normal state whenever nobody has the real-time board
+        # open, and must never mark the service degraded. (The previous rule
+        # "0 connections + scheduler running -> degraded" also false-fired on
+        # dashboard load, where this health request races the SSE handshake.)
+        # Connection counts therefore stay informational, reported in details only.
+        try:
+            sse_stats = event_router.get_stats()
+            sse_active_count = sse_stats.get("total_connections", 0)
+            services.append(
+                {
+                    "service": "sse",
+                    "status": "healthy",
+                    "response_time_ms": 0,
+                    "connection_count": sse_active_count,
+                    "details": {
+                        "active_connections": sse_active_count,
+                        "total_events_pushed": sse_stats.get("total_events_pushed", 0),
+                        "avg_connection_duration_seconds": sse_stats.get("avg_connection_duration_seconds", 0),
+                    },
+                }
+            )
+        except Exception as e:
+            logger.warning(f"Failed to read SSE router stats: {e}")
+            services.append(
+                {
+                    "service": "sse",
+                    "status": "down",
+                    "response_time_ms": 0,
+                    "connection_count": 0,
+                    "details": {"error": str(e)},
+                }
+            )
 
         return services
 
@@ -309,16 +436,33 @@ class DashboardService:
         }
 
     async def get_data_source_health_detail(self, tenant_id: str, source_id: str) -> dict:
+        # Security fix: tenant scoping was missing (the query only filtered on source_id),
+        # letting a tenant's admin inspect sources of any other tenant. Apply the same
+        # rule as the list endpoint: the source must belong to the requesting tenant or
+        # to the system tenant (shared sources). Anything else falls through to the
+        # existing not-found path (None -> 404 at the API layer).
         stmt = (
             select(Source, SourceHealth)
             .join(SourceHealth, Source.id == SourceHealth.source_id)
-            .where(Source.id == source_id)
+            .where(
+                Source.id == source_id,
+                or_(
+                    Source.tenant_id == tenant_id,
+                    Source.tenant_id == SYSTEM_TENANT_ID,
+                ),
+            )
         )
         result = await self.db.execute(stmt)
         row = result.one_or_none()
 
         if row is None:
-            source_stmt = select(Source).where(Source.id == source_id)
+            source_stmt = select(Source).where(
+                Source.id == source_id,
+                or_(
+                    Source.tenant_id == tenant_id,
+                    Source.tenant_id == SYSTEM_TENANT_ID,
+                ),
+            )
             source_result = await self.db.execute(source_stmt)
             source = source_result.scalar_one_or_none()
             if source is None:
@@ -382,6 +526,28 @@ class DashboardService:
         }
 
     async def get_scheduler_status(self) -> dict:
+        if not settings.scheduler_enabled:
+            # Prod mode: the scheduler lives in the worker container, so this
+            # process has no APScheduler job list. Report counts from the worker
+            # heartbeat instead; the per-job list is empty cross-process.
+            payload, _read_error = await self._read_worker_heartbeat()
+            if worker_heartbeat_is_fresh(payload):
+                total = payload.get("jobs_total", 0)
+                running_count = payload.get("jobs_running", 0)
+                paused_count = payload.get("jobs_paused", 0)
+            else:
+                # Stale/missing heartbeat: the worker is down, so no live jobs.
+                total = running_count = paused_count = 0
+            return {
+                "total_jobs": total,
+                "running_jobs": [],
+                "paused_jobs": [],
+                "all_jobs": [],
+                "running_jobs_count": running_count,
+                "paused_jobs_count": paused_count,
+                "last_heartbeat": (payload or {}).get("timestamp"),
+            }
+
         jobs_status = await scheduler_manager.get_jobs_status()
 
         running_jobs = []
@@ -418,6 +584,9 @@ class DashboardService:
             "running_jobs": running_jobs,
             "paused_jobs": paused_jobs,
             "all_jobs": running_jobs + paused_jobs,
+            "running_jobs_count": len(running_jobs),
+            "paused_jobs_count": len(paused_jobs),
+            "last_heartbeat": None,
         }
 
     async def get_sse_stats(self) -> dict:
@@ -472,7 +641,9 @@ class DashboardService:
             "avg_connection_duration_seconds": stats.get("avg_connection_duration_seconds", 0),
         }
 
-    async def collect_and_push_metrics(self, start_time: datetime, tenant_id: str = "system") -> None:
+    # Fix: default tenant changed from the dubious "system" string to SYSTEM_TENANT_ID
+    # (kept as str for SSE/Redis JSON serialization).
+    async def collect_and_push_metrics(self, start_time: datetime, tenant_id: str = str(SYSTEM_TENANT_ID)) -> None:
         cpu_usage = await asyncio.to_thread(psutil.cpu_percent, 0.5)
         mem = await asyncio.to_thread(psutil.virtual_memory)
         disk = await asyncio.to_thread(psutil.disk_usage, "/")
@@ -532,7 +703,9 @@ class DashboardService:
             except Exception as e:
                 logger.warning(f"Failed to push SSE metric update: {e}")
 
-    async def archive_snapshot(self, tenant_id: str = "00000000-0000-0000-0000-000000000000") -> None:
+    # Fix: use the SYSTEM_TENANT_ID constant instead of the hardcoded system-tenant UUID
+    # literal (kept as str to preserve the original runtime semantics).
+    async def archive_snapshot(self, tenant_id: str = str(SYSTEM_TENANT_ID)) -> None:
         cpu_usage = _last_metrics.get("cpu_usage_percent", 0)
         mem_total = await asyncio.to_thread(lambda: psutil.virtual_memory().total)
         mem_used = await asyncio.to_thread(lambda: psutil.virtual_memory().used)
@@ -559,8 +732,15 @@ class DashboardService:
         except Exception as e:
             logger.warning(f"Failed to query source health for snapshot: {e}")
 
-        jobs_status = await scheduler_manager.get_jobs_status()
-        active_jobs = len([j for j in jobs_status if not j.get("pending", False)])
+        if settings.scheduler_enabled:
+            jobs_status = await scheduler_manager.get_jobs_status()
+            active_jobs = len([j for j in jobs_status if not j.get("pending", False)])
+        else:
+            # Prod mode: the in-process scheduler has no jobs (they live in the
+            # worker container). Reading the local singleton would always store 0
+            # and pollute the snapshot; use the worker heartbeat's running count.
+            payload, _read_error = await self._read_worker_heartbeat()
+            active_jobs = payload.get("jobs_running", 0) if worker_heartbeat_is_fresh(payload) else 0
 
         snapshot = DashboardSnapshot(
             tenant_id=tenant_id,
@@ -581,7 +761,10 @@ class DashboardService:
         await self.db.commit()
 
 
-async def start_metrics_collection(start_time: datetime, tenant_id: str = "system") -> asyncio.Task:
+# Fix: default tenant changed from the dubious "system" string to SYSTEM_TENANT_ID.
+# This value flows into SSE/Redis json.dumps (needs str) and is stored as the snapshot
+# tenant_id, hence str(constant).
+async def start_metrics_collection(start_time: datetime, tenant_id: str = str(SYSTEM_TENANT_ID)) -> asyncio.Task:
     async def _periodic_loop():
         db_session_factory = None
         from app.db.session import async_session_factory

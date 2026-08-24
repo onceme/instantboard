@@ -1,11 +1,12 @@
 import time
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import httpx
 import pytest
 from jose import jwt
 
 from app.core.sso_handlers import (
+    SUPPORTED_PROVIDERS,
     AppleSSOHandler,
     AzureADSSOHandler,
     BaseSSOHandler,
@@ -15,7 +16,6 @@ from app.core.sso_handlers import (
     SSOHandlerFactory,
     SSOTokenResponse,
     SSOUserInfo,
-    SUPPORTED_PROVIDERS,
 )
 
 
@@ -85,8 +85,10 @@ class TestBaseSSOHandler:
         class DummyHandler(BaseSSOHandler):
             def get_authorize_url(self, state, redirect_uri):
                 return ""
+
             async def exchange_code(self, code, redirect_uri):
                 return SSOTokenResponse("t")
+
             async def get_user_info(self, token_response):
                 return SSOUserInfo("x", "1")
 
@@ -99,8 +101,10 @@ class TestBaseSSOHandler:
         class DummyHandler(BaseSSOHandler):
             def get_authorize_url(self, state, redirect_uri):
                 return ""
+
             async def exchange_code(self, code, redirect_uri):
                 return SSOTokenResponse("t")
+
             async def get_user_info(self, token_response):
                 return SSOUserInfo("x", "1")
 
@@ -114,8 +118,10 @@ class TestBaseSSOHandler:
         class DummyHandler(BaseSSOHandler):
             def get_authorize_url(self, state, redirect_uri):
                 return ""
+
             async def exchange_code(self, code, redirect_uri):
                 return SSOTokenResponse("t")
+
             async def get_user_info(self, token_response):
                 return SSOUserInfo("x", "1")
 
@@ -136,8 +142,10 @@ class TestBaseSSOHandler:
         class DummyHandler(BaseSSOHandler):
             def get_authorize_url(self, state, redirect_uri):
                 return ""
+
             async def exchange_code(self, code, redirect_uri):
                 return SSOTokenResponse("t")
+
             async def get_user_info(self, token_response):
                 return SSOUserInfo("x", "1")
 
@@ -605,9 +613,11 @@ class TestAppleSSOHandler:
         mock_client.post.return_value = mock_response
         handler._get_http_client = AsyncMock(return_value=mock_client)
 
-        with patch.object(handler, "_generate_client_secret", return_value="secret"):
-            with pytest.raises(ValueError, match="Apple token exchange failed"):
-                await handler.exchange_code("bad_code", "http://localhost/cb")
+        with (
+            patch.object(handler, "_generate_client_secret", return_value="secret"),
+            pytest.raises(ValueError, match="Apple token exchange failed"),
+        ):
+            await handler.exchange_code("bad_code", "http://localhost/cb")
 
     async def test_exchange_code_error_in_response(self):
         handler = AppleSSOHandler()
@@ -619,9 +629,11 @@ class TestAppleSSOHandler:
         mock_client.post.return_value = mock_response
         handler._get_http_client = AsyncMock(return_value=mock_client)
 
-        with patch.object(handler, "_generate_client_secret", return_value="secret"):
-            with pytest.raises(ValueError, match="Apple token exchange error"):
-                await handler.exchange_code("bad_code", "http://localhost/cb")
+        with (
+            patch.object(handler, "_generate_client_secret", return_value="secret"),
+            pytest.raises(ValueError, match="Apple token exchange error"),
+        ):
+            await handler.exchange_code("bad_code", "http://localhost/cb")
 
     async def test_get_user_info_success(self):
         handler = AppleSSOHandler()

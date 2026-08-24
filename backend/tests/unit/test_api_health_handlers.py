@@ -1,4 +1,5 @@
 """Unit tests for app/api/v1/health.py — direct handler tests."""
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest

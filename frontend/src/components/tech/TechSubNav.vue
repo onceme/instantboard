@@ -142,6 +142,8 @@ function selectSort(sort: TechSort) {
 .sub-nav-desktop {
   display: flex;
   align-items: center;
+  /* Long domain + sort rows may exceed narrow tablet widths; wrap instead of clipping */
+  flex-wrap: wrap;
   gap: 16px;
 }
 

@@ -440,6 +440,56 @@ sequenceDiagram
     Router->>Client: 遍历匹配的client_id → 发送SSE事件 (仅转发 tenant_id匹配的消息)
 ```
 
+#### 3.5.4 source_health_update 事件契约 (数据源健康表格增量刷新)
+
+本契约是前后端共同遵守的单一事实来源；发布侧/消费侧代码注释均引用本节。
+
+**事件元信息**:
+
+| 项 | 值 |
+|----|----|
+| 事件名 (event_type) | `source_health_update` (`SSEEventType.SOURCE_HEALTH_UPDATE`) |
+| 频道 (channel) | `dashboard` (Redis key `channel:dashboard`) |
+| 发布方 | 采集调度器: `app/scheduler/manager.py::_update_health_after_collection` → `app/services/sse.py::publish_source_health_update` |
+| 推送条件 | `source_health.status` 发生变化时 (healthy ↔ degraded ↔ down) |
+| 消费方 | 前端 `stores/dashboard.ts::updateSourceHealthFromSSE` → Dashboard "数据源健康"表格 (`DataSourcesHealth.vue`) |
+
+**Payload 字段** (`data` 部分，由 `app/services/sse.py::build_source_health_update_payload` 从 `source_health` 记录 + 所属 `sources` 行构造，包含前端表格渲染所需的完整行状态):
+
+| 字段 | 类型 | 语义 |
+|------|------|------|
+| `source_id` | str(UUID) | **行匹配键**: 前端按 `sources[].id === source_id` 定位表格行 |
+| `name` | str | 数据源名称 (上下文信息，前端不用其覆盖行) |
+| `source_type` | str | rss / api / web_scrape / social |
+| `status` | str | 新状态: healthy / degraded / down |
+| `previous_status` | str | 变更前状态 |
+| `last_error` | str \| null | 最近错误信息 (source_health.last_error_message) |
+| `last_success_at` | ISO8601 \| null | 最近成功采集时间 |
+| `last_failure_at` | ISO8601 \| null | 最近失败采集时间 |
+| `avg_response_time_ms` | int | 24h 平均响应时间 |
+| `consecutive_failures` | int | 连续失败次数 |
+| `success_count_24h` | int | 24h 成功次数 |
+| `total_fetches_24h` | int | 24h 采集总次数 |
+| `success_rate_24h` | float \| null | success_count_24h / total_fetches_24h；无采集时为 null |
+| `timestamp` | ISO8601 | 事件发布时间 (UTC) |
+
+**租户路由语义** (见 §3.5.2 / §3.5.3):
+
+- 消息外层携带 `tenant_id = str(source.tenant_id)` (不在 `data` 内)，由发布侧按源所属租户设置；默认值为 `str(SYSTEM_TENANT_ID)`。
+- `SSEEventRouter._on_redis_message` 按**字符串精确匹配**转发：仅 `conn.tenant_id == tenant_id` 的连接能收到。
+- 种子/系统级数据源归属 system 租户 (`SYSTEM_TENANT_ID`，固定 UUID `00000000-0000-0000-0000-000000000000`)；admin 帐号位于 system 租户，其 JWT `tenant_id` claim 即 `str(SYSTEM_TENANT_ID)`，SSE 连接按该值注册 → **admin 会话能收到系统源的健康事件**。
+- 其他租户的连接收不到 system 源健康事件（租户隔离，与 REST `/dashboard/data-sources` 的可见性规则一致）。
+- 禁止使用字面量字符串（如 `"system"`、`"default"`）作为租户发布或连接注册的 fallback：它们与任何租户 UUID 字符串永不相等，事件将无法送达任何连接；发布侧/连接侧的 falsy fallback 一律使用 `str(SYSTEM_TENANT_ID)`。
+
+**前端消费规则**:
+
+- 按 `source_id` 匹配行；找不到则忽略（不新增行）。
+- 合并更新 `status` / `last_success_at` / `last_failure_at` / `avg_response_time_ms` / `consecutive_failures` / `total_fetches_24h` / `success_rate_24h` / `last_error` 等可变字段；**不覆盖** `id` / `name` / `source_type` 身份列。
+- 事件中时间字段为 `null` 视为"无变化"，保留行内原值。
+- 每次更新后重算 `healthy` / `degraded` / `down` 汇总计数。
+
+> 缺陷修复记录：旧发布侧 payload 仅含 `{source_id, status, last_error, timestamp}`，前端却按 `data.id` 匹配并整行替换，导致表格行永远无法增量刷新；现已统一为本契约。`services/source.py` 中曾存在的绕过 `event_router` 的直接 `redis_publish` 旁路（无 `tenant_id`、事件键为 `event` 而非 `event_type`，会被误投为 item_update 且破坏租户隔离）已随无调用方的 `update_source_health` 一并删除。
+
 ### 3.6 数据缓存与过期策略
 
 #### 3.6.1 缓存层级

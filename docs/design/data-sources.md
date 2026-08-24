@@ -277,46 +277,41 @@ avg_response_time_ms: 平均响应时间
 
 #### 3.4.2 健康状态判定算法
 
-```python
-# services/source_health_service.py
+健康判定与推送**没有独立的 health service**，由采集调度闭环内联完成：每次采集（成功 / 失败 / 空结果）结束时都会调用
+`app/scheduler/manager.py::_update_health_after_collection(source, collection_result)`，规则如下：
 
-class SourceHealthEvaluator:
-    """
-    数据源健康评估器
-    
-    状态转换规则:
-    healthy → degraded: 连续失败3次
-    degraded → down:    连续失败10次 (或成功率24h<50%)
-    down → degraded:    成功1次
-    degraded → healthy: 连续成功2次
-    
-    自动通知:
-    状态变更 → SSE推送 source_health_update
-    down持续>1h → 日志告警 + Dashboard高亮
-    """
-    
-    async def evaluate(self, source_id: UUID) -> HealthStatus:
-        health = await get_source_health(source_id)
-        
-        if health.consecutive_failures >= 10:
-            new_status = "down"
-        elif health.consecutive_failures >= 3:
-            new_status = "degraded"
-        elif health.consecutive_failures == 0 and health.success_count_24h / health.total_fetches_24h > 0.95:
-            new_status = "healthy"
-        else:
-            new_status = health.status  # 不变
-        
-        if new_status != health.status:
-            await update_source_health(source_id, status=new_status)
-            await publish_sse_event("source_health_update", {
-                "source_id": source_id,
-                "status": new_status,
-                "last_error": health.last_error_message,
-            })
-        
-        return new_status
 ```
+采集成功:
+  consecutive_failures = 0
+  last_success_at = now
+  total_fetches_24h += 1, success_count_24h += 1
+  avg_response_time_ms 按移动平均重算 (仅当本次 response_time_ms > 0)
+  状态恢复: degraded → healthy, down → degraded (每次成功恢复一级)
+
+采集失败:
+  consecutive_failures += 1
+  last_failure_at = now
+  last_error_message = result.error
+  total_fetches_24h += 1
+  状态恶化: consecutive_failures >= 3 → degraded, >= 10 → down
+
+首次采集 (source_health 记录不存在):
+  新建记录: 成功 → status='healthy'; 失败 → status='degraded'
+
+状态发生变化 (new_status != previous_status) 时:
+  SSEService.publish_source_health_update(
+      build_source_health_update_payload(source, health, previous_status),
+      tenant_id=str(source.tenant_id),   # falsy fallback 用 str(SYSTEM_TENANT_ID)，禁止字面量
+  )
+  随后 adaptive_reschedule 调整采集间隔倍率:
+  healthy ×1.0 / degraded ×2.0 / down ×10.0
+```
+
+> `source_health_update` 的完整 payload 契约（全行状态字段、前端按 `source_id` 匹配行、租户路由语义）统一以
+> [data-flow.md](data-flow.md) §3.5.4 为单一事实来源；发布侧为
+> `app/services/sse.py::publish_source_health_update` + `build_source_health_update_payload`。
+> `services/source.py` 中曾存在的 `update_source_health(source_id, status=...)` 函数及绕过
+> `event_router` 的直接 redis_publish 旁路已删除（缺陷修复记录见 data-flow.md §3.5.4 末尾）。
 
 #### 3.4.3 前端健康状态展示
 

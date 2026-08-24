@@ -672,9 +672,24 @@ SSE Event Types:
      event: system_metric_update
      data: { "cpu_usage_percent": 23.5, ... }
   
-  7. source_health_update — 数据源健康变更
+  7. source_health_update — 数据源健康变更 (完整契约见 data-flow.md §3.5.4)
      event: source_health_update
-     data: { "source_id": "uuid", "status": "down", ... }
+     data: {
+       "source_id": "uuid",           // 前端行匹配键
+       "name": "Hacker News",
+       "source_type": "rss",
+       "status": "down",              // healthy | degraded | down
+       "previous_status": "degraded",
+       "last_error": "connection timeout",
+       "last_success_at": "2026-06-23T09:55:00+00:00",
+       "last_failure_at": "2026-06-23T10:00:00+00:00",
+       "avg_response_time_ms": 432,
+       "consecutive_failures": 10,
+       "success_count_24h": 40,
+       "total_fetches_24h": 48,
+       "success_rate_24h": 0.83,
+       "timestamp": "2026-06-23T10:00:01+00:00"
+     }
   
   8. heartbeat — 心跳
      event: heartbeat

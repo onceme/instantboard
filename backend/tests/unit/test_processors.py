@@ -1,18 +1,20 @@
 """Unit tests for app/processors package."""
+
 from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
 from app.processors import (
     BaseProcessor,
-    ProcessorChain,
-    ProcessResult,
     CategorizerProcessor,
     DedupProcessor,
     FilterProcessor,
+    ProcessorChain,
+    ProcessResult,
     TransformerProcessor,
     create_default_processor_chain,
 )
-from app.processors.categorizer import TechTopicExtractor, KEYWORD_TO_TAG
+from app.processors.categorizer import KEYWORD_TO_TAG, TechTopicExtractor
 from app.processors.filter import BLACKLIST_KEYWORDS, MIN_TITLE_LENGTH
 
 
@@ -263,9 +265,11 @@ class TestDedupProcessor:
         c = DedupProcessor()
         item = {"title": "Test Title", "url": "http://test.com"}
         source = _make_source()
-        with patch("app.processors.dedup.redis_sismember", new_callable=AsyncMock, return_value=False):
-            with patch("app.processors.dedup.redis_sadd", new_callable=AsyncMock):
-                result = await c.process(item, source)
+        with (
+            patch("app.processors.dedup.redis_sismember", new_callable=AsyncMock, return_value=False),
+            patch("app.processors.dedup.redis_sadd", new_callable=AsyncMock),
+        ):
+            result = await c.process(item, source)
         assert result is not None
         assert "_dedup_hash" in result
 

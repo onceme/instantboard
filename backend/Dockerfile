@@ -20,6 +20,10 @@ COPY app/ app/
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONPATH=/app
+# Pin the outbound TLS trust store: Python defaults to certifi (Mozilla-based), which has
+# removed legacy roots such as Baltimore/AAA/old GlobalSign/old DigiCert, while several
+# real-world sites still chain to them. Use the Debian system CA bundle (more complete).
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 
 EXPOSE 8000
 
@@ -28,6 +32,12 @@ ENTRYPOINT ["./entrypoint.sh"]
 FROM python:3.11-slim AS builder
 
 WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libssl-dev \
+    libffi-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY requirements/ requirements/
 RUN pip install --no-cache-dir --upgrade pip && \
@@ -56,6 +66,10 @@ RUN chmod +x entrypoint.sh
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONPATH=/app
+# Pin the outbound TLS trust store: Python defaults to certifi (Mozilla-based), which has
+# removed legacy roots such as Baltimore/AAA/old GlobalSign/old DigiCert, while several
+# real-world sites still chain to them. Use the Debian system CA bundle (more complete).
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 
 EXPOSE 8000
 

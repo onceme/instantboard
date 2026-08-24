@@ -1,15 +1,15 @@
 """Unit tests for app/scheduler package."""
+
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from app.scheduler.manager import (
-    AsyncSchedulerManager,
-    DEFAULT_SCHEDULES,
     SOURCE_TYPE_DEFAULT_INTERVALS,
-    scheduler_manager,
+    AsyncSchedulerManager,
     _source_category_cache,
+    scheduler_manager,
 )
 
 
@@ -48,10 +48,6 @@ def _make_mock_scheduler():
 class TestModuleLevel:
     def test_scheduler_manager_exists(self):
         assert isinstance(scheduler_manager, AsyncSchedulerManager)
-
-    def test_default_schedules(self):
-        assert isinstance(DEFAULT_SCHEDULES, dict)
-        assert "tech_rss" in DEFAULT_SCHEDULES
 
     def test_source_type_default_intervals(self):
         assert "rss" in SOURCE_TYPE_DEFAULT_INTERVALS
@@ -159,6 +155,72 @@ class TestAddRemoveJob:
             mock_cls.return_value = _make_mock_scheduler()
             mgr = AsyncSchedulerManager()
             await mgr.remove_job("nonexistent")
+
+
+# ── runtime scheduling hooks (source enable/disable events) ──────
+class TestSourceJobHooks:
+    async def test_add_source_job_schedules_from_payload(self):
+        """add_source_job must build the job purely from the event payload (no DB read)
+        and seed the category cache used by adaptive_reschedule."""
+        with patch("app.scheduler.manager.AsyncIOScheduler") as mock_cls:
+            sched = _make_mock_scheduler()
+            mock_cls.return_value = sched
+            mgr = AsyncSchedulerManager()
+
+            payload = {
+                "id": "src-abc",
+                "category_slug": "finance",
+                "refresh_interval_seconds": 120,
+                "source_type": "rss",
+            }
+            await mgr.add_source_job(payload)
+
+            sched.add_job.assert_called_once()
+            kwargs = sched.add_job.call_args.kwargs
+            assert kwargs["id"] == "collect_src-abc"
+            _source_category_cache.pop("src-abc", None)
+
+    async def test_add_source_job_missing_id_is_noop(self):
+        with patch("app.scheduler.manager.AsyncIOScheduler") as mock_cls:
+            sched = _make_mock_scheduler()
+            mock_cls.return_value = sched
+            mgr = AsyncSchedulerManager()
+            await mgr.add_source_job({"name": "no id"})
+            sched.add_job.assert_not_called()
+
+    async def test_add_source_job_falls_back_to_default_interval(self):
+        """An event payload without refresh_interval_seconds must fall back to the
+        per-source_type default instead of scheduling a broken trigger."""
+        with patch("app.scheduler.manager.AsyncIOScheduler") as mock_cls:
+            sched = _make_mock_scheduler()
+            mock_cls.return_value = sched
+            mgr = AsyncSchedulerManager()
+            default = SOURCE_TYPE_DEFAULT_INTERVALS["web_scrape"]
+            seen = []
+
+            async def _spy(job_id, func, interval_seconds, kwargs=None):
+                seen.append((job_id, interval_seconds))
+
+            mgr.add_job = _spy
+            await mgr.add_source_job({"id": "src-x", "source_type": "web_scrape"})
+            assert seen == [("collect_src-x", default)]
+
+    async def test_remove_source_job_removes_collect_job(self):
+        with patch("app.scheduler.manager.AsyncIOScheduler") as mock_cls:
+            sched = _make_mock_scheduler()
+            sched.get_job = MagicMock(return_value=MagicMock())
+            mock_cls.return_value = sched
+            mgr = AsyncSchedulerManager()
+            await mgr.remove_source_job("src-abc")
+            sched.remove_job.assert_called_once_with("collect_src-abc")
+
+    async def test_remove_source_job_empty_id_noop(self):
+        with patch("app.scheduler.manager.AsyncIOScheduler") as mock_cls:
+            sched = _make_mock_scheduler()
+            mock_cls.return_value = sched
+            mgr = AsyncSchedulerManager()
+            await mgr.remove_source_job("")
+            sched.remove_job.assert_not_called()
 
 
 # ── pause / resume / reschedule ──────────────────────────────────
@@ -485,37 +547,44 @@ class TestRunCollection:
 # ── Worker module ────────────────────────────────────────────────
 class TestWorkerModule:
     async def test_worker_main(self):
-        with patch("app.scheduler.worker.create_tables", new_callable=AsyncMock):
-            with patch("app.scheduler.worker.get_redis_client", new_callable=AsyncMock) as mock_redis:
-                mock_redis.return_value = AsyncMock()
-                with patch("app.scheduler.worker.scheduler_manager") as mock_mgr:
-                    mock_mgr.start = AsyncMock()
-                    mock_mgr.schedule_all_active_sources = AsyncMock()
-                    mock_session = AsyncMock()
-                    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-                    mock_session.__aexit__ = AsyncMock(return_value=False)
-                    mock_result = MagicMock()
-                    mock_result.scalars.return_value.all.return_value = []
-                    mock_session.execute = AsyncMock(return_value=mock_result)
-                    with patch("app.scheduler.worker.async_session_factory", return_value=mock_session):
-                        with patch("app.scheduler.worker.asyncio.Event") as mock_event_cls:
-                            mock_event = MagicMock()
-                            mock_event.wait = AsyncMock()
-                            mock_event_cls.return_value = mock_event
-                            with patch("app.scheduler.worker.asyncio.get_running_loop") as mock_loop:
-                                mock_loop.return_value = MagicMock()
-                                from app.scheduler.worker import main
-                                await main()
+        with (
+            patch("app.scheduler.worker.create_tables", new_callable=AsyncMock),
+            patch("app.scheduler.worker.get_redis_client", new_callable=AsyncMock) as mock_redis,
+        ):
+            mock_redis.return_value = AsyncMock()
+            with patch("app.scheduler.worker.scheduler_manager") as mock_mgr:
+                mock_mgr.start = AsyncMock()
+                mock_mgr.schedule_all_active_sources = AsyncMock()
+                mock_session = AsyncMock()
+                mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+                mock_session.__aexit__ = AsyncMock(return_value=False)
+                mock_result = MagicMock()
+                mock_result.scalars.return_value.all.return_value = []
+                mock_session.execute = AsyncMock(return_value=mock_result)
+                with (
+                    patch("app.scheduler.worker.async_session_factory", return_value=mock_session),
+                    patch("app.scheduler.worker.asyncio.Event") as mock_event_cls,
+                ):
+                    mock_event = MagicMock()
+                    mock_event.wait = AsyncMock()
+                    mock_event_cls.return_value = mock_event
+                    with patch("app.scheduler.worker.asyncio.get_running_loop") as mock_loop:
+                        mock_loop.return_value = MagicMock()
+                        from app.scheduler.worker import main
+
+                        await main()
 
     async def test_worker_shutdown(self):
         with patch("app.scheduler.worker.scheduler_manager") as mock_mgr:
             mock_mgr.shutdown = AsyncMock()
             with patch("app.scheduler.worker.close_redis", new_callable=AsyncMock):
                 from app.scheduler.worker import shutdown
+
                 await shutdown()
 
     def test_worker_main_block_import(self):
         from app.scheduler import worker as worker_mod
+
         assert hasattr(worker_mod, "main")
         assert hasattr(worker_mod, "shutdown")
 
@@ -626,9 +695,14 @@ class TestRunCollectionExtended:
             mock_chain = AsyncMock()
             mock_process_result = MagicMock()
             mock_process_result.item = {
-                "title": "Item 1", "url": "http://x.com/1", "summary": "Sum",
-                "image_url": "", "topic_tags": [], "extra_data": {}, "priority": 5,
-                "published_at": "2024-01-01T00:00:00Z"
+                "title": "Item 1",
+                "url": "http://x.com/1",
+                "summary": "Sum",
+                "image_url": "",
+                "topic_tags": [],
+                "extra_data": {},
+                "priority": 5,
+                "published_at": "2024-01-01T00:00:00Z",
             }
             mock_process_result.errors = []
             mock_chain.execute = AsyncMock(return_value=[mock_process_result])
@@ -638,12 +712,14 @@ class TestRunCollectionExtended:
             mock_sse.publish_item_update = AsyncMock()
             mock_sse.publish_source_health_update = AsyncMock()
 
-            with patch("app.db.session.async_session_factory", return_value=mock_session):
-                with patch("app.collectors.get_collector", return_value=lambda: mock_collector):
-                    with patch("app.processors.create_default_processor_chain", return_value=mock_chain):
-                        with patch("app.services.sse.SSEService", return_value=mock_sse):
-                            with patch("app.scheduler.manager.event_router"):
-                                await mgr._run_collection("src-ok")
+            with (
+                patch("app.db.session.async_session_factory", return_value=mock_session),
+                patch("app.collectors.get_collector", return_value=lambda: mock_collector),
+                patch("app.processors.create_default_processor_chain", return_value=mock_chain),
+                patch("app.services.sse.SSEService", return_value=mock_sse),
+                patch("app.scheduler.manager.event_router"),
+            ):
+                await mgr._run_collection("src-ok")
 
             assert mgr._last_run_results["collect_src-ok"]["success"] is True
             assert mgr._last_run_results["collect_src-ok"]["items_count"] >= 1
@@ -690,6 +766,7 @@ class TestRunCollectionExtended:
             mock_health_session.commit = AsyncMock()
 
             call_count = 0
+
             def get_session():
                 nonlocal call_count
                 call_count += 1
@@ -697,11 +774,17 @@ class TestRunCollectionExtended:
                     return mock_session
                 return mock_health_session
 
-            with patch("app.db.session.async_session_factory", side_effect=lambda: get_session()):
-                with patch("app.collectors.get_collector", return_value=None):
-                    with patch("app.collectors.finance.yfinance_collector.YFinanceCollector.collect", new_callable=AsyncMock, return_value=mock_collection_result):
-                        with patch("app.scheduler.manager.event_router"):
-                            await mgr._run_collection("src-yf")
+            with (
+                patch("app.db.session.async_session_factory", side_effect=lambda: get_session()),
+                patch("app.collectors.get_collector", return_value=None),
+                patch(
+                    "app.collectors.finance.yfinance_collector.YFinanceCollector.collect",
+                    new_callable=AsyncMock,
+                    return_value=mock_collection_result,
+                ),
+                patch("app.scheduler.manager.event_router"),
+            ):
+                await mgr._run_collection("src-yf")
 
             assert mgr._last_run_results["collect_src-yf"]["success"] is True
 
@@ -745,6 +828,7 @@ class TestRunCollectionExtended:
             health_session.commit = AsyncMock()
 
             call_count = 0
+
             def get_session():
                 nonlocal call_count
                 call_count += 1
@@ -752,10 +836,12 @@ class TestRunCollectionExtended:
                     return mock_session
                 return health_session
 
-            with patch("app.db.session.async_session_factory", side_effect=lambda: get_session()):
-                with patch("app.collectors.get_collector", return_value=lambda: mock_collector):
-                    with patch("app.scheduler.manager.event_router"):
-                        await mgr._run_collection("src-fail")
+            with (
+                patch("app.db.session.async_session_factory", side_effect=lambda: get_session()),
+                patch("app.collectors.get_collector", return_value=lambda: mock_collector),
+                patch("app.scheduler.manager.event_router"),
+            ):
+                await mgr._run_collection("src-fail")
 
             assert mgr._last_run_results["collect_src-fail"]["success"] is False
             assert "timeout" in mgr._last_run_results["collect_src-fail"]["error"]
@@ -797,6 +883,7 @@ class TestRunCollectionExtended:
             health_session.commit = AsyncMock()
 
             call_count = 0
+
             def get_session():
                 nonlocal call_count
                 call_count += 1
@@ -807,10 +894,12 @@ class TestRunCollectionExtended:
             mock_collector = AsyncMock()
             mock_collector.collect = AsyncMock(return_value=mock_collection_result)
 
-            with patch("app.db.session.async_session_factory", side_effect=lambda: get_session()):
-                with patch("app.collectors.get_collector", return_value=lambda: mock_collector):
-                    with patch("app.scheduler.manager.event_router"):
-                        await mgr._run_collection("src-empty")
+            with (
+                patch("app.db.session.async_session_factory", side_effect=lambda: get_session()),
+                patch("app.collectors.get_collector", return_value=lambda: mock_collector),
+                patch("app.scheduler.manager.event_router"),
+            ):
+                await mgr._run_collection("src-empty")
 
             assert mgr._last_run_results["collect_src-empty"]["success"] is True
             assert mgr._last_run_results["collect_src-empty"]["items_count"] == 0
@@ -853,6 +942,7 @@ class TestRunCollectionExtended:
             health_session.commit = AsyncMock()
 
             call_count = 0
+
             def get_session():
                 nonlocal call_count
                 call_count += 1
@@ -863,10 +953,12 @@ class TestRunCollectionExtended:
             mock_collector = AsyncMock()
             mock_collector.collect = AsyncMock(return_value=mock_collection_result)
 
-            with patch("app.db.session.async_session_factory", side_effect=lambda: get_session()):
-                with patch("app.collectors.get_collector", return_value=lambda: mock_collector):
-                    with patch("app.scheduler.manager.event_router"):
-                        await mgr._run_collection("src-cat")
+            with (
+                patch("app.db.session.async_session_factory", side_effect=lambda: get_session()),
+                patch("app.collectors.get_collector", return_value=lambda: mock_collector),
+                patch("app.scheduler.manager.event_router"),
+            ):
+                await mgr._run_collection("src-cat")
 
             assert _source_category_cache.get("src-cat") == "tech"
 
@@ -897,9 +989,11 @@ class TestUpdateHealthAfterCollection:
             mock_session.add = MagicMock()
             mock_session.commit = AsyncMock()
 
-            with patch("app.db.session.async_session_factory", return_value=mock_session):
-                with patch("app.scheduler.manager.event_router"):
-                    await mgr._update_health_after_collection(mock_source, mock_result)
+            with (
+                patch("app.db.session.async_session_factory", return_value=mock_session),
+                patch("app.scheduler.manager.event_router"),
+            ):
+                await mgr._update_health_after_collection(mock_source, mock_result)
 
             mock_session.add.assert_called_once()
             mock_session.commit.assert_called_once()
@@ -935,9 +1029,11 @@ class TestUpdateHealthAfterCollection:
             mock_session.execute = AsyncMock(return_value=mock_query_result)
             mock_session.commit = AsyncMock()
 
-            with patch("app.db.session.async_session_factory", return_value=mock_session):
-                with patch("app.scheduler.manager.event_router"):
-                    await mgr._update_health_after_collection(mock_source, mock_result)
+            with (
+                patch("app.db.session.async_session_factory", return_value=mock_session),
+                patch("app.scheduler.manager.event_router"),
+            ):
+                await mgr._update_health_after_collection(mock_source, mock_result)
 
             assert mock_health.consecutive_failures == 0
             assert mock_health.status == "healthy"  # degraded→healthy
@@ -974,9 +1070,11 @@ class TestUpdateHealthAfterCollection:
             mock_session.execute = AsyncMock(return_value=mock_query_result)
             mock_session.commit = AsyncMock()
 
-            with patch("app.db.session.async_session_factory", return_value=mock_session):
-                with patch("app.scheduler.manager.event_router"):
-                    await mgr._update_health_after_collection(mock_source, mock_result)
+            with (
+                patch("app.db.session.async_session_factory", return_value=mock_session),
+                patch("app.scheduler.manager.event_router"),
+            ):
+                await mgr._update_health_after_collection(mock_source, mock_result)
 
             assert mock_health.consecutive_failures == 1
             assert mock_health.last_error_message == "connection timeout"
@@ -1012,9 +1110,11 @@ class TestUpdateHealthAfterCollection:
             mock_session.execute = AsyncMock(return_value=mock_query_result)
             mock_session.commit = AsyncMock()
 
-            with patch("app.db.session.async_session_factory", return_value=mock_session):
-                with patch("app.scheduler.manager.event_router"):
-                    await mgr._update_health_after_collection(mock_source, mock_result)
+            with (
+                patch("app.db.session.async_session_factory", return_value=mock_session),
+                patch("app.scheduler.manager.event_router"),
+            ):
+                await mgr._update_health_after_collection(mock_source, mock_result)
 
             assert mock_health.consecutive_failures == 10
             assert mock_health.status == "down"
@@ -1050,15 +1150,22 @@ class TestUpdateHealthAfterCollection:
             mock_session.execute = AsyncMock(return_value=mock_query_result)
             mock_session.commit = AsyncMock()
 
-            with patch("app.db.session.async_session_factory", return_value=mock_session):
-                with patch("app.scheduler.manager.event_router"):
-                    await mgr._update_health_after_collection(mock_source, mock_result)
+            with (
+                patch("app.db.session.async_session_factory", return_value=mock_session),
+                patch("app.scheduler.manager.event_router"),
+            ):
+                await mgr._update_health_after_collection(mock_source, mock_result)
 
             assert mock_health.consecutive_failures == 3
             assert mock_health.status == "degraded"
 
     async def test_health_status_change_triggers_sse(self):
-        """Lines 482-491: status change → publish SSE event."""
+        """Lines 482-491: status change → publish SSE event with the full row payload.
+
+        Contract: docs/design/data-flow.md §3.5.4. The event payload must carry
+        every field the dashboard health table renders (keyed by source_id), and the
+        tenant must be the source's own tenant so matching SSE sessions receive it.
+        """
         with patch("app.scheduler.manager.AsyncIOScheduler") as mock_cls:
             mock_cls.return_value = _make_mock_scheduler()
             mgr = AsyncSchedulerManager()
@@ -1066,6 +1173,8 @@ class TestUpdateHealthAfterCollection:
             mock_source = MagicMock()
             mock_source.id = "src-h-sse"
             mock_source.tenant_id = "t1"
+            mock_source.name = "SSE Source"
+            mock_source.source_type = "rss"
 
             mock_result = MagicMock()
             mock_result.success = True
@@ -1079,6 +1188,8 @@ class TestUpdateHealthAfterCollection:
             mock_health.success_count_24h = 3
             mock_health.avg_response_time_ms = 200
             mock_health.last_error_message = "old error"
+            mock_health.last_success_at = None
+            mock_health.last_failure_at = None
 
             mock_session = AsyncMock()
             mock_session.__aenter__ = AsyncMock(return_value=mock_session)
@@ -1100,14 +1211,31 @@ class TestUpdateHealthAfterCollection:
             mgr._original_intervals["collect_src-h-sse"] = 60
             mgr._adaptive_multipliers["collect_src-h-sse"] = 1.0
 
-            with patch("app.db.session.async_session_factory", return_value=mock_session):
-                with patch("app.services.sse.SSEService", return_value=mock_sse):
-                    with patch("app.scheduler.manager.event_router") as mock_er:
-                        mock_er.get_connections_by_category.return_value = [MagicMock()]
-                        mock_er.get_connections_count.return_value = 1
-                        await mgr._update_health_after_collection(mock_source, mock_result)
+            with (
+                patch("app.db.session.async_session_factory", return_value=mock_session),
+                patch("app.services.sse.SSEService", return_value=mock_sse),
+                patch("app.scheduler.manager.event_router") as mock_er,
+            ):
+                mock_er.get_connections_by_category.return_value = [MagicMock()]
+                mock_er.get_connections_count.return_value = 1
+                await mgr._update_health_after_collection(mock_source, mock_result)
 
             mock_sse.publish_source_health_update.assert_called_once()
+            payload = mock_sse.publish_source_health_update.call_args.args[0]
+            assert payload["source_id"] == "src-h-sse"
+            assert payload["name"] == "SSE Source"
+            assert payload["source_type"] == "rss"
+            assert payload["status"] == "healthy"
+            assert payload["previous_status"] == "degraded"
+            assert payload["last_success_at"] is not None
+            assert payload["last_failure_at"] is None
+            assert payload["consecutive_failures"] == 0
+            assert payload["total_fetches_24h"] == 6
+            assert payload["success_count_24h"] == 4
+            # avg = (200 * 5 + 100) / 6 rounded down
+            assert payload["avg_response_time_ms"] == 183
+            # The source's own tenant scopes delivery to its SSE sessions
+            assert mock_sse.publish_source_health_update.call_args.kwargs["tenant_id"] == "t1"
 
     async def test_health_update_exception(self):
         """Lines 495-496: exception during health update is caught."""
@@ -1164,9 +1292,11 @@ class TestUpdateHealthAfterCollection:
             mock_session.execute = AsyncMock(return_value=mock_query_result)
             mock_session.commit = AsyncMock()
 
-            with patch("app.db.session.async_session_factory", return_value=mock_session):
-                with patch("app.scheduler.manager.event_router"):
-                    await mgr._update_health_after_collection(mock_source, mock_result)
+            with (
+                patch("app.db.session.async_session_factory", return_value=mock_session),
+                patch("app.scheduler.manager.event_router"),
+            ):
+                await mgr._update_health_after_collection(mock_source, mock_result)
 
             assert mock_health.consecutive_failures == 0
             assert mock_health.status == "degraded"  # down→degraded

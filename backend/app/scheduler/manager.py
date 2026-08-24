@@ -7,22 +7,11 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy.orm import selectinload
 
+from app.core.constants import SYSTEM_TENANT_ID
 from app.core.sse_router import event_router
 from app.models.source import Source, SourceHealth
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_SCHEDULES = {
-    "finance_stock_quote": 30,
-    "finance_cn_stock": 30,
-    "finance_market_indices": 30,
-    "finance_commodities": 60,
-    "finance_nav": 120,
-    "tech_rss": 300,
-    "tech_hackernews": 120,
-    "tech_arxiv": 1800,
-    "tech_web_scrape": 1800,
-}
 
 SOURCE_TYPE_DEFAULT_INTERVALS = {
     "finance_quote": 30,
@@ -55,6 +44,18 @@ class AsyncSchedulerManager:
         self._adaptive_multipliers: dict[str, float] = {}
         self._last_run_times: dict[str, datetime] = {}
         self._last_run_results: dict[str, dict] = {}
+        # Adaptive pause switch: auto-pause jobs when there are no SSE subscribers.
+        # Only meaningful for the api-embedded scheduler (the SSE connection registry lives
+        # in the api process). The worker process has no SSE connections, so it must disable
+        # this, otherwise jobs get paused permanently after the first collection round.
+        self.adaptive_pause_enabled = True
+
+    def disable_adaptive_pause(self) -> None:
+        # Called by the worker process before starting the scheduler: the SSE connection
+        # dict lives in the api process (core/sse_router.py), so get_connections_count() is
+        # always 0 in the worker. Without disabling, every source would be paused
+        # permanently after its first collection round.
+        self.adaptive_pause_enabled = False
 
     async def start(self) -> None:
         if not self._running:
@@ -89,6 +90,11 @@ class AsyncSchedulerManager:
             id=job_id,
             kwargs=kwargs or {},
             replace_existing=True,
+            # Fix: IntervalTrigger waits a full interval before its first fire by default.
+            # Passing next_run_time makes the first collection run immediately.
+            # datetime.now(UTC) is timezone-aware; APScheduler converts it to the scheduler
+            # timezone automatically, which is compatible.
+            next_run_time=datetime.now(UTC),
         )
         logger.info(f"Job {job_id} added with interval {interval_seconds}s")
 
@@ -114,6 +120,34 @@ class AsyncSchedulerManager:
             self._adaptive_multipliers.pop(job_id, None)
             _source_category_cache.pop(job_id.replace("collect_", ""), None)
             logger.info(f"Job {job_id} removed")
+
+    async def add_source_job(self, source: dict) -> None:
+        # Runtime hook for the worker's source-status listener (source_enabled event):
+        # schedule collection for a single source without restarting the worker. The
+        # dict is the full source payload published by SourceService, so no DB read
+        # is needed to build the job.
+        source_id = str(source.get("id") or "")
+        if not source_id:
+            logger.warning("add_source_job called with a payload missing source id")
+            return
+
+        category_slug = source.get("category_slug") or ""
+        if category_slug:
+            _source_category_cache[source_id] = category_slug
+
+        await self.add_collection_job(
+            source_id=source_id,
+            interval_seconds=source.get("refresh_interval_seconds") or 0,
+            source_type=source.get("source_type") or "",
+        )
+
+    async def remove_source_job(self, source_id: str) -> None:
+        # Runtime hook for the worker's source-status listener (source_disabled /
+        # source_deleted events): stop collecting the source immediately.
+        source_id = str(source_id or "")
+        if not source_id:
+            return
+        await self.remove_job(f"collect_{source_id}")
 
     async def pause_job(self, job_id: str) -> None:
         job = self.scheduler.get_job(job_id)
@@ -194,7 +228,12 @@ class AsyncSchedulerManager:
         source_connections = event_router.get_connections_by_category(category)
         active_connections = event_router.get_connections_count()
 
-        if active_connections == 0 or len(source_connections) == 0:
+        # Only pause based on the SSE subscriber count when adaptive pause is enabled
+        # (api-embedded scheduler scenario). In the worker process the SSE connection
+        # registry is always empty, and this branch is turned off via
+        # disable_adaptive_pause(); otherwise jobs would be paused permanently after the
+        # first collection round.
+        if self.adaptive_pause_enabled and (active_connections == 0 or len(source_connections) == 0):
             job = self.scheduler.get_job(job_id)
             if job and not job.pending:
                 await self.pause_job(job_id)
@@ -273,7 +312,7 @@ class AsyncSchedulerManager:
         try:
             from sqlalchemy import select
 
-            from app.collectors import get_collector
+            from app.collectors import resolve_collector
             from app.db.session import async_session_factory
             from app.processors import create_default_processor_chain
             from app.services.sse import SSEService
@@ -301,22 +340,19 @@ class AsyncSchedulerManager:
                 if source.category:
                     _source_category_cache[str(source.id)] = source.category.slug
 
-                collector_cls = get_collector(source.source_type)
+                # Collector selection: source_type match first, then the config.library
+                # fallback (resolve_collector in app.collectors). Template sources like
+                # source_type=api + library=yfinance / web_scrape + library=eastmoney
+                # resolve to their real collectors without per-library special cases.
+                collector_cls = resolve_collector(source.source_type, source.config)
                 if collector_cls is None:
-                    config = source.config or {}
-                    library = config.get("library", "")
-                    if library == "yfinance":
-                        from app.collectors.finance.yfinance_collector import YFinanceCollector
-
-                        collector_cls = YFinanceCollector
-                    else:
-                        logger.warning(f"No collector for source_type={source.source_type}")
-                        self._last_run_results[job_id] = {
-                            "success": False,
-                            "error": f"No collector for {source.source_type}",
-                            "items_count": 0,
-                        }
-                        return
+                    logger.warning(f"No collector for source_type={source.source_type}")
+                    self._last_run_results[job_id] = {
+                        "success": False,
+                        "error": f"No collector for {source.source_type}",
+                        "items_count": 0,
+                    }
+                    return
 
                 collector = collector_cls()
                 collection_result = await collector.collect(source)
@@ -341,7 +377,12 @@ class AsyncSchedulerManager:
                 results = await chain.execute(collection_result.items, source)
 
                 sse_service = SSEService()
-                tenant_id = str(source.tenant_id) if source.tenant_id else "default"
+                # Fallback must be str(SYSTEM_TENANT_ID), never a literal like "default":
+                # SSE routing forwards events only on exact tenant_id string match, so a
+                # non-UUID literal could never equal a registered connection's tenant_id.
+                # Unreachable in practice (Source.tenant_id is NOT NULL); contract:
+                # docs/design/data-flow.md §3.5.4.
+                tenant_id = str(source.tenant_id) if source.tenant_id else str(SYSTEM_TENANT_ID)
                 category_slug = _source_category_cache.get(str(source.id), "")
                 if not category_slug and source.category:
                     category_slug = source.category.slug
@@ -480,14 +521,21 @@ class AsyncSchedulerManager:
                     previous_status = "healthy"
 
                 if health.status != previous_status:
-                    from app.services.sse import SSEService
+                    from app.services.sse import SSEService, build_source_health_update_payload
 
                     sse_service = SSEService()
+                    # Contract: docs/design/data-flow.md §3.5.4 — publish the full
+                    # source_health row state so the dashboard health table can match the
+                    # row by source_id and refresh status/times/latency in place.
+                    # Tenant scoping: str(source.tenant_id) equals the admin JWT tenant
+                    # claim for system-tenant sources, so admin sessions receive it.
+                    # Fallback must be str(SYSTEM_TENANT_ID), never a literal like
+                    # "default": exact-string tenant routing would drop the event.
+                    # Unreachable in practice (Source.tenant_id is NOT NULL); contract:
+                    # docs/design/data-flow.md §3.5.4.
                     await sse_service.publish_source_health_update(
-                        source_id=str(source.id),
-                        status=health.status,
-                        last_error=health.last_error_message,
-                        tenant_id=str(source.tenant_id) if source.tenant_id else "default",
+                        build_source_health_update_payload(source, health, previous_status),
+                        tenant_id=str(source.tenant_id) if source.tenant_id else str(SYSTEM_TENANT_ID),
                     )
 
                 await self.adaptive_reschedule(str(source.id), health.status)

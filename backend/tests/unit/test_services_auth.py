@@ -48,7 +48,9 @@ def _make_tenant(tenant_id=None, slug="default", name="Default Tenant"):
     return tenant
 
 
-def _make_sso_user_info(provider_id="12345", email="user@example.com", name="SSO User", avatar_url=None, provider="google"):
+def _make_sso_user_info(
+    provider_id="12345", email="user@example.com", name="SSO User", avatar_url=None, provider="google"
+):
     info = MagicMock()
     info.provider_id = provider_id
     info.email = email
@@ -82,9 +84,7 @@ class TestSSOLogin:
     @patch("app.services.auth.create_refresh_token", return_value="refresh_tok")
     @patch("app.services.auth.create_access_token", return_value="access_tok")
     @patch("app.services.auth.SSOHandlerFactory")
-    async def test_sso_login_success(
-        self, mock_factory, mock_create_access, mock_create_refresh, mock_redis_set
-    ):
+    async def test_sso_login_success(self, mock_factory, mock_create_access, mock_create_refresh, mock_redis_set):
         db, mock_result = _mock_db_session()
         redis = _mock_redis()
         user = _make_user()
@@ -374,9 +374,7 @@ class TestGetOrCreateUser:
         user = _make_user(email="old@example.com", name="Old Name", avatar_url=None)
         mock_result.scalar_one_or_none.return_value = user
 
-        sso_info = _make_sso_user_info(
-            email="new@example.com", name="New Name", avatar_url="https://new.com/pic.png"
-        )
+        sso_info = _make_sso_user_info(email="new@example.com", name="New Name", avatar_url="https://new.com/pic.png")
 
         service = AuthService(db, redis)
         result = await service._get_or_create_user("google", sso_info)
@@ -403,8 +401,10 @@ class TestGetOrCreateUser:
         db, mock_result = _mock_db_session()
         redis = _mock_redis()
 
+        tenant = _make_tenant()
         existing_user = _make_user(email="match@example.com", name="Existing")
 
+        # Query order: (1) provider lookup, (2) default tenant, (3) scoped email fallback.
         call_count = 0
 
         async def execute_side_effect(*args, **kwargs):
@@ -414,18 +414,24 @@ class TestGetOrCreateUser:
             if call_count == 1:
                 mock_r.scalar_one_or_none.return_value = None
             elif call_count == 2:
+                mock_r.scalar_one_or_none.return_value = tenant
+            elif call_count == 3:
                 mock_r.scalar_one_or_none.return_value = existing_user
             return mock_r
 
         db.execute = execute_side_effect
 
-        sso_info = _make_sso_user_info(email="match@example.com", name="New SSO Name", avatar_url="https://av.com/a.png")
+        sso_info = _make_sso_user_info(
+            email="match@example.com", name="New SSO Name", avatar_url="https://av.com/a.png"
+        )
 
         service = AuthService(db, redis)
         result = await service._get_or_create_user("github", sso_info)
 
         assert result == existing_user
         assert existing_user.sso_provider == "github"
+        # The existing record is reused; nothing new is added.
+        db.add.assert_not_called()
 
     async def test_new_user_creation(self):
         db, mock_result = _mock_db_session()
@@ -433,15 +439,16 @@ class TestGetOrCreateUser:
 
         tenant = _make_tenant()
 
+        # Query order: (1) provider lookup, (2) default tenant, (3) scoped email fallback.
         call_count = 0
 
         async def execute_side_effect(*args, **kwargs):
             nonlocal call_count
             call_count += 1
             mock_r = MagicMock()
-            if call_count in (1, 2):
+            if call_count in (1, 3):
                 mock_r.scalar_one_or_none.return_value = None
-            elif call_count == 3:
+            elif call_count == 2:
                 mock_r.scalar_one_or_none.return_value = tenant
             return mock_r
 

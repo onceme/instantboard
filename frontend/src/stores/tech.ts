@@ -1,15 +1,11 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
-import type {
-  TechNewsItem,
-  TechTopic,
-  TechDomain,
-  TechSort,
-  SSEEventType,
-} from "@/types";
-import { apiGet } from "@/utils/api";
+import type { TechNewsItem, TechTopic, TechDomain, TechSort } from "@/types";
+import { SSEEventType } from "@/types";
+import { apiGet, getApiErrorMessage } from "@/utils/api";
 import { SSEConnection, SSEConnectionState } from "@/utils/sse.ts";
 import { useAuthStore } from "./auth";
+import { useSSEStore } from "./sse";
 
 export const useTechStore = defineStore("tech", () => {
   const newsItems = ref<TechNewsItem[]>([]);
@@ -23,6 +19,8 @@ export const useTechStore = defineStore("tech", () => {
   const currentPage = ref(1);
   const totalPages = ref(0);
   const isLoading = ref(false);
+  // Error message on request failure, rendered by views via ErrorAlert (distinct from the "No news" empty state)
+  const error = ref<string | null>(null);
 
   function setDomain(domain: TechDomain) {
     currentDomain.value = domain;
@@ -51,22 +49,21 @@ export const useTechStore = defineStore("tech", () => {
 
   async function fetchNews() {
     isLoading.value = true;
+    // Clear the previous error on retry
+    error.value = null;
     try {
       const params: Record<string, unknown> = {
         page: currentPage.value,
         page_size: 20,
+        // Align with backend params: domain/subcategory/sort (the backend doesn't recognize topic/subtopic/sort_by)
+        sort: currentSort.value,
       };
 
       if (currentDomain.value !== "all") {
-        params.topic = currentDomain.value;
+        params.domain = currentDomain.value;
       }
       if (currentSubcategory.value) {
-        params.subtopic = currentSubcategory.value;
-      }
-      if (currentSort.value === "time") {
-        params.sort_by = "published_at";
-      } else if (currentSort.value === "hot") {
-        params.sort_by = "priority";
+        params.subcategory = currentSubcategory.value;
       }
 
       const response = await apiGet<TechNewsItem[]>("/tech/news", params);
@@ -80,14 +77,22 @@ export const useTechStore = defineStore("tech", () => {
           response.meta.total / response.meta.page_size,
         );
       }
+    } catch (err) {
+      // Record the error for display in views instead of silently showing an empty list on backend 5xx
+      error.value = getApiErrorMessage(err, "加载科技新闻失败，请稍后重试。");
     } finally {
       isLoading.value = false;
     }
   }
 
   async function fetchTopics() {
-    const response = await apiGet<TechTopic[]>("/tech/topics");
-    topics.value = response.data;
+    try {
+      const response = await apiGet<TechTopic[]>("/tech/topics");
+      topics.value = response.data;
+    } catch (err) {
+      // Topic loading failures are also written to error for display in views
+      error.value = getApiErrorMessage(err, "加载话题失败，请稍后重试。");
+    }
   }
 
   function addItemFromSSE(data: TechNewsItem) {
@@ -103,6 +108,7 @@ export const useTechStore = defineStore("tech", () => {
 
   function connectSSE() {
     const authStore = useAuthStore();
+    const sseStore = useSSEStore();
     if (sseConnection.value) {
       sseConnection.value.disconnect();
     }
@@ -112,6 +118,7 @@ export const useTechStore = defineStore("tech", () => {
       token: authStore.token,
       onStateChange: (state) => {
         sseState.value = state;
+        sseStore.setTechState(state);
       },
       eventHandlers: {
         [SSEEventType.ITEM_UPDATE]: (data) => addItemFromSSE(data as never),
@@ -154,6 +161,7 @@ export const useTechStore = defineStore("tech", () => {
     isFeedMode,
     sseState,
     isLoading,
+    error,
     currentPage,
     totalPages,
     setDomain,

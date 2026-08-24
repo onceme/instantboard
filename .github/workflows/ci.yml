@@ -32,9 +32,18 @@ jobs:
         run: cd backend && ruff check app/
 
       - name: Ruff format check
-        run: cd backend && ruff format --check app/
+        # tests/ included: depends on batch 2-C formatting landing. The
+        # current working tree is verified clean (ruff format --check
+        # app/ tests/ exits 0), but the committed tree still has 32
+        # unformatted tests/ files — this change MUST be committed together
+        # with (or after) the batch 2-C reformat, or this gate stays red.
+        run: cd backend && ruff format --check app/ tests/
 
       - name: MyPy type check
+        # SOFT GATE (kept on purpose): mypy currently reports ~425 errors in 48
+        # files, so failing the pipeline today would only block unrelated work.
+        # Track the cleanup separately: fix per-module, then remove "|| true"
+        # to make this a hard gate (do not add new errors in the meantime).
         run: cd backend && mypy app/ --ignore-missing-imports || true
 
   lint-frontend:
@@ -54,20 +63,23 @@ jobs:
       - name: Install frontend dependencies
         run: cd frontend && npm ci
 
+      # Hard gates: verified passing on the current tree
+      # (eslint . --max-warnings=0, prettier --check ., npm run type-check).
       - name: ESLint
-        run: cd frontend && npx eslint src/ --max-warnings=0 || true
+        run: cd frontend && npx eslint . --max-warnings=0
 
       - name: Prettier check
-        run: cd frontend && npx prettier --check src/ || true
+        run: cd frontend && npx prettier --check .
 
       - name: TypeScript type check
-        run: cd frontend && npm run type-check || true
+        run: cd frontend && npm run type-check
 
   test-backend:
     name: Test Backend
     runs-on: ubuntu-latest
     services:
       postgres:
+        # Keep in sync with production: postgres:15-alpine.
         image: postgres:15-alpine
         env:
           POSTGRES_DB: instantboard_test
@@ -143,8 +155,9 @@ jobs:
       - name: Install frontend dependencies
         run: cd frontend && npm ci
 
+      # Hard gate: verified passing (vitest run, all tests green).
       - name: Run frontend tests
-        run: cd frontend && npm run test || true
+        run: cd frontend && npm run test
 
   build-frontend:
     name: Build Frontend

@@ -4,6 +4,7 @@ import urllib.parse
 from datetime import UTC, datetime
 from typing import Any
 
+from app.core.constants import SYSTEM_TENANT_ID
 from app.processors.base import BaseProcessor
 
 logger = logging.getLogger(__name__)
@@ -57,7 +58,10 @@ class TransformerProcessor(BaseProcessor):
         transformed["source_id"] = str(getattr(source, "id", ""))
         transformed["source_name"] = getattr(source, "name", "")
         transformed["category_id"] = item.get("category_id", "")
-        transformed["tenant_id"] = str(getattr(source, "tenant_id", "default") or "default")
+        # Tenant ids are UUID strings everywhere else (SSE routing, DB columns): fall back
+        # to str(SYSTEM_TENANT_ID), never a literal like "default". Unreachable in
+        # practice (Source.tenant_id is NOT NULL).
+        transformed["tenant_id"] = str(getattr(source, "tenant_id", str(SYSTEM_TENANT_ID)) or str(SYSTEM_TENANT_ID))
 
         transformed["priority"] = self._calculate_priority(item, source)
 

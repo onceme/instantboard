@@ -1,0 +1,51 @@
+# Development-only overrides.
+# Auto-loaded when `docker compose up` runs with no -f flags.
+# NOT loaded when -f flags are explicitly passed (e.g., in CI for staging/production).
+#
+# All host port publications and dev convenience bind mounts live here on
+# purpose: Compose merges list fields by concatenation, so the base file
+# cannot "un-publish" ports or "un-mount" volumes added here (and vice
+# versa). Keeping the base file port-less and mount-less guarantees that
+# `-f docker-compose.yml -f docker-compose.prod.yml` exposes nothing except
+# what the prod file itself declares (nginx HTTP/HTTPS) and runs the code
+# baked into the images.
+services:
+  # Direct database access for local debugging/dev tools.
+  postgres:
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+
+  # Direct cache access for local debugging/dev tools.
+  redis:
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+
+  # Only active when the "mongodb" profile is enabled.
+  mongodb:
+    ports:
+      - "${MONGODB_PORT:-27017}:27017"
+
+  api:
+    # Reach the API directly during development; in production traffic
+    # goes through nginx only.
+    ports:
+      - "${API_PORT:-8000}:8000"
+    # Live-reload dev setup: run code straight from the host checkout
+    # instead of the code baked into the image.
+    volumes:
+      - ../backend/app:/app/app
+      - ../backend/entrypoint.sh:/app/entrypoint.sh
+
+  frontend:
+    ports:
+      # Vite dev server.
+      - "${FRONTEND_PORT:-3000}:3000"
+      # Optional direct access to the static (production) frontend image for
+      # debugging. Dev runs Vite on :3000, so this uses a distinct host port
+      # variable/default to avoid binding the same host port twice. Production
+      # never loads this file; there traffic goes through nginx.
+      - "${FRONTEND_STATIC_PORT:-3001}:80"
+    volumes:
+      - ../frontend/src:/app/src
+      - ../frontend/public:/app/public
+      - ../frontend/vite.config.ts:/app/vite.config.ts

@@ -68,16 +68,15 @@ class TestRedisKeys:
 
 class TestGetRedisPool:
     async def test_creates_pool_once(self):
-        with patch("app.core.redis._pool", None):
-            with patch("app.core.redis.ConnectionPool") as MockPool:
-                mock_pool = MagicMock()
-                MockPool.from_url.return_value = mock_pool
+        with patch("app.core.redis._pool", None), patch("app.core.redis.ConnectionPool") as mock_pool_cls:
+            mock_pool = MagicMock()
+            mock_pool_cls.from_url.return_value = mock_pool
 
-                pool1 = await get_redis_pool()
-                pool2 = await get_redis_pool()
+            pool1 = await get_redis_pool()
+            pool2 = await get_redis_pool()
 
-                MockPool.from_url.assert_called_once()
-                assert pool1 is pool2
+            mock_pool_cls.from_url.assert_called_once()
+            assert pool1 is pool2
 
     async def test_returns_existing_pool(self):
         mock_pool = MagicMock()
@@ -89,17 +88,19 @@ class TestGetRedisPool:
 class TestGetRedisClient:
     async def test_creates_client_once(self):
         mock_pool = MagicMock()
-        with patch("app.core.redis._pool", mock_pool):
-            with patch("app.core.redis._client", None):
-                with patch("app.core.redis.Redis") as MockRedis:
-                    mock_client = MagicMock()
-                    MockRedis.return_value = mock_client
+        with (
+            patch("app.core.redis._pool", mock_pool),
+            patch("app.core.redis._client", None),
+            patch("app.core.redis.Redis") as mock_redis_cls,
+        ):
+            mock_client = MagicMock()
+            mock_redis_cls.return_value = mock_client
 
-                    client1 = await get_redis_client()
-                    client2 = await get_redis_client()
+            client1 = await get_redis_client()
+            client2 = await get_redis_client()
 
-                    MockRedis.assert_called_once()
-                    assert client1 is client2
+            mock_redis_cls.assert_called_once()
+            assert client1 is client2
 
     async def test_returns_existing_client(self):
         mock_client = MagicMock()
@@ -112,16 +113,14 @@ class TestCloseRedis:
     async def test_closes_client_and_pool(self):
         mock_client = AsyncMock()
         mock_pool = AsyncMock()
-        with patch("app.core.redis._client", mock_client):
-            with patch("app.core.redis._pool", mock_pool):
-                await close_redis()
-                mock_client.aclose.assert_called_once()
-                mock_pool.aclose.assert_called_once()
+        with patch("app.core.redis._client", mock_client), patch("app.core.redis._pool", mock_pool):
+            await close_redis()
+            mock_client.aclose.assert_called_once()
+            mock_pool.aclose.assert_called_once()
 
     async def test_handles_none_client_and_pool(self):
-        with patch("app.core.redis._client", None):
-            with patch("app.core.redis._pool", None):
-                await close_redis()
+        with patch("app.core.redis._client", None), patch("app.core.redis._pool", None):
+            await close_redis()
 
 
 class TestRedisOperations:

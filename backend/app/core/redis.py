@@ -53,8 +53,17 @@ class RedisKeys:
     SSO_STATE = "sso_state:{state_key}"
     IP_BLACKLIST = "ip_blacklist"
     SEARCH = "t:{tenant_id}:search:{query_hash}"
+    ADMIN_LOGIN_FAIL = "admin_login:fail:{email}"
+    ADMIN_LOGIN_LOCK = "admin_login:lock:{email}"
+    ADMIN_LOGIN_FAIL_IP = "admin_login:fail_ip:{ip}"
+    ADMIN_LOGIN_LOCK_IP = "admin_login:lock_ip:{ip}"
+    WORKER_HEARTBEAT = "scheduler:worker:heartbeat"
 
     SEARCH_TTL = 300
+    # Worker heartbeat TTL: 3x the 15s write interval (app/scheduler/worker.py).
+    # Also used by the api side as the freshness threshold when judging worker
+    # health from the heartbeat (app/services/dashboard.py).
+    WORKER_HEARTBEAT_TTL = 45
 
     @staticmethod
     def session_key(session_id: str) -> str:
@@ -103,6 +112,26 @@ class RedisKeys:
     @staticmethod
     def search_key(tenant_id: str, query_hash: str) -> str:
         return RedisKeys.SEARCH.format(tenant_id=tenant_id, query_hash=query_hash)
+
+    @staticmethod
+    def admin_login_fail_key(email: str) -> str:
+        return RedisKeys.ADMIN_LOGIN_FAIL.format(email=email)
+
+    @staticmethod
+    def admin_login_lock_key(email: str) -> str:
+        return RedisKeys.ADMIN_LOGIN_LOCK.format(email=email)
+
+    @staticmethod
+    def admin_login_fail_ip_key(ip: str) -> str:
+        return RedisKeys.ADMIN_LOGIN_FAIL_IP.format(ip=ip)
+
+    @staticmethod
+    def admin_login_lock_ip_key(ip: str) -> str:
+        return RedisKeys.ADMIN_LOGIN_LOCK_IP.format(ip=ip)
+
+    @staticmethod
+    def worker_heartbeat_key() -> str:
+        return RedisKeys.WORKER_HEARTBEAT
 
 
 async def redis_get(key: str) -> str | None:

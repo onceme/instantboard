@@ -1,5 +1,7 @@
 services:
   postgres-test:
+    # Keep in sync with production: postgres:15-alpine, so local test volumes
+    # stay on the same major version as the staging/prod data directory.
     image: postgres:15-alpine
     environment:
       POSTGRES_DB: instantboard_test
@@ -46,7 +48,5 @@ services:
       sh -c "
         python -m pytest tests/ -v --cov=app --cov-report=html
       "
-    volumes:
-      - ../backend/seed_data.py:/app/seed_data.py:ro
     profiles:
       - test

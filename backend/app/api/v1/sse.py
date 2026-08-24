@@ -8,6 +8,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.core.constants import SYSTEM_TENANT_ID
 from app.core.exceptions import InvalidToken
 from app.core.security import extract_user_from_token
 from app.core.sse_router import event_router
@@ -33,7 +34,10 @@ async def sse_status(
         )
 
     user_id = user.get("user_id", "anonymous")
-    tenant_id = user.get("tenant_id", "default")
+    # Fallback must be str(SYSTEM_TENANT_ID), never a literal like "default": SSE routing
+    # forwards events only on exact tenant_id string match, so a non-UUID literal would
+    # isolate this connection from every published event (data-flow.md §3.5.4).
+    tenant_id = user.get("tenant_id", str(SYSTEM_TENANT_ID))
 
     active_channels = []
     connected_since = None
@@ -70,7 +74,9 @@ async def sse_stream(
         raise InvalidToken()
 
     user_id = user_info.get("user_id", "anonymous")
-    tenant_id = user_info.get("tenant_id", "default")
+    # Same rationale as sse_status: fall back to str(SYSTEM_TENANT_ID), never a literal
+    # like "default", or exact-string tenant routing would deliver no events.
+    tenant_id = user_info.get("tenant_id", str(SYSTEM_TENANT_ID))
     client_id = f"{tenant_id}:{user_id}:{uuid.uuid4()}"
 
     await sse_service.connect(

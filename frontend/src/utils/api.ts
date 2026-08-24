@@ -17,10 +17,61 @@ apiClient.interceptors.request.use((config) => {
   return config;
 });
 
+// Backend 4xx/5xx error envelope: response.data.detail.error (AppException structure)
+export interface ApiErrorDetail {
+  code?: string;
+  message?: string;
+  description?: string;
+}
+
+// Extract a readable error message from an error object for callers to display (falls back to the given fallback)
+export function getApiErrorMessage(err: unknown, fallback: string): string {
+  if (axios.isAxiosError(err)) {
+    const data = err.response?.data as
+      { detail?: { error?: ApiErrorDetail } | string } | undefined;
+    const detail = data?.detail;
+    if (typeof detail === "string") return detail || fallback;
+    if (detail?.error?.message) return detail.error.message;
+    if (detail?.error?.description) return detail.error.description;
+  }
+  return fallback;
+}
+
+// Extract the backend error code (e.g. INVALID_CREDENTIALS) from an error object, if present
+export function getApiErrorCode(err: unknown): string | undefined {
+  if (axios.isAxiosError(err)) {
+    const data = err.response?.data as
+      { detail?: { error?: ApiErrorDetail } } | undefined;
+    return data?.detail?.error?.code;
+  }
+  return undefined;
+}
+
+// Drop the local session and bounce the user to the login page of the entry that created it
+// (admin sessions go back to /ibadmin, SSO sessions to /login)
+function clearSessionAndRedirectToLogin() {
+  const entry = localStorage.getItem("session_entry");
+  localStorage.removeItem("access_token");
+  localStorage.removeItem("refresh_token");
+  localStorage.removeItem("session_entry");
+  window.location.href = entry === "admin" ? "/ibadmin" : "/login";
+}
+
 apiClient.interceptors.response.use(
   (response) => response,
   async (error) => {
     const originalRequest = error.config;
+
+    // 401s on the login flows (SSO: POST /auth/sso/{provider}, local admin: POST /auth/admin/login)
+    // are rethrown to the caller for display, skipping token refresh / clearing auth state / redirects
+    // so login failures are not bounced back to the login page with no visible error
+    const requestUrl: string = originalRequest?.url || "";
+    if (
+      requestUrl.includes("/auth/sso/") ||
+      requestUrl.includes("/auth/admin/login")
+    ) {
+      return Promise.reject(error);
+    }
 
     if (error.response?.status === 401 && !originalRequest._retry) {
       originalRequest._retry = true;
@@ -37,15 +88,11 @@ apiClient.interceptors.response.use(
           originalRequest.headers.Authorization = `Bearer ${data.access_token}`;
           return apiClient(originalRequest);
         } catch {
-          localStorage.removeItem("access_token");
-          localStorage.removeItem("refresh_token");
-          window.location.href = "/login";
+          clearSessionAndRedirectToLogin();
           return Promise.reject(error);
         }
       } else {
-        localStorage.removeItem("access_token");
-        localStorage.removeItem("refresh_token");
-        window.location.href = "/login";
+        clearSessionAndRedirectToLogin();
         return Promise.reject(error);
       }
     }

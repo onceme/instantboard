@@ -14,6 +14,7 @@ class TestHealthCheck:
 
     def test_health_timestamp_is_iso_format(self, client):
         from datetime import datetime
+
         data = client.get("/api/v1/health").json()
         parsed = datetime.fromisoformat(data["timestamp"])
         assert parsed is not None

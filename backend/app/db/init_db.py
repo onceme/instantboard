@@ -1,10 +1,11 @@
 import logging
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.config import settings
+from app.core.constants import SYSTEM_TENANT_ID
 from app.db.session import async_session_factory
 from app.models.base import Base
 from app.models.category import Category
@@ -27,18 +28,23 @@ async def create_tables():
         await _engine.dispose()
 
 
-# Sources with is_active=False are disabled because collectors are not yet implemented
-# (api, web_scrape, social). They are kept as templates for future development.
+# Sources with is_active=False are disabled because no collector can run for them yet
+# (missing web_scrape/social collector, or — for api sources — no config.library wiring
+# and/or required API keys). They are kept as templates for future development.
+# Sources whose collector resolves via app.collectors.resolve_collector (source_type
+# match or config.library fallback) are active by default.
 
 FINANCE_SOURCES = [
     {
         "name": "东方财富-A股实时",
         "source_type": "web_scrape",
         "url": "https://push2.eastmoney.com/api/qt/stock/get",
-        "config": {"selector": "data", "url_pattern": "push2.eastmoney.com"},
+        # EastMoneyCollector is implemented and registered as "eastmoney"; the scheduler
+        # resolves it through the config.library fallback (source_type has none).
+        "config": {"library": "eastmoney", "data_type": "cn_indices"},
         "refresh_interval_seconds": 15,
         "priority": 1,
-        "is_active": False,  # No web_scrape collector
+        "is_active": True,
     },
     {
         "name": "yfinance-沪深300指数",
@@ -52,7 +58,8 @@ FINANCE_SOURCES = [
         },
         "refresh_interval_seconds": 30,
         "priority": 2,
-        "is_active": False,  # No API collector
+        # Resolves via config.library=yfinance
+        "is_active": True,
     },
     {
         "name": "yfinance-世界市场指数",
@@ -66,7 +73,8 @@ FINANCE_SOURCES = [
         },
         "refresh_interval_seconds": 30,
         "priority": 2,
-        "is_active": False,  # No API collector
+        # Resolves via config.library=yfinance
+        "is_active": True,
     },
     {
         "name": "Alpha Vantage-市场指数(failover)",
@@ -75,7 +83,8 @@ FINANCE_SOURCES = [
         "config": {"api_key_env": "ALPHA_VANTAGE_API_KEY", "method": "GET", "function": "TIME_SERIES_INTRADAY"},
         "refresh_interval_seconds": 30,
         "priority": 5,
-        "is_active": False,  # No API collector
+        # Collector exists but the template is incomplete (no symbols, needs ALPHA_VANTAGE_API_KEY)
+        "is_active": False,
     },
     {
         "name": "yfinance-大宗商品",
@@ -88,7 +97,8 @@ FINANCE_SOURCES = [
         },
         "refresh_interval_seconds": 60,
         "priority": 3,
-        "is_active": False,  # No API collector
+        # Resolves via config.library=yfinance
+        "is_active": True,
     },
     {
         "name": "天天基金-官方NAV",
@@ -300,18 +310,16 @@ TECH_CROSS_DOMAIN_SOURCES = [
 
 async def seed_default_data():
     async with async_session_factory() as session:
-        tenant_count = (await session.execute(select(func.count()).select_from(Tenant))).scalar() or 0
-        if tenant_count > 0:
-            logger.info(f"Tenants already exist (count={tenant_count}), skipping seed data")
-            await session.close()
-            return
-
+        # Fix: the old logic skipped the whole seed as soon as the tenants table had any
+        # row, so an interrupted seed could never be completed. Seeding is now idempotent:
+        # there is no global skip; each entity below is "skip if it exists, create if not".
         result = await session.execute(select(Tenant).where(Tenant.slug == "system"))
         system_tenant = result.scalar_one_or_none()
 
         if system_tenant is None:
             system_tenant = Tenant(
-                id="00000000-0000-0000-0000-000000000000",
+                # Reuse the shared constant instead of scattering hardcoded UUID strings.
+                id=SYSTEM_TENANT_ID,
                 name="System",
                 slug="system",
                 plan="enterprise",
@@ -397,60 +405,47 @@ async def seed_default_data():
         else:
             logger.info("Tech category already exists")
 
-        existing_source_count = await session.execute(
-            select(func.count())
-            .select_from(Source)
-            .where(
-                Source.tenant_id == system_tenant.id,
-            )
+        # Fix: the old logic created all sources only when the system tenant had zero of
+        # them, so a partially seeded state was never completed. Now each source is checked
+        # by name and created only if missing (idempotent backfill).
+        existing_names_result = await session.execute(select(Source.name).where(Source.tenant_id == system_tenant.id))
+        existing_source_names = {name for (name,) in existing_names_result.all()}
+
+        tech_sources_defs = (
+            TECH_AI_SOURCES
+            + TECH_ROBOTICS_SOURCES
+            + TECH_EMBEDDED_SOURCES
+            + TECH_SPACE_SOURCES
+            + TECH_CROSS_DOMAIN_SOURCES
         )
-        existing_sources = existing_source_count.scalar() or 0
+        seed_source_defs = [(src, finance_category.id) for src in FINANCE_SOURCES] + [
+            (src, tech_category.id) for src in tech_sources_defs
+        ]
 
-        if existing_sources == 0:
-            all_sources = []
-
-            for src_data in FINANCE_SOURCES:
-                all_sources.append(
-                    Source(
-                        tenant_id=system_tenant.id,
-                        category_id=finance_category.id,
-                        name=src_data["name"],
-                        source_type=src_data["source_type"],
-                        url=src_data["url"],
-                        config=src_data["config"],
-                        refresh_interval_seconds=src_data["refresh_interval_seconds"],
-                        is_active=src_data.get("is_active", True),
-                        priority=src_data["priority"],
-                    )
+        missing_sources = []
+        for src_data, category_id in seed_source_defs:
+            if src_data["name"] in existing_source_names:
+                continue
+            missing_sources.append(
+                Source(
+                    tenant_id=system_tenant.id,
+                    category_id=category_id,
+                    name=src_data["name"],
+                    source_type=src_data["source_type"],
+                    url=src_data["url"],
+                    config=src_data["config"],
+                    refresh_interval_seconds=src_data["refresh_interval_seconds"],
+                    is_active=src_data.get("is_active", True),
+                    priority=src_data["priority"],
                 )
-
-            tech_sources = (
-                TECH_AI_SOURCES
-                + TECH_ROBOTICS_SOURCES
-                + TECH_EMBEDDED_SOURCES
-                + TECH_SPACE_SOURCES
-                + TECH_CROSS_DOMAIN_SOURCES
             )
-            for src_data in tech_sources:
-                all_sources.append(
-                    Source(
-                        tenant_id=system_tenant.id,
-                        category_id=tech_category.id,
-                        name=src_data["name"],
-                        source_type=src_data["source_type"],
-                        url=src_data["url"],
-                        config=src_data["config"],
-                        refresh_interval_seconds=src_data["refresh_interval_seconds"],
-                        is_active=src_data.get("is_active", True),
-                        priority=src_data["priority"],
-                    )
-                )
 
-            for source in all_sources:
+        if missing_sources:
+            for source in missing_sources:
                 session.add(source)
             await session.flush()
 
-            for source in all_sources:
+            for source in missing_sources:
                 health = SourceHealth(
                     source_id=source.id,
                     status="healthy",
@@ -462,9 +457,9 @@ async def seed_default_data():
                 session.add(health)
 
             await session.flush()
-            logger.info(f"Seeded {len(all_sources)} data sources for system tenant")
+            logger.info(f"Seeded {len(missing_sources)} missing data sources for system tenant")
         else:
-            logger.info(f"System tenant already has {existing_sources} sources, skipping source seed")
+            logger.info("All seed sources already exist, skipping source seed")
 
         await session.commit()
         logger.info("Default data seeded successfully")

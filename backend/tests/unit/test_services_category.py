@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.core.exceptions import CategoryNotFound, DuplicateCategory, Forbidden, ValidationError
-from app.services.category import CategoryService, SYSTEM_TENANT_ID, _slugify, _category_to_response
+from app.services.category import SYSTEM_TENANT_ID, CategoryService, _category_to_response, _slugify
 
 
 def _make_category(
@@ -406,6 +406,50 @@ class TestUpdateCategory:
         result = await service.update_category(str(cat.id), data, "tenant-1")
         assert result.success is True
 
+    async def test_update_owner_tenant_with_uuid_attributes(self):
+        """Regression: ORM rows carry tenant_id as uuid.UUID while the JWT tenant id
+        is a str. The owner comparison must normalize, otherwise every update of a
+        custom category 403s."""
+        db, mock_result = _mock_db()
+        redis = _mock_redis()
+
+        owner_id = uuid.uuid4()
+        cat = _make_category(tenant_id=owner_id)
+
+        call_count = 0
+
+        async def execute_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            mock_r = MagicMock()
+            if call_count == 1:
+                mock_r.scalar_one_or_none.return_value = cat
+            elif call_count == 2:
+                mock_r.scalar.return_value = 0
+            return mock_r
+
+        db.execute = execute_side_effect
+
+        from app.schemas.category import CategoryUpdate
+
+        service = CategoryService(db, redis)
+        result = await service.update_category(str(cat.id), CategoryUpdate(name="Renamed"), str(owner_id))
+        assert result.success is True
+        assert cat.name == "Renamed"
+
+    async def test_update_cross_tenant_with_uuid_attributes_forbidden(self):
+        db, mock_result = _mock_db()
+        redis = _mock_redis()
+
+        cat = _make_category(tenant_id=uuid.uuid4())
+        mock_result.scalar_one_or_none.return_value = cat
+
+        from app.schemas.category import CategoryUpdate
+
+        service = CategoryService(db, redis)
+        with pytest.raises(Forbidden, match="other tenants"):
+            await service.update_category(str(cat.id), CategoryUpdate(name="Hacked"), str(uuid.uuid4()))
+
 
 class TestDeleteCategory:
     async def test_delete_success(self):
@@ -460,6 +504,33 @@ class TestDeleteCategory:
         service = CategoryService(db, redis)
         with pytest.raises(ValidationError, match="active sources"):
             await service.delete_category(str(cat.id), "tenant-1")
+
+    async def test_delete_owner_tenant_with_uuid_attributes(self):
+        """Regression: UUID ORM attribute vs str JWT tenant id — the owner delete must
+        succeed for the owning tenant."""
+        db, mock_result = _mock_db()
+        redis = _mock_redis()
+
+        owner_id = uuid.uuid4()
+        cat = _make_category(tenant_id=owner_id)
+        mock_result.scalar_one_or_none.return_value = cat
+        mock_result.scalar.return_value = 0
+
+        service = CategoryService(db, redis)
+        await service.delete_category(str(cat.id), str(owner_id))
+        db.delete.assert_called_once_with(cat)
+
+    async def test_delete_cross_tenant_with_uuid_attributes_forbidden(self):
+        db, mock_result = _mock_db()
+        redis = _mock_redis()
+
+        cat = _make_category(tenant_id=uuid.uuid4())
+        mock_result.scalar_one_or_none.return_value = cat
+
+        service = CategoryService(db, redis)
+        with pytest.raises(Forbidden, match="other tenants"):
+            await service.delete_category(str(cat.id), str(uuid.uuid4()))
+        db.delete.assert_not_called()
 
 
 class TestGetPredefinedCategories:

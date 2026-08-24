@@ -1,10 +1,10 @@
 """Tests for /api/v1/auth endpoints."""
+
 import uuid
-from unittest.mock import patch, AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.core.security import create_access_token, create_refresh_token
-
-from tests.integration.conftest import make_auth_header, make_admin_headers
+from tests.integration.conftest import make_admin_headers, make_auth_header
 
 
 class TestSSOProviders:
@@ -207,7 +207,7 @@ class TestRefreshToken:
 class TestGetCurrentUser:
     def test_get_me_with_valid_token(self, client):
         headers, tenant_id, user_id = make_auth_header(role="user")
-        from unittest.mock import patch, AsyncMock
+        from unittest.mock import AsyncMock, patch
 
         with patch("app.api.v1.auth.AuthService") as mock_cls:
             mock_service = AsyncMock()

@@ -1,4 +1,4 @@
-# Environment (.env.example 入 Git，其他不入)
+# Environment (.env.example is committed to Git, everything else is not)
 .env
 .env.local
 .env.staging
@@ -35,6 +35,10 @@ Thumbs.db
 # Logs
 *.log
 
+# SQLite test artifacts (created by the test suite via TEST_DATABASE_URL default)
+test.db
+*.sqlite3
+
 # Docker
 docker/nginx/ssl/*.pem
 docker/nginx/ssl/*.key
@@ -43,6 +47,9 @@ docker/nginx/ssl/*.key
 coverage.xml
 htmlcov/
 .coverage
+
+# Tool caches
+.ruff_cache/
 
 # Temprate
 *.bak

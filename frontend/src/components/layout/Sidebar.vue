@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { TrendingUp, Code, Activity, Settings, LogOut } from "lucide-vue-next";
 import { useAuthStore } from "@/stores/auth";
 import ThemeToggle from "@/components/common/ThemeToggle.vue";
@@ -9,25 +9,50 @@ const props = defineProps<{
   collapsed: boolean;
   mobileVisible: boolean;
 }>();
-
 const emit = defineEmits<{
   close: [];
 }>();
 
 const route = useRoute();
+const router = useRouter();
 const authStore = useAuthStore();
 
-const navItems = [
+// SSO-entry sessions keep the full front-end navigation
+const FRONT_NAV_ITEMS = [
   { path: "/finance", name: "财经", icon: TrendingUp },
   { path: "/tech", name: "科技", icon: Code },
   { path: "/dashboard", name: "仪表盘", icon: Activity },
   { path: "/settings", name: "设置", icon: Settings },
 ];
 
+// Admin-entry sessions only expose back-office entries
+const ADMIN_NAV_ITEMS = [
+  { path: "/dashboard", name: "仪表盘", icon: Activity },
+  { path: "/settings", name: "设置", icon: Settings },
+];
+
+const navItems = computed(() => {
+  if (authStore.sessionEntry === "admin") return ADMIN_NAV_ITEMS;
+  // /dashboard requires the admin role (see router guard); hide the entry from
+  // regular SSO users so the menu matches what they can actually open.
+  // Settings stays visible for everyone — the route has no admin gate;
+  // SettingsView splits its sections by session entry instead.
+  return FRONT_NAV_ITEMS.filter(
+    (item) => item.path !== "/dashboard" || authStore.isAdmin,
+  );
+});
+
+// Labels/user section are visible when the sidebar is expanded OR when the
+// mobile drawer is open (on mobile `collapsed` is always true, so without
+// this the drawer would render as a bare icon rail)
+const showLabels = computed(() => !props.collapsed || props.mobileVisible);
+
 const currentPath = computed(() => route.path);
 
-function handleLogout() {
-  authStore.logout();
+async function handleLogout() {
+  // logout() returns the login route matching the current session entry
+  const target = await authStore.logout();
+  router.push(target);
 }
 
 const userName = computed(() => authStore.user?.name || "用户");
@@ -43,7 +68,7 @@ const userName = computed(() => authStore.user?.name || "用户");
   >
     <div class="sidebar-header">
       <div class="brand-logo">IB</div>
-      <span v-if="!props.collapsed" class="brand-name">InstantBoard</span>
+      <span v-if="showLabels" class="brand-name">InstantBoard</span>
     </div>
 
     <nav class="sidebar-nav">
@@ -60,13 +85,13 @@ const userName = computed(() => authStore.user?.name || "用户");
         @click="emit('close')"
       >
         <component :is="item.icon" class="nav-icon" :size="20" />
-        <span v-if="!props.collapsed" class="nav-label">{{ item.name }}</span>
+        <span v-if="showLabels" class="nav-label">{{ item.name }}</span>
       </router-link>
     </nav>
 
     <div class="sidebar-footer">
-      <ThemeToggle v-if="!props.collapsed" />
-      <div v-if="!props.collapsed" class="user-section">
+      <ThemeToggle v-if="showLabels" />
+      <div v-if="showLabels" class="user-section">
         <div class="user-info">
           <div class="user-avatar">
             {{ userName.charAt(0) }}
@@ -99,11 +124,6 @@ const userName = computed(() => authStore.user?.name || "用户");
 
 .sidebar.collapsed {
   width: var(--sidebar-collapsed-width);
-}
-
-.sidebar.mobile-visible {
-  width: 220px;
-  transform: translateX(0);
 }
 
 .sidebar-header {
@@ -228,16 +248,30 @@ const userName = computed(() => authStore.user?.name || "用户");
   color: #f87171;
 }
 
+/* <768px (mobile breakpoint, see variables.css): the sidebar becomes an
+   off-canvas drawer. On mobile `collapsed` is always true as well, so the
+   explicit `.collapsed.mobile-visible` rule (highest specificity) must win,
+   otherwise the drawer stays translated off-screen and never appears. */
 @media (max-width: 767px) {
   .sidebar {
     transform: translateX(-100%);
-    width: 220px;
+    width: min(280px, 85vw);
+    box-shadow: var(--shadow-lg);
   }
-  .sidebar.mobile-visible {
-    transform: translateX(0);
-  }
+
   .sidebar.collapsed {
     transform: translateX(-100%);
+    width: min(280px, 85vw);
+  }
+
+  .sidebar.mobile-visible {
+    transform: translateX(0);
+    width: min(280px, 85vw);
+  }
+
+  .sidebar.collapsed.mobile-visible {
+    transform: translateX(0);
+    width: min(280px, 85vw);
   }
 }
 </style>

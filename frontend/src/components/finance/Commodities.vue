@@ -4,6 +4,7 @@ import { formatCurrency, formatPercent, getChangeClass } from "@/utils/format";
 import { computed, ref } from "vue";
 import { COMMODITY_GROUPS } from "@/types";
 import { RefreshCw } from "lucide-vue-next";
+import ErrorAlert from "@/components/common/ErrorAlert.vue";
 
 const financeStore = useFinanceStore();
 const refreshing = ref(false);
@@ -52,38 +53,48 @@ async function refresh() {
       </button>
     </div>
 
-    <div
-      v-for="[groupKey, group] in Object.entries(groupedCommodities)"
-      :key="groupKey"
-      class="commodity-group"
-    >
-      <h3 class="group-label">
-        {{ group.label }}
-      </h3>
-      <div class="commodity-list">
-        <div
-          v-for="item in group.items"
-          :key="item.symbol"
-          class="commodity-row"
-        >
-          <div class="commodity-info">
-            <span class="commodity-name">{{ item.name }}</span>
-            <span class="commodity-unit">{{ item.unit }}</span>
-          </div>
-          <div class="commodity-data">
-            <span class="commodity-price">{{
-              formatCurrency(item.value)
-            }}</span>
-            <span
-              :class="changeClass(item.change_percent)"
-              class="commodity-change"
-            >
-              {{ formatPercent(item.change_percent) }}
-            </span>
+    <ErrorAlert
+      v-if="financeStore.commoditiesError"
+      :message="financeStore.commoditiesError"
+      retryable
+      :retrying="refreshing"
+      @retry="refresh"
+    />
+
+    <template v-if="!financeStore.commoditiesError">
+      <div
+        v-for="[groupKey, group] in Object.entries(groupedCommodities)"
+        :key="groupKey"
+        class="commodity-group"
+      >
+        <h3 class="group-label">
+          {{ group.label }}
+        </h3>
+        <div class="commodity-list">
+          <div
+            v-for="item in group.items"
+            :key="item.symbol"
+            class="commodity-row"
+          >
+            <div class="commodity-info">
+              <span class="commodity-name">{{ item.name }}</span>
+              <span class="commodity-unit">{{ item.unit }}</span>
+            </div>
+            <div class="commodity-data">
+              <span class="commodity-price">{{
+                formatCurrency(item.value)
+              }}</span>
+              <span
+                :class="changeClass(item.change_percent)"
+                class="commodity-change"
+              >
+                {{ formatPercent(item.change_percent) }}
+              </span>
+            </div>
           </div>
         </div>
       </div>
-    </div>
+    </template>
   </div>
 </template>
 

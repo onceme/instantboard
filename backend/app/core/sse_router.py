@@ -23,10 +23,14 @@ class SSEEventType(StrEnum):
 
 
 class SSEConnection:
-    def __init__(self, client_id: str, categories: list[str], tenant_id: str):
+    def __init__(self, client_id: str, categories: list[str], tenant_id: str, user_id: str | None = None):
         self.client_id = client_id
         self.categories = categories
         self.tenant_id = tenant_id
+        # Keep the owning user so the disconnect audit can match the exact
+        # sse_connections row (the in-memory registry is keyed by client_id,
+        # which is not stored in the DB row).
+        self.user_id = user_id
         self.queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
         self.is_active = True
         self.connected_at = datetime.now(UTC)
@@ -49,8 +53,14 @@ class SSEEventRouter:
     _redis_listener_task: asyncio.Task | None = None
     _event_counter: int = 0
 
-    def register(self, client_id: str, categories: list[str], tenant_id: str) -> SSEConnection:
-        conn = SSEConnection(client_id, categories, tenant_id)
+    def register(
+        self,
+        client_id: str,
+        categories: list[str],
+        tenant_id: str,
+        user_id: str | None = None,
+    ) -> SSEConnection:
+        conn = SSEConnection(client_id, categories, tenant_id, user_id=user_id)
         self._connections[client_id] = conn
         for category in categories:
             self._subscriptions.setdefault(category, set()).add(client_id)

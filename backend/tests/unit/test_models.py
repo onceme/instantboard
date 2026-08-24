@@ -2,20 +2,31 @@ import uuid
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import Boolean, CheckConstraint, Column, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Column,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import RelationshipProperty
 
 from app.models.base import Base, BaseModel, TenantMixin, TimestampMixin
+from app.models.category import Category
+from app.models.dashboard import DashboardSnapshot
+from app.models.finance import FinanceQuote, FinanceSymbol, FundNAVEstimate
+from app.models.item import Item
+from app.models.source import Source, SourceHealth
+from app.models.sse import SSEConnection
 from app.models.tenant import Tenant
 from app.models.user import User
-from app.models.category import Category
-from app.models.source import Source, SourceHealth
-from app.models.item import Item
-from app.models.finance import FinanceSymbol, FinanceQuote, FundNAVEstimate
 from app.models.watchlist import WatchlistItem
-from app.models.sse import SSEConnection
-from app.models.dashboard import DashboardSnapshot
 
 
 def _get_column(model_class, name):
@@ -163,8 +174,14 @@ class TestTenant:
 
     def test_instantiation(self):
         tenant = Tenant(
-            name="Test Tenant", slug="test-tenant", plan="free",
-            settings={}, is_active=True, max_users=5, max_categories=10, max_sources=50,
+            name="Test Tenant",
+            slug="test-tenant",
+            plan="free",
+            settings={},
+            is_active=True,
+            max_users=5,
+            max_categories=10,
+            max_sources=50,
         )
         assert tenant.name == "Test Tenant"
         assert tenant.slug == "test-tenant"
@@ -1207,20 +1224,42 @@ class TestDashboardSnapshot:
 class TestModelsInitExports:
     def test_all_models_in_all(self):
         expected = {
-            "Base", "TimestampMixin", "TenantMixin", "BaseModel",
-            "Tenant", "User", "Category", "Source", "SourceHealth",
-            "Item", "FinanceSymbol", "FinanceQuote", "FundNAVEstimate",
-            "WatchlistItem", "SSEConnection", "DashboardSnapshot",
+            "Base",
+            "TimestampMixin",
+            "TenantMixin",
+            "BaseModel",
+            "Tenant",
+            "User",
+            "Category",
+            "Source",
+            "SourceHealth",
+            "Item",
+            "FinanceSymbol",
+            "FinanceQuote",
+            "FundNAVEstimate",
+            "WatchlistItem",
+            "SSEConnection",
+            "DashboardSnapshot",
         }
         from app.models import __all__
+
         assert set(__all__) == expected
 
     def test_metadata_tables(self):
         table_names = set(Base.metadata.tables.keys())
         expected = {
-            "tenants", "users", "categories", "sources", "source_health",
-            "items", "finance_symbols", "finance_quotes", "fund_nav_estimates",
-            "watchlist_items", "sse_connections", "dashboard_snapshots",
+            "tenants",
+            "users",
+            "categories",
+            "sources",
+            "source_health",
+            "items",
+            "finance_symbols",
+            "finance_quotes",
+            "fund_nav_estimates",
+            "watchlist_items",
+            "sse_connections",
+            "dashboard_snapshots",
         }
         assert expected.issubset(table_names)
 
@@ -1281,9 +1320,7 @@ class TestModelsDatabasePersistAndRetrieve:
         db_session.add(tenant)
         await db_session.flush()
 
-        category = Category(
-            tenant_id=tenant.id, name="News", slug="news", type="news"
-        )
+        category = Category(tenant_id=tenant.id, name="News", slug="news", type="news")
         db_session.add(category)
         await db_session.flush()
 
@@ -1311,9 +1348,7 @@ class TestModelsDatabasePersistAndRetrieve:
         db_session.add(tenant)
         await db_session.flush()
 
-        category = Category(
-            tenant_id=tenant.id, name="Custom", slug="custom", type="custom"
-        )
+        category = Category(tenant_id=tenant.id, name="Custom", slug="custom", type="custom")
         db_session.add(category)
         await db_session.flush()
 

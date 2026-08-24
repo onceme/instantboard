@@ -4,6 +4,7 @@ import { formatNumber, formatPercent, getChangeClass } from "@/utils/format";
 import { computed, ref } from "vue";
 import { MARKET_REGION_GROUPS } from "@/types";
 import { RefreshCw } from "lucide-vue-next";
+import ErrorAlert from "@/components/common/ErrorAlert.vue";
 
 const financeStore = useFinanceStore();
 const refreshing = ref(false);
@@ -66,34 +67,46 @@ async function refresh() {
       </button>
     </div>
 
-    <div
-      v-for="[groupKey, group] in Object.entries(groupedIndices)"
-      :key="groupKey"
-      class="region-group"
-    >
-      <h3 class="region-label">
-        {{ MARKET_REGION_GROUPS[groupKey]?.label || groupKey }}
-      </h3>
-      <div class="indices-list">
-        <div v-for="index in group" :key="index.symbol" class="index-row">
-          <div class="index-info">
-            <span class="index-name">{{ index.name }}</span>
-            <span class="index-status">{{
-              marketStatusLabel(index.market_status)
-            }}</span>
-          </div>
-          <div class="index-data">
-            <span class="index-value">{{ formatNumber(index.value, 2) }}</span>
-            <span
-              :class="changeClass(index.change_percent)"
-              class="index-change"
-            >
-              {{ formatPercent(index.change_percent) }}
-            </span>
+    <ErrorAlert
+      v-if="financeStore.marketIndicesError"
+      :message="financeStore.marketIndicesError"
+      retryable
+      :retrying="refreshing"
+      @retry="refresh"
+    />
+
+    <template v-if="!financeStore.marketIndicesError">
+      <div
+        v-for="[groupKey, group] in Object.entries(groupedIndices)"
+        :key="groupKey"
+        class="region-group"
+      >
+        <h3 class="region-label">
+          {{ MARKET_REGION_GROUPS[groupKey]?.label || groupKey }}
+        </h3>
+        <div class="indices-list">
+          <div v-for="index in group" :key="index.symbol" class="index-row">
+            <div class="index-info">
+              <span class="index-name">{{ index.name }}</span>
+              <span class="index-status">{{
+                marketStatusLabel(index.market_status)
+              }}</span>
+            </div>
+            <div class="index-data">
+              <span class="index-value">{{
+                formatNumber(index.value, 2)
+              }}</span>
+              <span
+                :class="changeClass(index.change_percent)"
+                class="index-change"
+              >
+                {{ formatPercent(index.change_percent) }}
+              </span>
+            </div>
           </div>
         </div>
       </div>
-    </div>
+    </template>
   </div>
 </template>
 

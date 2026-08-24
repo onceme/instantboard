@@ -5,6 +5,13 @@ import { ref } from "vue";
 defineProps<{
   message: string;
   code?: string;
+  // When retryable is passed, show a "Retry" button that emits the retry event on click
+  retryable?: boolean;
+  retrying?: boolean;
+}>();
+
+defineEmits<{
+  retry: [];
 }>();
 
 const visible = ref(true);
@@ -22,6 +29,14 @@ function close() {
         <span v-if="code" class="alert-code">{{ code }}</span>
         <span class="alert-message">{{ message }}</span>
       </div>
+      <button
+        v-if="retryable"
+        class="alert-retry"
+        :disabled="retrying"
+        @click="$emit('retry')"
+      >
+        {{ retrying ? "重试中…" : "重试" }}
+      </button>
       <button class="alert-close" @click="close">
         <X :size="14" />
       </button>
@@ -78,5 +93,25 @@ function close() {
 
 .alert-close:hover {
   background-color: rgba(239, 68, 68, 0.15);
+}
+
+.alert-retry {
+  flex-shrink: 0;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+  color: var(--danger);
+  transition: background-color var(--transition-fast);
+}
+
+.alert-retry:hover {
+  background-color: rgba(239, 68, 68, 0.15);
+}
+
+.alert-retry:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 </style>

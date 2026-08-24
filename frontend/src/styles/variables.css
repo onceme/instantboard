@@ -96,7 +96,40 @@
   --down-color: #f87171;
 }
 
-@media (max-width: 768px) {
+/*
+ * Responsive breakpoint system: 640 / 768 / 1024 / 1440 / 1920 (px).
+ *
+ * Sized against the W3Schools browser display statistics
+ * (https://www.w3schools.com/browsers/browsers_display.asp, latest published
+ * row Jan 2023) plus the dominant mobile/tablet device sizes:
+ *
+ *   W3Schools desktop resolutions:
+ *     1920x1080 18.4% | 1366x768 18.2% | 1280x1024 1.1% | 1280x800 1.0%
+ *     1024x768 0.7%  | "other high" 47.2% (1536x864, 1440x900, 1280x720,
+ *     2560x1440, ...) | lower 13.4% (mostly phones)
+ *   Phone widths: 360 (Galaxy S/A), 375 (iPhone SE/8), 390/393 (iPhone
+ *     12-15), 412/414 (Pixel, iPhone XR/11/Plus)
+ *   Tablet widths: 768/820/834 portrait, 1024/1180/1194 landscape (iPad)
+ *
+ * Coverage per tier:
+ *   <640px         phones (360x800, 375x667, 390x844, 393x873, 414x896)
+ *   640-767px      large phones / phablets, still mobile drawer layout
+ *   768-1023px     tablets portrait (768x1024, 820x1180, 834x1194):
+ *                  collapsed 60px icon-rail sidebar
+ *   1024-1439px    tablets landscape + laptops (1024x768, 1280x720,
+ *                  1280x800, 1280x1024, 1366x768): full 220px sidebar
+ *   1440-1919px    large laptops / desktops (1440x900, 1536x864):
+ *                  full sidebar + 300px right panel
+ *   >=1920px       full HD and above (1920x1080, 2560x1440): same as above;
+ *                  .main-content is capped at 1600px and centered so ultra
+ *                  wide screens do not over-stretch (see AppLayout.vue)
+ *
+ * The JS breakpoints in src/utils/constants.ts (useResponsive) use the
+ * same thresholds. Modern evergreen browsers only — no vendor prefixes.
+ */
+
+/* <768px: mobile — sidebar off-canvas, tighter paddings */
+@media (max-width: 767px) {
   :root {
     --sidebar-width: 0px;
     --right-panel-width: 0px;
@@ -104,6 +137,7 @@
   }
 }
 
+/* 768-1023px: tablet — collapsed icon-rail sidebar */
 @media (min-width: 768px) and (max-width: 1023px) {
   :root {
     --sidebar-width: 60px;
@@ -111,7 +145,8 @@
   }
 }
 
-@media (min-width: 1024px) and (max-width: 1365px) {
+/* 1024-1439px: laptop — full sidebar but right panel hidden */
+@media (min-width: 1024px) and (max-width: 1439px) {
   :root {
     --right-panel-width: 0px;
   }

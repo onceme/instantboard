@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
-import { ref, computed } from "vue";
-import type { SSEConnectionState } from "@/types";
+import { ref } from "vue";
+import { SSEConnectionState } from "@/types";
 
 export const useSSEStore = defineStore("sse", () => {
   const financeState = ref<SSEConnectionState>(SSEConnectionState.DISCONNECTED);
@@ -8,20 +8,6 @@ export const useSSEStore = defineStore("sse", () => {
   const dashboardState = ref<SSEConnectionState>(
     SSEConnectionState.DISCONNECTED,
   );
-
-  const overallState = computed(() => {
-    const states = [financeState.value, techState.value, dashboardState.value];
-    if (states.every((s) => s === SSEConnectionState.CONNECTED)) {
-      return SSEConnectionState.CONNECTED;
-    }
-    if (states.some((s) => s === SSEConnectionState.RECONNECTING)) {
-      return SSEConnectionState.RECONNECTING;
-    }
-    if (states.every((s) => s === SSEConnectionState.DISCONNECTED)) {
-      return SSEConnectionState.DISCONNECTED;
-    }
-    return SSEConnectionState.CONNECTING;
-  });
 
   function setFinanceState(state: SSEConnectionState) {
     financeState.value = state;
@@ -39,7 +25,6 @@ export const useSSEStore = defineStore("sse", () => {
     financeState,
     techState,
     dashboardState,
-    overallState,
     setFinanceState,
     setTechState,
     setDashboardState,

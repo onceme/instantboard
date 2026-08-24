@@ -9,6 +9,7 @@ from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.constants import SYSTEM_TENANT_ID
 from app.core.redis import redis_get, redis_set
 from app.models.category import Category
 from app.models.item import Item
@@ -152,20 +153,46 @@ class TechService:
     ) -> dict:
         tech_category = await self._get_tech_category(tenant_id)
 
+        # Previously, when the category was missing, accessing tech_category.id directly
+        # raised AttributeError and caused a bare 500. Log a warning and return an empty
+        # success envelope instead.
+        if tech_category is None:
+            logger.warning(f"Tech category not found for tenant {tenant_id}, returning empty news list")
+            return {
+                "data": [],
+                "meta": {
+                    "total": 0,
+                    "page": page,
+                    "page_size": page_size,
+                },
+            }
+
         stmt = (
             select(Item)
             .options(selectinload(Item.source))
             .where(
-                Item.tenant_id == tenant_id,
+                # Collected items belong to the system tenant; include system-tenant rows as
+                # well, otherwise regular tenants can never see them.
+                Item.tenant_id.in_([tenant_id, SYSTEM_TENANT_ID]),
                 Item.category_id == tech_category.id,
             )
         )
 
+        # JSONB containment filters. topic_tags is a JSONB column, so the right operand
+        # of @> must be jsonb as well. Routing the filter through the ORM comparator
+        # (Item.topic_tags.contains(...)) makes SQLAlchemy type the bound value with the
+        # column's JSONB type and emit "@> :param::JSONB", letting asyncpg send a real
+        # jsonb value. The previous raw `text(...).bindparams(tag=json.dumps([...]))`
+        # typed the operand as varchar, which PostgreSQL rejects ("operator does not
+        # exist: jsonb @> character varying") -> every domain/subcategory-filtered
+        # /tech/news request 500'd on PostgreSQL. This stays backend-safe because the
+        # expression is only ever executed against PostgreSQL (sqlite unit tests mock
+        # the session), and the value is a bound parameter, never string-interpolated.
         if domain and domain in VALID_DOMAINS:
-            stmt = stmt.where(text("topic_tags @> :domain_tag").bindparams(domain_tag=json.dumps([domain])))
+            stmt = stmt.where(Item.topic_tags.contains([domain]))
 
         if subcategory:
-            stmt = stmt.where(text("topic_tags @> :subcat_tag").bindparams(subcat_tag=json.dumps([subcategory])))
+            stmt = stmt.where(Item.topic_tags.contains([subcategory]))
 
         if source_id:
             stmt = stmt.where(Item.source_id == source_id)
@@ -249,12 +276,22 @@ class TechService:
 
         since = datetime.now(UTC) - timedelta(days=7)
 
+        # Same missing-category protection as get_news, avoiding an AttributeError (bare
+        # 500) from tech_category.id.
+        if tech_category is None:
+            logger.warning(f"Tech category not found for tenant {tenant_id}, returning empty topics list")
+            return []
+
+        # Same as get_news: the topics aggregation must include system-tenant rows too,
+        # otherwise regular tenants get empty stats.
+        system_tenant_id = str(SYSTEM_TENANT_ID)
+
         if domain and domain in VALID_DOMAINS:
             tag_filter = json.dumps([domain])
             sql = text("""
                 SELECT tag, COUNT(*) as count, MAX(published_at) as last_active_at
                 FROM items, jsonb_array_elements_text(topic_tags) AS tag
-                WHERE tenant_id = :tenant_id
+                WHERE tenant_id IN (:tenant_id, :system_tenant_id)
                   AND category_id = :category_id
                   AND published_at >= :since
                   AND topic_tags @> :domain_tag
@@ -265,6 +302,7 @@ class TechService:
                 sql,
                 {
                     "tenant_id": tenant_id,
+                    "system_tenant_id": system_tenant_id,
                     "category_id": str(tech_category.id),
                     "since": since,
                     "domain_tag": tag_filter,
@@ -274,7 +312,7 @@ class TechService:
             sql = text("""
                 SELECT tag, COUNT(*) as count, MAX(published_at) as last_active_at
                 FROM items, jsonb_array_elements_text(topic_tags) AS tag
-                WHERE tenant_id = :tenant_id
+                WHERE tenant_id IN (:tenant_id, :system_tenant_id)
                   AND category_id = :category_id
                   AND published_at >= :since
                 GROUP BY tag
@@ -284,6 +322,7 @@ class TechService:
                 sql,
                 {
                     "tenant_id": tenant_id,
+                    "system_tenant_id": system_tenant_id,
                     "category_id": str(tech_category.id),
                     "since": since,
                 },

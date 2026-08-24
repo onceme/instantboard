@@ -230,7 +230,7 @@ class RequestMetricsMiddleware:
 | 快速指标 | `system_metric_update` | 10s | 值变化超过阈值时推送 (CPU>5%变化) |
 | 中频指标 | `db_metric_update` | 30s | 每次采集后推送 |
 | 慢指标 | `business_metric_update` | 5min | 每次采集后推送 |
-| 数据源健康 | `source_health_update` | 实时 | 状态变更时立即推送 |
+| 数据源健康 | `source_health_update` | 实时 | 状态变更时立即推送 (完整payload契约见 [data-flow.md](data-flow.md) §3.5.4) |
 | 心跳 | `heartbeat` | 30s | 固定 |
 
 **增量推送优化**:

@@ -4,14 +4,15 @@ import type {
   DashboardSystemInfo,
   ServiceHealth,
   DataSourceHealthSummary,
-  DataSourceHealthDetail,
   SchedulerStatus,
   SSEStats,
-  SSEEventType,
+  SourceHealthUpdateEvent,
 } from "@/types";
+import { SSEEventType } from "@/types";
 import { apiGet } from "@/utils/api";
 import { SSEConnection, SSEConnectionState } from "@/utils/sse.ts";
 import { useAuthStore } from "./auth";
+import { useSSEStore } from "./sse";
 
 export const useDashboardStore = defineStore("dashboard", () => {
   const systemInfo = ref<DashboardSystemInfo | null>(null);
@@ -74,29 +75,48 @@ export const useDashboardStore = defineStore("dashboard", () => {
     }
   }
 
-  function updateSourceHealthFromSSE(data: DataSourceHealthDetail) {
-    if (dataSources.value) {
-      const index = dataSources.value.sources.findIndex(
-        (s) => s.id === data.id,
-      );
-      if (index >= 0) {
-        dataSources.value.sources[index] = data;
+  function updateSourceHealthFromSSE(data: SourceHealthUpdateEvent) {
+    // Contract: docs/design/data-flow.md §3.5.4. The backend publishes the
+    // full source_health row keyed by source_id (the old payload only had
+    // source_id/status and this code matched on data.id, so rows never
+    // refreshed). Merge the mutable health fields into the existing row and
+    // recompute the summary counters; never overwrite identity columns.
+    if (!dataSources.value) return;
 
-        dataSources.value.healthy = dataSources.value.sources.filter(
-          (s) => s.status === "healthy",
-        ).length;
-        dataSources.value.degraded = dataSources.value.sources.filter(
-          (s) => s.status === "degraded",
-        ).length;
-        dataSources.value.down = dataSources.value.sources.filter(
-          (s) => s.status === "down",
-        ).length;
-      }
-    }
+    const index = dataSources.value.sources.findIndex(
+      (s) => s.id === data.source_id,
+    );
+    if (index < 0) return;
+
+    const row = dataSources.value.sources[index];
+    dataSources.value.sources[index] = {
+      ...row,
+      status: data.status,
+      last_error: data.last_error ?? undefined,
+      last_success_at: data.last_success_at ?? row.last_success_at,
+      last_failure_at: data.last_failure_at ?? row.last_failure_at,
+      avg_response_time_ms:
+        data.avg_response_time_ms ?? row.avg_response_time_ms,
+      consecutive_failures:
+        data.consecutive_failures ?? row.consecutive_failures,
+      total_fetches_24h: data.total_fetches_24h ?? row.total_fetches_24h,
+      success_rate_24h: data.success_rate_24h ?? row.success_rate_24h,
+    };
+
+    dataSources.value.healthy = dataSources.value.sources.filter(
+      (s) => s.status === "healthy",
+    ).length;
+    dataSources.value.degraded = dataSources.value.sources.filter(
+      (s) => s.status === "degraded",
+    ).length;
+    dataSources.value.down = dataSources.value.sources.filter(
+      (s) => s.status === "down",
+    ).length;
   }
 
   function connectSSE() {
     const authStore = useAuthStore();
+    const sseStore = useSSEStore();
     if (sseConnection.value) {
       sseConnection.value.disconnect();
     }
@@ -106,12 +126,13 @@ export const useDashboardStore = defineStore("dashboard", () => {
       token: authStore.token,
       onStateChange: (state) => {
         sseState.value = state;
+        sseStore.setDashboardState(state);
       },
       eventHandlers: {
         [SSEEventType.SYSTEM_METRIC_UPDATE]: (data) =>
           updateSystemMetricFromSSE(data as never),
         [SSEEventType.SOURCE_HEALTH_UPDATE]: (data) =>
-          updateSourceHealthFromSSE(data as never),
+          updateSourceHealthFromSSE(data as SourceHealthUpdateEvent),
       },
     });
 
@@ -152,6 +173,7 @@ export const useDashboardStore = defineStore("dashboard", () => {
     fetchDataSources,
     fetchScheduler,
     fetchSSEStats,
+    updateSourceHealthFromSSE,
     connectSSE,
     disconnectSSE,
     init,

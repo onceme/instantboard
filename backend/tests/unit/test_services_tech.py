@@ -6,13 +6,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.services.tech import (
-    TechService,
     DOMAIN_LABELS,
+    HALF_LIFE_SECONDS,
+    KEYWORD_TO_TAG,
     SUBCATEGORY_TO_DOMAIN,
     TOPIC_TAG_LABELS,
-    KEYWORD_TO_TAG,
     VALID_DOMAINS,
-    HALF_LIFE_SECONDS,
+    TechService,
 )
 
 
@@ -708,7 +708,7 @@ class TestConstants:
         assert "space" in DOMAIN_LABELS
 
     def test_valid_domains(self):
-        assert VALID_DOMAINS == {"robotics", "ai", "embedded", "space"}
+        assert {"robotics", "ai", "embedded", "space"} == VALID_DOMAINS
 
     def test_subcategory_to_domain(self):
         assert SUBCATEGORY_TO_DOMAIN["humanoid"] == "robotics"

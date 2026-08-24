@@ -22,6 +22,9 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
       - name: Login to GHCR
         uses: docker/login-action@v4
         with:
@@ -41,6 +44,7 @@ jobs:
           context: backend
           file: backend/Dockerfile
           target: production
+          platforms: linux/amd64,linux/arm/v7
           push: true
           tags: |
             ghcr.io/${{ env.IMAGE_PREFIX }}-api:staging-latest
@@ -54,6 +58,7 @@ jobs:
           context: frontend
           file: frontend/Dockerfile
           target: prod
+          platforms: linux/amd64,linux/arm/v7
           push: true
           tags: |
             ghcr.io/${{ env.IMAGE_PREFIX }}-frontend:staging-latest
@@ -67,6 +72,9 @@ jobs:
     needs: build-and-push
     if: github.ref == 'refs/heads/staging'
     environment: staging
+    # NOTE: this deploy does NOT wait for the CI workflow — GitHub Actions
+    # cannot express cross-workflow "needs". Enforce CI via branch protection
+    # instead: require the CI jobs as status checks before merging to staging.
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -75,15 +83,80 @@ jobs:
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.STAGING_HOST }}
+          port: ${{ secrets.STAGING_PORT }}
           username: ${{ secrets.STAGING_USER }}
           key: ${{ secrets.STAGING_SSH_KEY }}
           script: |
+            # Fail fast: every command must succeed, especially the git sync
+            # below — never deploy from a dirty or stale working tree.
+            set -e
+            export IMAGE_REGISTRY="${{ env.REGISTRY }}"
+            export IMAGE_PREFIX="${{ env.IMAGE_PREFIX }}"
+            export IMAGE_TAG="staging-latest"
             cd /opt/instantboard
-            docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml pull
-            docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up -d --remove-orphans
+            # Sync /opt/instantboard to the exact commit being deployed so the
+            # compose/config files on the host always match the images built
+            # from it (github.sha is the same commit in both jobs of this
+            # workflow run). This eliminates on-host file drift: previously the
+            # tree was never updated, so the running stack used whatever files
+            # happened to be on the machine. If fetch/checkout fails (e.g.
+            # uncommitted local changes), the deploy aborts on purpose — there
+            # is deliberately NO `git reset --hard` here (it would destroy
+            # local files on the host) and NO silent fallback.
+            git fetch origin && git checkout "${{ github.sha }}"
+            # Defensive: ensure gitignored directories used by compose exist
+            mkdir -p docker/nginx/ssl
+            if docker compose version >/dev/null 2>&1; then DC="docker compose"; else DC="docker-compose"; fi
+            $DC -f docker/docker-compose.yml -f docker/docker-compose.prod.yml --env-file .env pull
+            # Tear down existing containers/networks; NAMED VOLUMES (data) ARE PRESERVED
+            # This reliably removes orphans from any prior failed deploy
+            $DC -f docker/docker-compose.yml -f docker/docker-compose.prod.yml --env-file .env down
+            $DC -f docker/docker-compose.yml -f docker/docker-compose.prod.yml --env-file .env up -d --remove-orphans
 
       - name: Smoke test
+        env:
+          # STAGING_SITE_ORIGIN: full public origin of the staging site
+          # (scheme + host + public port), e.g. https://ib.bithollow.org:65533.
+          # After the staging HTTPS switch, set this secret to the https origin
+          # and the smoke test follows automatically — no code change needed.
+          # GitHub secrets cannot carry default values, so the fallbacks to
+          # http:// and port 65533 happen in the shell below.
+          STAGING_SITE_ORIGIN: ${{ secrets.STAGING_SITE_ORIGIN }}
+          STAGING_SITE_PORT: ${{ secrets.STAGING_SITE_PORT }}
         run: |
+          # BASE_URL is driven by STAGING_SITE_ORIGIN (full public origin
+          # including scheme and public port). While that secret is unset, the
+          # probe falls back to the legacy plain-HTTP URL built from
+          # STAGING_DOMAIN + STAGING_SITE_PORT (default 65533): the firewall
+          # forwards the public site port to the nginx HTTP_PORT while
+          # ENABLE_HTTPS=false. The old probe used https:// on the domain with
+          # no port, which can never succeed here, and its "|| echo" fallback
+          # swallowed the failure — deploys were never verified. Now every
+          # probe failure aborts the deploy with a clear message.
+          SITE_PORT="${STAGING_SITE_PORT:-65533}"
+          BASE_URL="${STAGING_SITE_ORIGIN:-http://${{ secrets.STAGING_DOMAIN }}:${SITE_PORT}}"
+          echo "Smoke testing ${BASE_URL}"
           sleep 15
-          curl -sf https://${{ secrets.STAGING_DOMAIN }}/api/v1/health || echo "Health check failed"
-          curl -sf https://${{ secrets.STAGING_DOMAIN }}/ || echo "Frontend check failed"
+          # Probe an endpoint up to 6 times (5s apart) so slow container
+          # startup does not fail the deploy, but a truly broken one does.
+          smoke_check() {
+            local url="$1"
+            for attempt in 1 2 3 4 5 6; do
+              if curl -sf --max-time 10 "$url" > /dev/null; then
+                echo "OK: ${url}"
+                return 0
+              fi
+              echo "Attempt ${attempt}/6 failed for ${url}"
+              sleep 5
+            done
+            echo "FAILED: ${url} not reachable after 6 attempts"
+            return 1
+          }
+          FAILED=0
+          smoke_check "${BASE_URL}/api/v1/health" || FAILED=1
+          smoke_check "${BASE_URL}/" || FAILED=1
+          if [ "$FAILED" -ne 0 ]; then
+            echo "Staging smoke test FAILED — deployment NOT verified"
+            exit 1
+          fi
+          echo "Staging smoke test passed"

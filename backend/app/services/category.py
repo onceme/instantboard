@@ -6,6 +6,10 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+# Fix: the local SYSTEM_TENANT_ID used to be the string "system", which asyncpg failed to
+# encode when compared against a UUID column. Same fix as source.py: reuse the UUID
+# constant from core.constants (keeping the original exported name).
+from app.core.constants import SYSTEM_TENANT_ID
 from app.core.exceptions import CategoryNotFound, DuplicateCategory, Forbidden, ValidationError
 from app.models.category import Category
 from app.models.item import Item
@@ -21,8 +25,6 @@ from app.schemas.category import (
 )
 
 logger = logging.getLogger(__name__)
-
-SYSTEM_TENANT_ID = "system"
 
 SUBCATEGORY_LABEL_MAP = {
     "china-stock": "A股行情",
@@ -223,7 +225,9 @@ class CategoryService:
         if category.tenant_id == SYSTEM_TENANT_ID:
             raise Forbidden(message="Cannot modify predefined system categories")
 
-        if category.tenant_id != tenant_id:
+        # str() on both sides: category.tenant_id is a UUID ORM attribute, the JWT
+        # tenant id is a str — a direct comparison would reject every owner update.
+        if str(category.tenant_id) != tenant_id:
             raise Forbidden(message="Cannot modify categories from other tenants")
 
         update_data = data.model_dump(exclude_unset=True)
@@ -270,7 +274,9 @@ class CategoryService:
         if category.tenant_id == SYSTEM_TENANT_ID:
             raise Forbidden(message="Cannot delete predefined system categories")
 
-        if category.tenant_id != tenant_id:
+        # str() on both sides: category.tenant_id is a UUID ORM attribute, the JWT
+        # tenant id is a str — a direct comparison would reject every owner delete.
+        if str(category.tenant_id) != tenant_id:
             raise Forbidden(message="Cannot delete categories from other tenants")
 
         source_count_stmt = select(func.count()).select_from(Source).where(Source.category_id == category_id)

@@ -1,6 +1,7 @@
+import ipaddress
 from contextvars import ContextVar
 
-from fastapi import Depends, Query
+from fastapi import Depends, Query, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -95,3 +96,32 @@ async def get_optional_token(
 
 def get_raw_token() -> str | None:
     return _raw_token_var.get()
+
+
+def get_client_ip(request: Request) -> str:
+    """Extract the real client IP from X-Forwarded-For.
+
+    Trust model: a single trusted proxy layer (in this deployment, the user firewall +
+    nginx). nginx appends the direct peer via $proxy_add_x_forwarded_for for the /api/
+    locations, so the genuine peer address ends up as the RIGHTMOST hop; every hop to
+    its left originates upstream (ultimately from the client itself) and is untrusted.
+    The previous implementation read the leftmost hop, which let a client forge the
+    address by simply sending its own X-Forwarded-For. We therefore walk the header
+    right-to-left and return the first well-formed IP, skipping blank or unparsable
+    segments. For multi-tier proxy deployments this "rightmost wins" rule must be
+    replaced by an explicit trusted-hop-count setting.
+    """
+    forwarded_for = request.headers.get("x-forwarded-for")
+    if forwarded_for:
+        for hop in reversed(forwarded_for.split(",")):
+            candidate = hop.strip()
+            if not candidate:
+                continue
+            try:
+                ipaddress.ip_address(candidate)
+            except ValueError:
+                continue
+            return candidate
+    if request.client and request.client.host:
+        return request.client.host
+    return "unknown"

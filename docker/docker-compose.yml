@@ -1,13 +1,19 @@
 services:
-  # --- 基础服务 ---
+  # --- Infrastructure services ---
   postgres:
-    image: postgres:15-alpine
+    # PostgreSQL 17, Debian-based image on purpose (NOT alpine): staging's data
+    # directory was initialized by a Debian-based PostgreSQL 17.7 image and is
+    # reused as-is (no in-place downgrade possible). The alpine variant uses
+    # musl instead of glibc, whose collation differences can silently change
+    # string ordering and invalidate existing string indexes. Same major
+    # version + same libc family keeps the existing data directory compatible.
+    image: postgres:17
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-instantboard_dev}
       POSTGRES_USER: ${POSTGRES_USER:-instantboard}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-devpass}
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+    # Host port publication lives in docker-compose.override.yml (dev only),
+    # so base+prod merges never expose the database on the host.
     volumes:
       - postgres_dev_data:/var/lib/postgresql/data
       - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
@@ -20,8 +26,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
+    # Host port publication lives in docker-compose.override.yml (dev only).
     volumes:
       - redis_dev_data:/data
       - ./redis/redis.conf:/usr/local/etc/redis/redis.conf
@@ -35,8 +40,7 @@ services:
 
   mongodb:
     image: mongo:6
-    ports:
-      - "${MONGODB_PORT:-27017}:27017"
+    # Host port publication lives in docker-compose.override.yml (dev only).
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER:-instantboard}
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-devpass}
@@ -46,7 +50,7 @@ services:
       - mongodb
     restart: unless-stopped
 
-  # --- 应用服务 ---
+  # --- Application services ---
   api:
     build:
       context: ../backend
@@ -59,16 +63,14 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - MONGODB_URL=mongodb://${MONGO_USER:-instantboard}:${MONGO_PASSWORD:-devpass}@mongodb:27017/instantboard_dev
       - ENV=development
-    ports:
-      - "${API_PORT:-8000}:8000"
+    # Host port publication and dev bind mounts (live host-code reload) live
+    # in docker-compose.override.yml, so prod merges run the image's own code
+    # with no host ports exposed.
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-    volumes:
-      - ../backend/app:/app/app
-      - ../backend/entrypoint.sh:/app/entrypoint.sh
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
@@ -83,12 +85,6 @@ services:
       context: ../frontend
       dockerfile: Dockerfile
       target: dev
-    ports:
-      - "${FRONTEND_PORT:-3000}:3000"
-    volumes:
-      - ../frontend/src:/app/src
-      - ../frontend/public:/app/public
-      - ../frontend/vite.config.ts:/app/vite.config.ts
     environment:
       - VITE_API_URL=http://localhost:${API_PORT:-8000}
       - VITE_SSE_URL=http://localhost:${API_PORT:-8000}

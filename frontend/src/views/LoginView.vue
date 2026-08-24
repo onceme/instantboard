@@ -1,15 +1,31 @@
 <script setup lang="ts">
 import { useAuth } from "@/composables/useAuth";
 import { ref, onMounted } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { SSO_PROVIDERS } from "@/utils/constants";
 import { apiGet } from "@/utils/api";
 import LoadingSpinner from "@/components/common/LoadingSpinner.vue";
 
 const { loginWithSSO } = useAuth();
+const route = useRoute();
+const router = useRouter();
 const loadingProvider = ref<string | null>(null);
+const loginError = ref<string | null>(null);
 const enabledProviders = ref<string[]>([]);
 
+// Messages for error flags redirected from the SSO callback (e.g. /login?error=csrf_mismatch)
+const QUERY_ERROR_MESSAGES: Record<string, string> = {
+  csrf_mismatch: "安全验证失败（登录状态不匹配），请重新登录。",
+};
+
 onMounted(async () => {
+  // Show the error coming from the SSO callback and clear the query so it doesn't persist after refresh
+  const queryError = route.query.error;
+  if (typeof queryError === "string" && queryError) {
+    loginError.value = QUERY_ERROR_MESSAGES[queryError] || "登录失败，请重试。";
+    router.replace({ query: {} });
+  }
+
   try {
     const response = await apiGet<{ enabled_providers: string[] }>(
       "/auth/sso/providers",
@@ -23,9 +39,12 @@ onMounted(async () => {
 
 async function handleLogin(provider: string) {
   loadingProvider.value = provider;
+  loginError.value = null;
   try {
-    loginWithSSO(provider);
-  } finally {
+    await loginWithSSO(provider);
+  } catch (err) {
+    console.error("SSO login error:", err);
+    loginError.value = "登录请求失败，请重试。";
     loadingProvider.value = null;
   }
 }
@@ -63,6 +82,8 @@ const providerIcons: Record<string, string> = {
           </button>
         </template>
       </div>
+
+      <p v-if="loginError" class="login-error">{{ loginError }}</p>
     </div>
   </div>
 </template>
@@ -159,6 +180,13 @@ const providerIcons: Record<string, string> = {
 
 .sso-label {
   flex: 1;
+  text-align: center;
+}
+
+.login-error {
+  margin-top: 16px;
+  font-size: 13px;
+  color: var(--color-error, #e53935);
   text-align: center;
 }
 </style>

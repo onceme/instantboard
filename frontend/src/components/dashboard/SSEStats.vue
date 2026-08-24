@@ -104,7 +104,9 @@ const channelChartOptions = computed(() => ({
 
 .stats-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  /* minmax(0, 1fr): prevents wide numbers/labels from widening tracks
+     beyond the card and causing page-level horizontal overflow */
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 16px;
 }

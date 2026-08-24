@@ -1,0 +1,33 @@
+# HTTP -> HTTPS redirect (used only when ENABLE_HTTPS=true).
+#
+# Redirect target is PUBLIC_BASE_URL: the externally visible site origin
+# (scheme + host + PUBLIC port), e.g. https://ib.bithollow.org:65533.
+# The nginx/container HTTPS port often differs from the public port behind a
+# firewall/NAT mapping (e.g. public 65533 -> host/container 10443), so
+# building the Location from $host:$HTTPS_PORT would emit a redirect that is
+# unreachable from the public internet.
+#
+# $request_uri is intentionally NOT listed in the entrypoint's envsubst
+# variable list, so it survives template rendering as an nginx runtime
+# variable and is filled per request by nginx.
+#
+# The redirect lives in `location /` (not at server level) on purpose: a
+# server-level `return` runs in the server-rewrite phase BEFORE location
+# matching, which would make the /healthz location below unreachable.
+server {
+    listen ${HTTP_PORT};
+    server_name ${SERVER_NAME};
+
+    # Dedicated health-check endpoint used by the container healthcheck
+    # (docker-compose.prod.yml). Exempt from the catch-all redirect so the
+    # probe keeps stable "200 OK" semantics in HTTPS mode as well.
+    location = /healthz {
+        access_log off;
+        add_header Content-Type text/plain;
+        return 200 "ok";
+    }
+
+    location / {
+        return 301 ${PUBLIC_BASE_URL}$request_uri;
+    }
+}

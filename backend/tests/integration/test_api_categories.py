@@ -1,10 +1,10 @@
 """Tests for /api/v1/categories endpoints."""
+
 import uuid
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
 from tests.integration.conftest import make_auth_header
-
 
 NOW = datetime.now(UTC).isoformat()
 
@@ -53,7 +53,9 @@ class TestListCategories:
         headers = {"Authorization": f"Bearer {_token(tenant_id)}"}
         mock_svc = AsyncMock()
         mock_svc.list_categories.return_value = {
-            "success": True, "data": [], "meta": {"total": 0, "page": 1, "page_size": 20},
+            "success": True,
+            "data": [],
+            "meta": {"total": 0, "page": 1, "page_size": 20},
         }
         mock_svc_fn.return_value = mock_svc
 
@@ -99,7 +101,8 @@ class TestPredefinedCategories:
         headers = {"Authorization": f"Bearer {_token()}"}
         mock_svc = AsyncMock()
         mock_svc.get_predefined_categories.return_value = {
-            "success": True, "data": [_cat_response(name="Finance", type="finance")],
+            "success": True,
+            "data": [_cat_response(name="Finance", type="finance")],
         }
         mock_svc_fn.return_value = mock_svc
 
@@ -124,6 +127,7 @@ class TestGetCategory:
     def test_get_not_found(self, mock_svc_fn, client):
         headers = {"Authorization": f"Bearer {_token()}"}
         from app.core.exceptions import CategoryNotFound
+
         mock_svc = AsyncMock()
         mock_svc.get_category.side_effect = CategoryNotFound()
         mock_svc_fn.return_value = mock_svc
@@ -139,7 +143,8 @@ class TestUpdateCategory:
         cid = str(uuid.uuid4())
         mock_svc = AsyncMock()
         mock_svc.update_category.return_value = {
-            "success": True, "data": _cat_response(id=cid, name="Updated"),
+            "success": True,
+            "data": _cat_response(id=cid, name="Updated"),
         }
         mock_svc_fn.return_value = mock_svc
 
@@ -170,11 +175,19 @@ class TestCategoryWithSources:
         mock_svc.get_category_with_sources.return_value = {
             "success": True,
             "data": {
-                "id": cid, "name": "Tech", "slug": "tech", "description": None,
-                "icon": "cpu", "color": "#3B82F6", "type": "tech",
-                "refresh_interval_seconds": 300, "is_active": True, "source_count": 1,
+                "id": cid,
+                "name": "Tech",
+                "slug": "tech",
+                "description": None,
+                "icon": "cpu",
+                "color": "#3B82F6",
+                "type": "tech",
+                "refresh_interval_seconds": 300,
+                "is_active": True,
+                "source_count": 1,
                 "sources": [{"id": str(uuid.uuid4()), "name": "RSS Source"}],
-                "created_at": NOW, "updated_at": NOW,
+                "created_at": NOW,
+                "updated_at": NOW,
             },
         }
         mock_svc_fn.return_value = mock_svc
@@ -202,13 +215,15 @@ class TestListSubcategories:
 
 
 def _token(tenant_id=None):
-    return create_access_token({
-        "sub": str(uuid.uuid4()),
-        "tenant_id": tenant_id or str(uuid.uuid4()),
-        "role": "admin",
-        "provider": "github",
-        "type": "access",
-    })
+    return create_access_token(
+        {
+            "sub": str(uuid.uuid4()),
+            "tenant_id": tenant_id or str(uuid.uuid4()),
+            "role": "admin",
+            "provider": "github",
+            "type": "access",
+        }
+    )
 
 
 # Need the import here

@@ -618,6 +618,86 @@ services:
 | Restart policy | 无 | always |
 | 密码 | 开发固定密码 | .env.production 读取 |
 
+> **设计变更（2026-07）**：移除了 `!reset` 和 `!override` YAML 标签以兼容 V1 `docker-compose`。
+> 前端服务现在显式使用 `command: ["/entrypoint.sh"]` 替代 `!reset null`，
+> 因为 Docker Compose 默认的序列合并语义就是替换，`!override` 实际冗余。
+> 同时移除了 `deploy.resources.reservations.cpus`（V1 不支持）。
+> 本节中仍保留的 `!reset`/`!override` 示例仅供历史参考，已不再使用。
+
+#### 多架构构建策略（2026-07）
+
+项目 CI 使用 buildx + QEMU 构建 `linux/amd64,linux/arm/v7` manifest list。
+
+**前端 Dockerfile**：`builder` 阶段使用 `--platform=$BUILDPLATFORM` 强制在 host 平台（amd64）运行，
+因为 `node:24-alpine` 没有 arm/v7 官方镜像；后续 `COPY --from=builder` 跨平台复制静态资源，
+静态资源架构无关，arm/v7 nginx 镜像正常服务。
+
+**Backend Dockerfile**：`builder` 阶段安装 `build-essential`/`libssl-dev`/`libffi-dev`
+作为 Python C 扩展缺少 arm/v7 wheel 时的源码编译回退。
+
+**MongoDB**：`mongo:6` 不支持 arm/v7，通过 `profiles: ["mongodb"]` gate 隔离，不影响默认部署。
+arm/v7 服务器上启用 `--profile mongodb` 将导致 `no matching manifest` 错误。
+
+**生产镜像地址**：`docker-compose.prod.yml` 使用 `${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_PREFIX:-onceme/instantboard}-{api|frontend}:${IMAGE_TAG:-latest}`，
+CI 工作流在各 SSH 部署步骤中设置这三个环境变量，本地手动部署可用 `IMAGE_TAG=v1.2.3 docker compose ... up -d` 覆盖。
+
+#### Worker 心跳机制（2026-08）
+
+**背景**：生产部署中 api 进程以 `SCHEDULER_ENABLED=false` 运行，采集调度器跑在独立的
+worker 容器里（`python -m app.scheduler.worker`）。仪表盘的服务健康检查原先只读 api
+进程内嵌的调度器单例（`scheduler_manager._running` + `get_jobs_status()`），在 prod
+下该单例从未启动，导致 scheduler 恒报 down；`/dashboard/scheduler` 与快照归档
+（`scheduler_jobs_active`）同样读到空数据恒为 0。同时 worker 自身没有任何对外可观测
+状态（事件监听器悄悄退出无人知晓，docker healthcheck 只做 `ps grep`）。
+
+**方案（方案 1：worker 心跳写 Redis，api 读之）**：
+
+| 项目 | 约定 |
+|------|------|
+| 键名 | `scheduler:worker:heartbeat`（`RedisKeys.WORKER_HEARTBEAT`） |
+| 值 | JSON 字符串（见下方 payload） |
+| 写入方 | worker 后台 asyncio 任务 `heartbeat_loop`，每 **15s** 写一次，启动后立即写第一次 |
+| TTL | **45s**（`RedisKeys.WORKER_HEARTBEAT_TTL`，= 3 × 写入间隔） |
+| 清理 | worker 优雅退出时尽力 `DEL` 该键（失败不阻塞关闭，TTL 兜底过期） |
+
+**payload 字段**：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `timestamp` | string | 写入时刻，ISO-8601 UTC |
+| `pid` | int | worker 进程号，便于排查多实例/僵尸进程 |
+| `scheduler_running` | bool | worker 内 APScheduler 是否在运行 |
+| `jobs_total` / `jobs_running` / `jobs_paused` | int | 采集任务总数 / 运行中 / 已暂停 |
+| `event_listener_subscribed` | bool | source 事件 Pub/Sub 监听器是否存活；监听器退出会立即体现在该字段上 |
+
+**健康判定语义**（api 侧，仅当 `SCHEDULER_ENABLED=false` 的 prod 模式生效；
+开发内嵌模式仍直接查询本进程调度器单例）：
+
+- 心跳存在且 `now - timestamp < 45s`（fresh）→ scheduler **healthy**，details 携带
+  jobs 统计与 `last_heartbeat`；
+- 心跳过期（stale）或缺失（missing/已过期删除）→ scheduler **down**，details 携带
+  `last_heartbeat`（缺失时为 never）；
+- Redis 本身不可用导致读不到心跳 → 同样 down，但 details 表述联动 Redis 服务状态
+  （`redis unavailable: ...`），不把锅扣在 worker 上。
+
+**消费方**：
+
+- `get_services_health`（仪表盘服务健康表）：prod 模式读心跳判定 scheduler 状态；
+- `/api/v1/dashboard/scheduler`（`get_scheduler_status`）：prod 模式 job 列表为空，
+  total/running/paused 数量取心跳值，并返回 `last_heartbeat`；
+- `archive_snapshot`：prod 模式 `scheduler_jobs_active` 取心跳 `jobs_running`，
+  消除恒 0 污染；
+- docker `worker` 服务 healthcheck：由 `ps grep` 升级为在容器内用 `python -c` 解析
+  `REDIS_URL`、读心跳键并比对 45s 新鲜度，失败 exit 1（interval 30s / retries 3 /
+  start_period 60s）。进程假死但停止刷心跳的情况也会被判定不健康。
+
+**心跳任务的可靠性约定**：心跳写入的任何异常都被捕获并记日志，绝不杀死 worker 进程；
+心跳键带 TTL，崩溃的 worker 会在 45s 内自然转为 stale/down，无需外部清理。
+
+**部署提示**：本机制只涉及 backend 代码与 compose healthcheck，需重建
+**api 与 worker 两个镜像**（同一 backend Dockerfile）后重启生效；无数据库迁移、
+无前端改动、无新增依赖。
+
 ### 3.6 开发机环境隔离方案
 
 所有服务运行在 Docker 容器中，宿主机仅需安装:

@@ -123,6 +123,12 @@ class SchedulerStatusResponse(BaseModel):
     running_jobs: list[SchedulerJobInfo]
     paused_jobs: list[SchedulerJobInfo]
     all_jobs: list[SchedulerJobInfo]
+    # Job counts as plain integers. In dev (embedded scheduler) they mirror the
+    # list lengths above; in prod the per-job list is empty (jobs live in the
+    # worker container) and the counts come from the worker heartbeat instead.
+    running_jobs_count: int = 0
+    paused_jobs_count: int = 0
+    last_heartbeat: str | None = None
 
 
 class SSEStatsResponse(BaseModel):

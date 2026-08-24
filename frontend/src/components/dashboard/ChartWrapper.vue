@@ -13,6 +13,7 @@ import {
   Tooltip,
   Legend,
 } from "chart.js";
+import type { ChartData } from "chart.js";
 
 ChartJS.register(
   CategoryScale,
@@ -43,7 +44,14 @@ const isDark = computed(
 );
 
 const themeAwareOptions = computed(() => {
-  const base = { ...chartOptions.value };
+  const base = { ...chartOptions.value } as {
+    scales?: Record<
+      string,
+      { ticks?: Record<string, unknown>; grid?: Record<string, unknown> }
+    >;
+    plugins?: Record<string, unknown>;
+    [key: string]: unknown;
+  };
   if (!base.scales) base.scales = {};
   if (props.type === "line" || props.type === "bar") {
     if (!base.scales.x) base.scales.x = {};
@@ -67,7 +75,7 @@ const themeAwareOptions = computed(() => {
   }
   if (!base.plugins) base.plugins = {};
   base.plugins.legend = {
-    ...base.plugins.legend,
+    ...(base.plugins.legend as Record<string, unknown>),
     labels: { color: isDark.value ? "#E2E8F0" : "#1A1A2E" },
   };
   return base;
@@ -91,7 +99,9 @@ watch(
 
 function pushDataPoint(point: Record<string, unknown>) {
   if (!chartData.value || !chartRef.value) return;
-  const datasets = chartData.value.datasets as Array<Record<string, unknown>>;
+  const datasets = chartData.value.datasets as Array<{
+    data: Record<string, unknown>[];
+  }>;
   if (datasets && datasets[0]) {
     datasets[0].data.push(point);
     if (datasets[0].data.length > 60) {
@@ -114,25 +124,25 @@ defineExpose({ pushDataPoint });
     <Bar
       v-if="type === 'bar'"
       ref="chartRef"
-      :data="chartData"
+      :data="chartData as unknown as ChartData<'bar'>"
       :options="themeAwareOptions"
     />
     <Line
       v-if="type === 'line'"
       ref="chartRef"
-      :data="chartData"
+      :data="chartData as unknown as ChartData<'line'>"
       :options="themeAwareOptions"
     />
     <Pie
       v-if="type === 'pie'"
       ref="chartRef"
-      :data="chartData"
+      :data="chartData as unknown as ChartData<'pie'>"
       :options="themeAwareOptions"
     />
     <Doughnut
       v-if="type === 'doughnut'"
       ref="chartRef"
-      :data="chartData"
+      :data="chartData as unknown as ChartData<'doughnut'>"
       :options="themeAwareOptions"
     />
   </div>

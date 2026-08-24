@@ -1,9 +1,13 @@
 <script setup lang="ts">
 import { ref } from "vue";
+import axios from "axios";
 import type { Source, Category } from "@/types";
-import { apiGet, apiPost, apiPut } from "@/utils/api";
+import { apiGet, apiPost, apiPut, getApiErrorMessage } from "@/utils/api";
 import { Plus, ToggleLeft, ToggleRight } from "lucide-vue-next";
 import EmptyState from "@/components/common/EmptyState.vue";
+import ErrorAlert from "@/components/common/ErrorAlert.vue";
+
+const NO_COLLECTOR_HINT = "无可用采集器，无法启用";
 
 const sources = ref<Source[]>([]);
 const categories = ref<Category[]>([]);
@@ -16,6 +20,29 @@ const newSource = ref({
   url: "",
   refresh_interval_seconds: 300,
 });
+const errorMessage = ref("");
+// Bumped on every new error so the dismissed ErrorAlert remounts and shows again
+const errorKey = ref(0);
+
+function failWith(err: unknown, fallback: string) {
+  errorMessage.value = getApiErrorMessage(err, fallback);
+  errorKey.value += 1;
+}
+
+// 403 = the caller may not manage system sources; point at the admin role
+function fallbackFor(err: unknown, fallback: string): string {
+  if (axios.isAxiosError(err) && err.response?.status === 403) {
+    return "仅管理员可修改系统数据源";
+  }
+  return fallback;
+}
+
+// Only block flipping an inactive source on: enabling needs a collector
+// (backend returns 400 NO_COLLECTOR_AVAILABLE otherwise), while disabling an
+// active legacy source must stay possible. undefined = legacy data, untouched.
+function enableBlocked(source: Source): boolean {
+  return !source.is_active && source.collector_available === false;
+}
 
 async function fetchSources() {
   loading.value = true;
@@ -34,23 +61,33 @@ async function fetchCategories() {
 
 async function addSource() {
   if (!newSource.value.name.trim() || !newSource.value.url.trim()) return;
-  await apiPost<Source>("/sources", newSource.value);
-  showAddForm.value = false;
-  newSource.value = {
-    name: "",
-    category_id: "",
-    source_type: "rss",
-    url: "",
-    refresh_interval_seconds: 300,
-  };
-  await fetchSources();
+  errorMessage.value = "";
+  try {
+    await apiPost<Source>("/sources", newSource.value);
+    showAddForm.value = false;
+    newSource.value = {
+      name: "",
+      category_id: "",
+      source_type: "rss",
+      url: "",
+      refresh_interval_seconds: 300,
+    };
+    await fetchSources();
+  } catch (err) {
+    failWith(err, fallbackFor(err, "添加失败，请重试"));
+  }
 }
 
 async function toggleSource(source: Source) {
-  await apiPut<Source>(`/sources/${source.id}`, {
-    is_active: !source.is_active,
-  });
-  await fetchSources();
+  errorMessage.value = "";
+  try {
+    await apiPut<Source>(`/sources/${source.id}`, {
+      is_active: !source.is_active,
+    });
+    await fetchSources();
+  } catch (err) {
+    failWith(err, fallbackFor(err, "操作失败，请重试"));
+  }
 }
 
 function healthStatusClass(status: string): string {
@@ -76,6 +113,8 @@ fetchCategories();
         添加数据源
       </button>
     </div>
+
+    <ErrorAlert v-if="errorMessage" :key="errorKey" :message="errorMessage" />
 
     <div v-if="showAddForm" class="add-form card">
       <input v-model="newSource.name" type="text" placeholder="数据源名称" />
@@ -116,6 +155,13 @@ fetchCategories();
           <span class="source-category">{{
             categoryName(source.category_id)
           }}</span>
+          <span
+            v-if="source.collector_available === false"
+            class="collector-badge"
+            :title="NO_COLLECTOR_HINT"
+          >
+            无可用采集器
+          </span>
         </div>
         <div class="source-actions">
           <span
@@ -124,7 +170,12 @@ fetchCategories();
           >
             {{ source.health_status }}
           </span>
-          <button class="toggle-btn" @click="toggleSource(source)">
+          <button
+            class="toggle-btn"
+            :disabled="enableBlocked(source)"
+            :title="enableBlocked(source) ? NO_COLLECTOR_HINT : ''"
+            @click="toggleSource(source)"
+          >
             <ToggleRight
               v-if="source.is_active"
               :size="18"
@@ -240,6 +291,14 @@ fetchCategories();
   color: var(--text-secondary);
 }
 
+.collector-badge {
+  font-size: 12px;
+  color: var(--warning);
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  background-color: rgba(245, 158, 11, 0.1);
+}
+
 .source-actions {
   display: flex;
   align-items: center;
@@ -270,5 +329,10 @@ fetchCategories();
 .toggle-btn {
   display: flex;
   align-items: center;
+}
+
+.toggle-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 </style>

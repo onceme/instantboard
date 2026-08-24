@@ -38,7 +38,9 @@ const filteredItems = computed(() => {
 <template>
   <div ref="containerRef" class="news-feed">
     <EmptyState
-      v-if="filteredItems.length === 0 && !techStore.isLoading"
+      v-if="
+        filteredItems.length === 0 && !techStore.isLoading && !techStore.error
+      "
       title="暂无新闻"
       description="等待新消息推送"
       icon="news"

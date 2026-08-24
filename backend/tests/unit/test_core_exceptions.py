@@ -15,8 +15,8 @@ from app.core.exceptions import (
     ItemNotFound,
     RateLimitExceeded,
     ServiceUnavailable,
-    SSOProviderError,
     SourceNotFound,
+    SSOProviderError,
     SymbolNotFound,
     ValidationError,
 )
@@ -134,13 +134,22 @@ class TestInvalidRefreshToken:
 class TestSSOProviderError:
     def test_default(self):
         exc = SSOProviderError()
-        assert exc.status_code == status.HTTP_401_UNAUTHORIZED
+        # Upstream SSO failures are gateway errors; return 502 (avoids the frontend 401
+        # interceptor hard-redirecting to the login page)
+        assert exc.status_code == status.HTTP_502_BAD_GATEWAY
         assert exc.error_code == ErrorCode.SSO_PROVIDER_ERROR
         assert exc.error_message == "SSO provider returned an error"
 
     def test_custom_message(self):
         exc = SSOProviderError(message="provider down")
         assert exc.error_message == "provider down"
+
+    def test_details_passthrough(self):
+        # Exception class name/message are passed through details for frontend display
+        # and troubleshooting
+        details = [{"exception": "TimeoutError", "message": "upstream timeout"}]
+        exc = SSOProviderError(message="provider down", details=details)
+        assert exc.error_details == details
 
 
 class TestForbidden:

@@ -1,13 +1,51 @@
+from __future__ import annotations
+
 import logging
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+# Fix: default tenant of publish_source_health_update changed from "system" to
+# SYSTEM_TENANT_ID (kept as str for SSE JSON serialization).
+from app.core.constants import SYSTEM_TENANT_ID
 from app.core.sse_router import SSEEventType, event_router
 from app.models.sse import SSEConnection as SSEConnectionModel
 
+if TYPE_CHECKING:
+    from app.models.source import Source, SourceHealth
+
 logger = logging.getLogger(__name__)
+
+
+def build_source_health_update_payload(source: Source | Any, health: SourceHealth | Any, previous_status: str) -> dict:
+    """Build the canonical source_health_update SSE payload.
+
+    Contract: docs/design/data-flow.md §3.5.4. The payload carries the full
+    source_health row state displayed by the dashboard's DataSourcesHealth table
+    (read from the SourceHealth record plus the owning Source) so the frontend
+    can match the table row by source_id and refresh it in place.
+    """
+    success_rate_24h = None
+    if health.total_fetches_24h:
+        success_rate_24h = health.success_count_24h / health.total_fetches_24h
+    return {
+        "source_id": str(source.id),
+        "name": source.name,
+        "source_type": source.source_type,
+        "status": health.status,
+        "previous_status": previous_status,
+        "last_error": health.last_error_message,
+        "last_success_at": health.last_success_at.isoformat() if health.last_success_at else None,
+        "last_failure_at": health.last_failure_at.isoformat() if health.last_failure_at else None,
+        "avg_response_time_ms": health.avg_response_time_ms,
+        "consecutive_failures": health.consecutive_failures,
+        "success_count_24h": health.success_count_24h,
+        "total_fetches_24h": health.total_fetches_24h,
+        "success_rate_24h": success_rate_24h,
+        "timestamp": datetime.now(UTC).isoformat(),
+    }
 
 
 class SSEService:
@@ -21,13 +59,15 @@ class SSEService:
         client_ip: str | None = None,
         user_agent: str | None = None,
     ) -> dict:
-        conn = event_router.register(client_id, categories, tenant_id)
+        conn = event_router.register(client_id, categories, tenant_id, user_id=user_id)
 
         db_conn = SSEConnectionModel(
             tenant_id=tenant_id,
             user_id=user_id,
             channels=categories,
-            connected_at=datetime.now(UTC),
+            # Reuse the in-memory connection's timestamp so disconnect() can match the
+            # exact row via (user_id, connected_at); a fresh now() here would differ.
+            connected_at=conn.connected_at,
             client_ip=client_ip,
             user_agent=user_agent,
         )
@@ -46,10 +86,14 @@ class SSEService:
         if conn is None:
             return None
 
+        # Audit the disconnect against the exact row written by connect(): the previous
+        # WHERE compared user_id == conn.tenant_id (always false), so rows were never
+        # marked disconnected. Match on (user_id, connected_at) with an open session.
         await db_session.execute(
             update(SSEConnectionModel)
             .where(
-                SSEConnectionModel.user_id == conn.tenant_id,
+                SSEConnectionModel.user_id == conn.user_id,
+                SSEConnectionModel.connected_at == conn.connected_at,
                 SSEConnectionModel.disconnected_at.is_(None),
             )
             .values(
@@ -97,21 +141,22 @@ class SSEService:
 
     async def publish_source_health_update(
         self,
-        source_id: str,
-        status: str,
-        last_error: str | None = None,
-        tenant_id: str = "system",
+        payload: dict,
+        tenant_id: str = str(SYSTEM_TENANT_ID),
     ) -> None:
-        data = {
-            "source_id": source_id,
-            "status": status,
-            "last_error": last_error,
-            "timestamp": datetime.now(UTC).isoformat(),
-        }
+        """Publish a source_health_update event on the dashboard channel.
+
+        Contract: docs/design/data-flow.md §3.5.4 — the payload must be the
+        full row state built by build_source_health_update_payload() (keyed by
+        source_id). Tenant routing: event_router only delivers the event to SSE
+        connections registered with the same tenant_id; admin sessions belong to
+        the system tenant, so events for system-tenant sources published with
+        SYSTEM_TENANT_ID reach them.
+        """
         await event_router.push_event(
             category="dashboard",
             event_type=SSEEventType.SOURCE_HEALTH_UPDATE,
-            data=data,
+            data=payload,
             tenant_id=tenant_id,
         )
 

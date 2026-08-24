@@ -1,19 +1,28 @@
 import logging
-from datetime import UTC, datetime
 
 from redis.asyncio import Redis
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.exceptions import CategoryNotFound, Forbidden, SourceNotFound, ValidationError
+# Fix: the local SYSTEM_TENANT_ID used to be the string "system", which asyncpg failed to
+# encode when compared against a UUID column. Reuse the UUID constant from core.constants
+# instead (keeping the original exported name so modules like dashboard still work).
+from app.collectors import resolve_collector
+from app.core.constants import SYSTEM_TENANT_ID
+from app.core.exceptions import (
+    CategoryNotFound,
+    Forbidden,
+    NoCollectorAvailable,
+    SourceNotFound,
+    ValidationError,
+)
 from app.core.redis import RedisKeys, redis_delete, redis_hset, redis_publish
 from app.models.category import Category
 from app.models.source import Source, SourceHealth
 from app.models.tenant import Tenant
 from app.schemas.base import PaginatedMeta, PaginatedResponse, SuccessResponse
 from app.schemas.source import (
-    HealthCheckResult,
     SourceCreate,
     SourceHealthResponse,
     SourceResponse,
@@ -28,8 +37,6 @@ SOURCE_TYPE_CONFIG_RULES = {
     "web_scrape": {"required_fields": ["url", "selector"]},
     "social": {"required_fields": ["platform", "query"]},
 }
-
-SYSTEM_TENANT_ID = "system"
 
 
 def _source_to_response(source: Source) -> SourceResponse:
@@ -55,6 +62,10 @@ def _source_to_response(source: Source) -> SourceResponse:
         refresh_interval_seconds=refresh_interval,
         is_active=source.is_active,
         priority=source.priority,
+        # Whether a collector can actually run for this source (source_type match or
+        # config.library fallback). The UI uses this to explain why a source cannot
+        # be enabled instead of failing silently.
+        collector_available=resolve_collector(source.source_type, source.config) is not None,
         health_status=health_status,
         last_fetch_at=last_fetch_at,
         last_error=last_error,
@@ -103,6 +114,21 @@ class SourceService:
             )
 
         return True
+
+    @staticmethod
+    def _check_collector_available(source_type: str, config: dict) -> None:
+        # Pre-flight check before activating a source: without a resolvable collector
+        # the source would sit in is_active=True forever without collecting anything
+        # (e.g. a bare web_scrape/social source with no config.library fallback).
+        if resolve_collector(source_type, config) is None:
+            raise NoCollectorAvailable(
+                message=(
+                    f"No collector available for source_type '{source_type}'. "
+                    "Set config.library to a supported collector "
+                    "(yfinance, alpha_vantage, eastmoney, finnhub, rss, hackernews, arxiv) "
+                    "or keep the source inactive."
+                )
+            )
 
     async def list_sources(
         self,
@@ -154,6 +180,9 @@ class SourceService:
         )
 
     async def get_source(self, source_id: str, tenant_id: str) -> SuccessResponse[SourceResponse]:
+        # tenant_id arrives as a str from the JWT while ORM attributes are UUID objects;
+        # normalize before comparing so ownership checks work in both directions
+        tenant_id = str(tenant_id)
         stmt = (
             select(Source)
             .where(Source.id == source_id)
@@ -168,7 +197,7 @@ class SourceService:
         if source is None:
             raise SourceNotFound()
 
-        if source.tenant_id != tenant_id and source.tenant_id != SYSTEM_TENANT_ID:
+        if str(source.tenant_id) != tenant_id and source.tenant_id != SYSTEM_TENANT_ID:
             raise SourceNotFound(message="Source not accessible for this tenant")
 
         return SuccessResponse(
@@ -177,6 +206,7 @@ class SourceService:
         )
 
     async def create_source(self, data: SourceCreate, tenant_id: str) -> SuccessResponse[SourceResponse]:
+        tenant_id = str(tenant_id)
         tenant_stmt = select(Tenant).where(Tenant.id == tenant_id)
         tenant = (await self.db.execute(tenant_stmt)).scalar_one_or_none()
         if tenant is None:
@@ -200,11 +230,18 @@ class SourceService:
         if category is None:
             raise CategoryNotFound(message="Referenced category not found")
 
-        if category.tenant_id != tenant_id and category.tenant_id != SYSTEM_TENANT_ID:
+        # str() on both sides: category.tenant_id is a UUID ORM attribute, the JWT
+        # tenant id is a str — a direct comparison would never match (bug)
+        if str(category.tenant_id) != tenant_id and category.tenant_id != SYSTEM_TENANT_ID:
             raise ValidationError(message="Cannot add sources to categories from other tenants")
 
         config = data.config or {}
         self._validate_source_config(data.source_type, config)
+
+        # Creating an active source without a resolvable collector would silently
+        # never collect; reject it up front (same pre-flight as the enable path).
+        if data.is_active:
+            self._check_collector_available(data.source_type, config)
 
         refresh_interval = data.refresh_interval_seconds
         if refresh_interval is None:
@@ -277,6 +314,7 @@ class SourceService:
         data: SourceUpdate,
         tenant_id: str,
     ) -> SuccessResponse[SourceResponse]:
+        tenant_id = str(tenant_id)
         stmt = (
             select(Source)
             .where(Source.id == source_id)
@@ -291,10 +329,13 @@ class SourceService:
         if source is None:
             raise SourceNotFound()
 
-        if source.tenant_id != tenant_id:
+        # str() on both sides: source.tenant_id is a UUID ORM attribute, the JWT
+        # tenant id is a str — a direct comparison would reject every update.
+        # System (seed) sources are editable by their owning tenant, i.e. the admin
+        # session which lives in the system tenant itself (e.g. to enable seeded
+        # sources); all other tenants are rejected by the ownership check.
+        if str(source.tenant_id) != tenant_id:
             raise Forbidden(message="Cannot update sources from other tenants")
-        if source.tenant_id == SYSTEM_TENANT_ID:
-            raise Forbidden(message="Cannot update system-level sources")
 
         update_data = data.model_dump(exclude_unset=True)
 
@@ -302,6 +343,19 @@ class SourceService:
             new_type = update_data["source_type"]
             config = update_data.get("config", source.config) or {}
             self._validate_source_config(new_type, config)
+
+        # Enabling a source requires a collector that can actually run it. Evaluate
+        # the effective type/config after this same request's changes (an update may
+        # flip is_active and change source_type/config simultaneously). None values
+        # are never written by the setattr loop below, so they keep the current state.
+        if update_data.get("is_active") is True:
+            effective_type = update_data.get("source_type") or source.source_type
+            effective_config = update_data.get("config")
+            if effective_config is None:
+                effective_config = source.config
+            self._check_collector_available(effective_type, effective_config or {})
+
+        old_is_active = source.is_active
 
         for field, value in update_data.items():
             if value is not None and field != "category_id":
@@ -320,12 +374,40 @@ class SourceService:
         )
         source = (await self.db.execute(stmt)).scalar_one()
 
+        # Runtime scheduling hook: the worker subscribes to the dashboard channel and
+        # adds/removes the collection job without waiting for a restart. The payload
+        # carries the full source data so the worker can build the job without reading
+        # the DB (avoiding a race against the still-uncommitted transaction); the
+        # worker's full rebuild from the DB on startup remains the fallback.
+        if source.is_active != old_is_active:
+            await redis_publish(
+                RedisKeys.channel_key("dashboard"),
+                {
+                    "event": "source_enabled" if source.is_active else "source_disabled",
+                    "source_id": str(source.id),
+                    "source": {
+                        "id": str(source.id),
+                        "tenant_id": str(source.tenant_id),
+                        "category_id": str(source.category_id),
+                        "category_slug": source.category.slug if source.category else "",
+                        "name": source.name,
+                        "source_type": source.source_type,
+                        "url": source.url,
+                        "config": source.config or {},
+                        "refresh_interval_seconds": source.refresh_interval_seconds,
+                        "is_active": source.is_active,
+                        "priority": source.priority,
+                    },
+                },
+            )
+
         return SuccessResponse(
             success=True,
             data=_source_to_response(source),
         )
 
     async def delete_source(self, source_id: str, tenant_id: str) -> None:
+        tenant_id = str(tenant_id)
         stmt = select(Source).where(Source.id == source_id).options(selectinload(Source.category))
         result = await self.db.execute(stmt)
         source = result.scalar_one_or_none()
@@ -333,7 +415,7 @@ class SourceService:
         if source is None:
             raise SourceNotFound()
 
-        if source.tenant_id != tenant_id:
+        if str(source.tenant_id) != tenant_id:
             raise Forbidden(message="Cannot delete sources from other tenants")
         if source.tenant_id == SYSTEM_TENANT_ID:
             raise Forbidden(message="Cannot delete system-level sources")
@@ -355,6 +437,7 @@ class SourceService:
         await self.db.flush()
 
     async def get_source_health(self, source_id: str, tenant_id: str) -> SuccessResponse[SourceHealthResponse]:
+        tenant_id = str(tenant_id)
         stmt = select(SourceHealth).where(SourceHealth.source_id == source_id)
         result = await self.db.execute(stmt)
         health = result.scalar_one_or_none()
@@ -364,7 +447,7 @@ class SourceService:
             source = (await self.db.execute(source_stmt)).scalar_one_or_none()
             if source is None:
                 raise SourceNotFound()
-            if source.tenant_id != tenant_id and source.tenant_id != SYSTEM_TENANT_ID:
+            if str(source.tenant_id) != tenant_id and source.tenant_id != SYSTEM_TENANT_ID:
                 raise SourceNotFound(message="Source not accessible for this tenant")
 
             return SuccessResponse(
@@ -382,105 +465,8 @@ class SourceService:
         source = (await self.db.execute(source_stmt)).scalar_one_or_none()
         if source is None:
             raise SourceNotFound()
-        if source.tenant_id != tenant_id and source.tenant_id != SYSTEM_TENANT_ID:
+        if str(source.tenant_id) != tenant_id and source.tenant_id != SYSTEM_TENANT_ID:
             raise SourceNotFound(message="Source not accessible for this tenant")
-
-        return SuccessResponse(
-            success=True,
-            data=_health_to_response(health),
-        )
-
-    async def update_source_health(
-        self,
-        source_id: str,
-        result: HealthCheckResult,
-    ) -> SuccessResponse[SourceHealthResponse]:
-        stmt = select(SourceHealth).where(SourceHealth.source_id == source_id)
-        health = (await self.db.execute(stmt)).scalar_one_or_none()
-
-        if health is None:
-            health = SourceHealth(
-                source_id=source_id,
-                status="healthy",
-                total_fetches_24h=0,
-                success_count_24h=0,
-                avg_response_time_ms=0,
-                consecutive_failures=0,
-            )
-            self.db.add(health)
-            await self.db.flush()
-
-        previous_status = health.status
-
-        now = datetime.now(UTC)
-        health.total_fetches_24h += 1
-
-        if result.success:
-            health.consecutive_failures = 0
-            health.last_success_at = now
-            health.success_count_24h += 1
-
-            if result.response_time_ms > 0:
-                current_avg = health.avg_response_time_ms
-                total = health.total_fetches_24h
-                health.avg_response_time_ms = int((current_avg * (total - 1) + result.response_time_ms) / total)
-
-            if health.consecutive_failures == 0:
-                if previous_status == "down" or previous_status == "degraded":
-                    health.status = "degraded"
-                elif previous_status != "healthy":
-                    health.status = "healthy"
-                else:
-                    health.status = "healthy"
-        else:
-            health.consecutive_failures += 1
-            health.last_failure_at = now
-            health.last_error_message = result.error_message
-
-            if health.consecutive_failures >= 10:
-                health.status = "down"
-            elif health.consecutive_failures >= 3:
-                health.status = "degraded"
-            else:
-                health.status = previous_status
-
-        health.updated_at = now
-        await self.db.flush()
-
-        redis_key = RedisKeys.source_health_key(str(source_id))
-        await redis_hset(
-            redis_key,
-            mapping={
-                "status": health.status,
-                "consecutive_failures": str(health.consecutive_failures),
-                "avg_response_time_ms": str(health.avg_response_time_ms),
-                "last_error": health.last_error_message or "",
-            },
-        )
-
-        if health.status != previous_status:
-            source_stmt = select(Source).where(Source.id == source_id).options(selectinload(Source.category))
-            source = (await self.db.execute(source_stmt)).scalar_one_or_none()
-            category_slug = source.category.slug if source and source.category else "unknown"
-            await redis_publish(
-                RedisKeys.channel_key(category_slug),
-                {
-                    "event": "source_health_update",
-                    "source_id": str(source_id),
-                    "status": health.status,
-                    "previous_status": previous_status,
-                    "last_error": health.last_error_message,
-                },
-            )
-            await redis_publish(
-                RedisKeys.channel_key("dashboard"),
-                {
-                    "event": "source_health_update",
-                    "source_id": str(source_id),
-                    "status": health.status,
-                    "previous_status": previous_status,
-                },
-            )
 
         return SuccessResponse(
             success=True,

@@ -77,7 +77,7 @@ function toggleExpand(id: string) {
               />
               {{ source.name }}
             </td>
-            <td>{{ source.id }}</td>
+            <td>{{ source.source_type || "--" }}</td>
             <td>
               <span
                 class="status-badge"

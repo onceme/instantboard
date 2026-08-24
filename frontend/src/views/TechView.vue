@@ -5,6 +5,7 @@ import TechSubNav from "@/components/tech/TechSubNav.vue";
 import CategoryPanel from "@/components/tech/CategoryPanel.vue";
 import NewsFeed from "@/components/tech/NewsFeed.vue";
 import TopicFilter from "@/components/tech/TopicFilter.vue";
+import ErrorAlert from "@/components/common/ErrorAlert.vue";
 
 const techStore = useTechStore();
 
@@ -19,6 +20,12 @@ onUnmounted(() => {
   techStore.cleanup();
 });
 
+// Retry button for the error alert: refetch data (news and topics share the error field, so both need refetching)
+function retryFetch() {
+  techStore.fetchNews();
+  techStore.fetchTopics();
+}
+
 function switchToFeedMode() {
   techStore.setFeedMode(true);
 }
@@ -32,6 +39,13 @@ function switchToGridMode() {
   <div class="tech-view">
     <TechSubNav />
     <TopicFilter />
+
+    <ErrorAlert
+      v-if="techStore.error"
+      :message="techStore.error"
+      retryable
+      @retry="retryFetch"
+    />
 
     <div class="mode-switch">
       <button
@@ -90,7 +104,10 @@ function switchToGridMode() {
 
 .category-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  /* minmax(0, 1fr) instead of bare 1fr: grid items default to min-width auto,
+     so long titles could otherwise widen the track past the container and
+     create page-level horizontal overflow */
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
 

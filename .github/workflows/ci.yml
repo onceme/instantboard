@@ -124,7 +124,6 @@ jobs:
           ENV: test
           DATABASE_URL: postgresql+asyncpg://instantboard:testpass@localhost:5432/instantboard_test
           REDIS_URL: redis://localhost:6379/1
-          SECRET_KEY: test-secret-key-for-ci
           JWT_SECRET: test-jwt-secret-for-ci
           SCHEDULER_ENABLED: false
         run: |

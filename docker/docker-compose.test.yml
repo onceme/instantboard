@@ -36,7 +36,6 @@ services:
       - ENV=test
       - DATABASE_URL=postgresql+asyncpg://instantboard:testpass@postgres-test:5432/instantboard_test
       - REDIS_URL=redis://redis-test:6379/1
-      - SECRET_KEY=test-secret-key
       - JWT_SECRET=test-jwt-secret
       - SCHEDULER_ENABLED=false
     depends_on:

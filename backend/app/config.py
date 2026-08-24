@@ -67,7 +67,6 @@ class Settings(BaseSettings):
     mongodb_url: str | None = Field(default=None, alias="MONGODB_URL")
 
     # JWT
-    secret_key: str = Field(default="change-this-in-production", alias="SECRET_KEY")
     jwt_secret: str = Field(default="change-this-in-production", alias="JWT_SECRET")
     jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
     jwt_access_token_expire_minutes: int = Field(default=60, alias="JWT_ACCESS_TOKEN_EXPIRE_MINUTES")

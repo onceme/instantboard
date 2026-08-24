@@ -90,7 +90,6 @@ curl http://localhost:8000/api/v1/auth/sso/providers
 ## JWT 配置
 
 ```bash
-SECRET_KEY=your-strong-secret-key-at-least-32-chars
 JWT_SECRET=your-jwt-secret-at-least-32-chars
 JWT_ACCESS_TOKEN_EXPIRE_MINUTES=60
 JWT_REFRESH_TOKEN_EXPIRE_DAYS=7
@@ -115,7 +114,6 @@ GITHUB_OAUTH_CLIENT_ID=your_client_id
 GITHUB_OAUTH_CLIENT_SECRET=your_secret
 
 # --- JWT ---
-SECRET_KEY=<strong-random-key>
 JWT_SECRET=<strong-random-key>
 
 # --- CORS ---

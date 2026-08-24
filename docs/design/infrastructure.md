@@ -483,7 +483,7 @@ services:
       - DATABASE_URL=postgresql://instantboard:devpass@postgres:5432/instantboard_dev
       - REDIS_URL=redis://redis:6379/0
       - MONGODB_URL=mongodb://mongodb:27017/instantboard_dev
-      - SECRET_KEY=dev-secret-key-change-in-production
+      - JWT_SECRET=dev-secret-key-change-in-production
     depends_on:
       - postgres
       - redis
@@ -720,7 +720,6 @@ ENV=development
 DATABASE_URL=postgresql://instantboard:devpass@postgres:5432/instantboard_dev
 REDIS_URL=redis://redis:6379/0
 MONGODB_URL=mongodb://instantboard:devpass@mongodb:27017/instantboard_dev
-SECRET_KEY=change-this-in-production
 JWT_SECRET=change-this-in-production
 JWT_EXPIRATION_MINUTES=60
 

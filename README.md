@@ -243,8 +243,7 @@ cp .env.example .env
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `SECRET_KEY` | *(需修改)* | 应用密钥（生产必须替换！） |
-| `JWT_SECRET` | *(需修改)* | JWT 签名密钥 |
+| `JWT_SECRET` | *(需修改)* | JWT 签名密钥（access + refresh token，生产必须替换！） |
 | `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` | `60` | Access Token 有效期 |
 | `JWT_REFRESH_TOKEN_EXPIRE_DAYS` | `7` | Refresh Token 有效期 |
 

@@ -346,7 +346,7 @@ graph LR
     ATstore["存储: 前端 localStorage"]
     ATuse["使用: Bearer Authorization header / SSE query param"]
     ATcontent["内容: user_id, tenant_id, role, exp"]
-    ATsign["签名: HS256 SECRET_KEY"]
+    ATsign["签名: HS256 JWT_SECRET"]
   end
 
   subgraph refreshToken["Refresh Token"]
@@ -456,7 +456,7 @@ app.add_middleware(
 
 - **未启用的SSO提供商**: 返回 `PROVIDER_NOT_ENABLED (400)`，前端通过 `GET /api/v1/auth/sso/providers` 预检查避免此情况
 - **SSO提供商宕机**: 返回 `SSO_PROVIDER_ERROR (401)`，前端提示用户尝试其他SSO或稍后重试
-- **JWT密钥泄露**: 管理API支持立即更换 `SECRET_KEY`，所有旧token自动失效
+- **JWT密钥泄露**: 管理API支持立即更换 `JWT_SECRET`，所有旧token自动失效
 - **Redis限流不可用**: 降级为 Nginx 层限流 (粗粒度但有效)
 - **Apple代理email**: 用户隐藏真实email时，使用代理email，不可变更
 - **多SSO同一email（身份隔离）**: 按登录入口隔离，**不做跨 email 合并**（见 [admin-login.md](admin-login.md) §2、`app/services/auth.py::_get_or_create_user`）：

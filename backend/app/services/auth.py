@@ -290,6 +290,8 @@ class AuthService:
         return {"message": "Logged out"}
 
     async def _get_or_create_user(self, provider: str, sso_user_info) -> User:
+        # Main path: an existing user with the same (provider, provider_id) just gets
+        # their profile refreshed and is returned unchanged otherwise.
         result = await self.db.execute(
             select(User).where(
                 User.sso_provider == provider,
@@ -308,8 +310,32 @@ class AuthService:
             await self.db.flush()
             return user
 
+        # New SSO identities are provisioned in the default tenant.
+        default_tenant = await self._get_default_tenant()
+
         if sso_user_info.email:
-            result = await self.db.execute(select(User).where(User.email == sso_user_info.email))
+            # Email fallback (original intent: profile backfill / binding an SSO identity
+            # to an already-provisioned record for the same person instead of creating a
+            # duplicate).
+            #
+            # Security fix (account takeover): this branch used to match ANY user row with
+            # the same email, so a single SSO login could take over the local admin record
+            # (sso_provider='local', system tenant, role='admin') and inherit its admin
+            # role, or claim accounts belonging to other tenants. Post-fix semantics:
+            #   * local accounts are excluded — the local admin record (and any other
+            #     provider='local' identity) can never be claimed or rewritten by SSO;
+            #     identities are isolated by login entry and never merged by email
+            #     (docs/design/admin-login.md), so an SSO login with the admin email
+            #     simply provisions a fresh member user;
+            #   * the match is scoped to the default tenant — the only tenant a new SSO
+            #     user belongs to — never crossing tenant boundaries.
+            result = await self.db.execute(
+                select(User).where(
+                    User.email == sso_user_info.email,
+                    User.tenant_id == default_tenant.id,
+                    User.sso_provider != LOCAL_SSO_PROVIDER,
+                )
+            )
             existing_by_email = result.scalar_one_or_none()
             if existing_by_email:
                 existing_by_email.sso_provider = provider
@@ -320,8 +346,6 @@ class AuthService:
                     existing_by_email.avatar_url = sso_user_info.avatar_url
                 await self.db.flush()
                 return existing_by_email
-
-        default_tenant = await self._get_default_tenant()
 
         email = sso_user_info.email or f"{provider}_{sso_user_info.provider_id}@sso.instantboard.dev"
         name = sso_user_info.name or f"{provider} User"

@@ -7,6 +7,20 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
 
+# Environments in which an unsafe JWT secret must abort startup (fail-fast).
+JWT_SECRET_REQUIRED_ENVS = frozenset({"staging", "production"})
+# Minimum acceptable length for JWT_SECRET (256 bits of entropy for HS256).
+JWT_SECRET_MIN_LENGTH = 32
+# Known shipped/example values that must never be used as a real signing secret.
+# Note the second one is longer than the minimum length, so an explicit
+# placeholder check is required in addition to the length check.
+JWT_SECRET_PLACEHOLDERS = frozenset(
+    {
+        "change-this-in-production",
+        "change-this-in-production-use-a-strong-random-key",
+    }
+)
+
 
 def _parse_list_str(v: object) -> list[str]:
     if isinstance(v, list):
@@ -173,5 +187,33 @@ def apply_admin_password_policy(target: Settings) -> None:
     target.admin_password = None
 
 
+def validate_jwt_secret_policy(target: Settings) -> None:
+    """Fail fast when the configured JWT secret is too weak for a live environment.
+
+    Trust model: HS256 tokens are only as strong as the signing secret. In staging and
+    production a placeholder or short secret is a startup-blocking error (fail-fast), so
+    a misconfigured deployment can never boot with a forgeable signing key. In other
+    environments the same condition is logged as a warning without blocking startup.
+
+    The offending value is never included in the message, so the secret itself is not
+    leaked into logs or crash output.
+    """
+    secret = target.jwt_secret
+    env = target.env.lower()
+    is_placeholder = secret in JWT_SECRET_PLACEHOLDERS
+    is_short = len(secret) < JWT_SECRET_MIN_LENGTH
+    if not is_placeholder and not is_short:
+        return
+    requirement = (
+        f"JWT_SECRET must be a strong random value of at least {JWT_SECRET_MIN_LENGTH} "
+        f"characters and must not be a shipped placeholder. Generate one with e.g. "
+        f"'openssl rand -hex 32'."
+    )
+    if env in JWT_SECRET_REQUIRED_ENVS:
+        raise RuntimeError(f"Startup aborted for ENV={env}: unsafe JWT_SECRET. {requirement}")
+    logger.warning("Unsafe JWT_SECRET detected for ENV=%s (allowed in non-production). %s", env, requirement)
+
+
 settings = Settings()
+validate_jwt_secret_policy(settings)
 apply_admin_password_policy(settings)

@@ -1,3 +1,4 @@
+import ipaddress
 from contextvars import ContextVar
 
 from fastapi import Depends, Query, Request
@@ -98,13 +99,29 @@ def get_raw_token() -> str | None:
 
 
 def get_client_ip(request: Request) -> str:
-    """Extract the client IP, preferring the first X-Forwarded-For hop (nginx appends
-    the real peer via $proxy_add_x_forwarded_for for the /api/ locations)."""
+    """Extract the real client IP from X-Forwarded-For.
+
+    Trust model: a single trusted proxy layer (in this deployment, the user firewall +
+    nginx). nginx appends the direct peer via $proxy_add_x_forwarded_for for the /api/
+    locations, so the genuine peer address ends up as the RIGHTMOST hop; every hop to
+    its left originates upstream (ultimately from the client itself) and is untrusted.
+    The previous implementation read the leftmost hop, which let a client forge the
+    address by simply sending its own X-Forwarded-For. We therefore walk the header
+    right-to-left and return the first well-formed IP, skipping blank or unparsable
+    segments. For multi-tier proxy deployments this "rightmost wins" rule must be
+    replaced by an explicit trusted-hop-count setting.
+    """
     forwarded_for = request.headers.get("x-forwarded-for")
     if forwarded_for:
-        first_hop = forwarded_for.split(",")[0].strip()
-        if first_hop:
-            return first_hop
+        for hop in reversed(forwarded_for.split(",")):
+            candidate = hop.strip()
+            if not candidate:
+                continue
+            try:
+                ipaddress.ip_address(candidate)
+            except ValueError:
+                continue
+            return candidate
     if request.client and request.client.host:
         return request.client.host
     return "unknown"

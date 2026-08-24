@@ -1,7 +1,7 @@
 ---
-version: 1.1
+version: 1.2
 author: designer
-date: 2026-06-23
+date: 2026-08-24
 status: draft
 cross_refs: [architecture.md, api.md, database.md, data-flow.md, finance-tab.md, tech-tab.md, data-sources.md]
 ---
@@ -40,8 +40,8 @@ cross_refs: [architecture.md, api.md, database.md, data-flow.md, finance-tab.md,
 ```mermaid
 graph TD
     subgraph level1["一级分类 Category — 顶层功能区，对应侧边导航项和SSE频道"]
-        finance["财经<br/>slug: finance<br/>图标/颜色: 💰/#FF6B6B<br/>刷新频率: 30s<br/>SSE频道: channel:finance"]
-        tech["科技<br/>slug: tech<br/>图标/颜色: 🔬/#3B82F6<br/>刷新频率: 5min<br/>SSE频道: channel:tech"]
+        finance["财经<br/>slug: finance<br/>图标/颜色: chart-line (lucide)/#FF6B6B<br/>刷新频率: 30s<br/>SSE频道: channel:finance"]
+        tech["科技<br/>slug: tech<br/>图标/颜色: cpu (lucide)/#3B82F6<br/>刷新频率: 5min<br/>SSE频道: channel:tech"]
     end
     subgraph level2["二级子分类 SubCategory — 分类内的功能区域，对应前端面板"]
         cn_stock["A股行情<br/>slug: china-stock<br/>刷新: 继承一级或自定义<br/>数据源列表: Source[]"]
@@ -50,7 +50,7 @@ graph TD
     subgraph level3["三级话题标签 TopicTag — 动态标签，用于过滤和排序"]
         gpt4["GPT-4 — 从新闻内容自动提取"]
         starlink["Starlink — 从新闻内容自动提取"]
-        custom["用户可手动添加"]
+        custom["用户可手动添加<br/>(⚠️API/UI未实现)"]
     end
     finance --> cn_stock
     tech --> ai
@@ -59,11 +59,13 @@ graph TD
     ai --> custom
 ```
 
+> ⚠️ **未实现**：三级标签用户手动标注——无打标/取消打标 API，亦无 UI。
+
 #### 3.1.2 数据模型映射
 
 ```mermaid
 graph LR
-    cat["一级分类<br/>→ categories 表<br/>id, name, slug, icon, color,<br/>type, refresh_interval_seconds,<br/>keywords_filter"]
+    cat["一级分类<br/>→ categories 表<br/>id, name, slug, icon, color,<br/>type, refresh_interval_seconds,<br/>keywords_filter, priority_sort, is_active"]
     subcat["二级子分类<br/>→ 虚拟子分类,<br/>通过 items.topic_tags 实现<br/>不独立建表<br/>二级标签作为 topic_tags 数组中<br/>的固定前缀标签存在<br/>如: topic_tags: [finance, china-stock, GPT-4]<br/>前端按二级标签分组展示<br/>查询时 GIN索引过滤"]
     tag["三级标签<br/>→ items.topic_tags<br/>JSONB数组 + GIN索引<br/>动态生成, 无上限<br/>从内容自动提取或手动标注"]
     src["数据源<br/>→ sources 表<br/>绑定到一级分类<br/>source.category_id → 一级分类的 categories.id<br/>数据源不直接绑定二级子分类<br/>采集后自动打标签归入子分类"]
@@ -91,6 +93,8 @@ graph LR
 | 财经 | finance | 自选行情 | watchlist | Finnhub(failover) | api | 30s |
 | 财经 | finance | 财经新闻 | finance-news | Google News Finance RSS | rss | 5min |
 
+> ⚠️ **种子现状提示**（另见 data-sources.md §3.1）：当前财经种子源共 6 条——东方财富-A股实时（15s，活跃，兼市场指数 failover 链第一顺位）、yfinance×3（沪深300/世界指数/大宗商品，活跃）、Alpha Vantage failover 模板与天天基金 NAV 模板均 `is_active=False`；Finnhub 无定时种子源（仅作 failover 按需调用）；Google News Finance RSS 未播种。
+
 #### 3.2.2 科技分类映射 — 机器人领域
 
 | 一级分类 | 一级slug | 二级子分类(虚拟) | 二级slug | 数据源 | 源类型 | 刷新频率 |
@@ -107,6 +111,8 @@ graph LR
 | 科技 | tech | 机器人-无人机 | drone | Hackaday | rss | 5min |
 | 科技 | tech | 机器人-机器人OS/软件 | robot-software | HackerNews(robotics tag) | rss | 2min |
 | 科技 | tech | 机器人-机器人OS/软件 | robot-software | ROS Blog | rss | 每周 |
+
+> ⚠️ Automotive News（web_scrape）种子 `is_active=False`：系统无 web_scrape 采集器。
 
 #### 3.2.3 科技分类映射 — AI领域
 
@@ -125,6 +131,8 @@ graph LR
 | 科技 | tech | AI-多模态AI | multimodal | Arxiv CS.AI | rss | 30min |
 | 科技 | tech | AI-AI Agent/应用 | ai-agent | HackerNews(AI/ML tag) | rss | 2min |
 | 科技 | tech | AI-AI Agent/应用 | ai-agent | The Batch (Andrew Ng) | rss | 每周 |
+
+> ⚠️ OpenAI Blog（web_scrape）种子 `is_active=False`：系统无 web_scrape 采集器。
 
 #### 3.2.4 科技分类映射 — 大规模嵌入式领域
 
@@ -160,6 +168,8 @@ graph LR
 | 科技 | tech | 太空-太空制造与资源 | space-manufacturing | NASA News | rss | 30min |
 | 科技 | tech | 太空-太空制造与资源 | space-manufacturing | SpaceNews | rss | 5min |
 
+> ⚠️ SpaceX Updates（web_scrape）种子 `is_active=False`：系统无 web_scrape 采集器。
+
 #### 3.2.6 跨领域通用数据源映射
 
 | 一级分类 | 二级子分类(虚拟) | 数据源 | 源类型 | 覆盖领域 |
@@ -167,6 +177,8 @@ graph LR
 | 科技 | 全部子分类 | Reddit (r/artificial, r/robotics, r/embedded, r/space) | social | 全领域 |
 | 科技 | 全部子分类 | Google News Tech | rss | 全领域 |
 | 科技 | 全部子分类 | Twitter/X Lists | social | 全领域(付费租户可选) |
+
+> ⚠️ **未实现**：Reddit 种子存在但 `is_active=False`，系统无 social 采集器、无 `REDDIT_CLIENT_ID` 配置；Twitter/X 完全缺失（无采集器/配置/种子）。
 
 #### 3.2.7 映射关系设计要点
 
@@ -205,47 +217,58 @@ graph LR
 
 ```mermaid
 graph TD
-    step1["Step 1: 前端操作 — CategoryAdmin 面板<br/>用户在 SettingsView → CategoryAdmin 点击 添加分类<br/>→ 弹出 CategoryForm:<br/>名称(required): 体育<br/>Slug(auto): sports<br/>图标(select): 🏃<br/>颜色(picker): #22C55E<br/>类型(select): custom<br/>刷新频率(slider): 300s<br/>关键词过滤(multi-input): NBA, FIFA, 奥运<br/>→ 提交表单 → POST /api/v1/categories"]
-    step2["Step 2: API 层 — categories.py<br/>POST /api/v1/categories<br/>→ Pydantic CategoryCreateRequest 验证<br/>→ 注入 tenant_id (从 JWT)<br/>→ 检查租户分类数量上限 (tenants.max_categories)<br/>→ 检查 slug 唯一性 (UNIQUE tenant_id + slug)<br/>→ INSERT INTO categories<br/>→ 返回 CategoryResponse"]
-    step3["Step 3: 数据库 — categories 表<br/>INSERT categories:<br/>id = gen_random_uuid()<br/>tenant_id = {current_tenant}<br/>name = 体育, slug = sports<br/>icon = running, color = #22C55E<br/>type = custom<br/>refresh_interval_seconds = 300<br/>keywords_filter = NBA, FIFA, 奥运<br/>is_active = true<br/>同时预留 SSE 频道: channel:sports"]
-    step4["Step 4: 添加数据源 — SourceAdmin 面板<br/>用户在 CategoryAdmin → 新分类 体育 → 添加数据源<br/>→ SourceForm:<br/>名称: ESPN RSS<br/>category_id: {新分类UUID}<br/>source_type: rss<br/>url: https://www.espn.com/rss/news<br/>refresh_interval_seconds: 300<br/>→ POST /api/v1/sources<br/>→ INSERT INTO sources<br/>→ Scheduler 注册新采集任务"]
-    step5["Step 5: 采集器启动 — Scheduler 动态注册<br/>Scheduler 收到 source_created 事件<br/>Redis Pub/Sub channel:admin<br/>→ scheduler.add_job(<br/>collect_and_process,<br/>trigger=interval,<br/>seconds=300,<br/>id=collect_{source_id},<br/>max_instances=1)<br/>→ 采集任务开始运行<br/>→ Collector采集 → Processor处理 → Store存入 → SSE推送"]
-    step6["Step 6: SSE 推送生效 — EventRouter 频道注册<br/>EventRouter 新增频道: channel:sports<br/>→ Redis Pub/Sub subscribe(channel:sports)<br/>→ 前端订阅: EventSource(/api/v1/stream/sports?token=xxx)<br/>→ 接收 item_update → Pinia sportsStore → Vue 渲染<br/>前端侧边导航新增: 🏃 体育 Tab<br/>→ SportsView 加载 → 显示新闻卡片列表"]
+    step1["Step 1: 前端操作 — CategoryEditor 弹窗 (SettingsView)<br/>实际现状: 仅输入 名称(必填) + 描述(可选),<br/>type 固定提交 custom<br/>→ POST /api/v1/categories<br/>(后端 CategoryCreate 另支持 slug/icon/color/<br/>refresh_interval_seconds/keywords_filter/is_active,<br/>前端目前无对应控件⚠️)"]
+    step2["Step 2: API 层 — categories.py<br/>POST /api/v1/categories<br/>→ Pydantic CategoryCreate 校验<br/>→ 注入 tenant_id (从 JWT)<br/>→ 检查租户分类数量上限 (tenants.max_categories)<br/>→ 检查 slug 唯一性 (UNIQUE tenant_id + slug)<br/>→ INSERT INTO categories<br/>→ 返回 CategoryResponse"]
+    step3["Step 3: 数据库 — categories 表<br/>INSERT categories:<br/>id = gen_random_uuid()<br/>tenant_id = {current_tenant}<br/>name = 体育, slug = sports<br/>icon = folder (默认), color = #3B82F6 (默认)<br/>type = custom<br/>refresh_interval_seconds = 300 (默认)<br/>is_active = true"]
+    step4["Step 4: 添加数据源 — 数据源管理面板<br/>POST /api/v1/sources:<br/>name / category_id / source_type / url /<br/>refresh_interval_seconds / config.library<br/>→ collector_available 校验 (resolve_collector)<br/>→ INSERT INTO sources + source_health<br/>→ 发布 source_created 事件 (channel:dashboard⚠️)"]
+    step5["Step 5: 采集器启动 — worker 事件消费 (现状说明)<br/>worker 仅消费 SOURCE_EVENT_NAMES =<br/>{source_enabled, source_disabled, source_deleted}<br/>source_created 被 worker 忽略⚠️<br/>→ 新源需 worker 重启或后续启用操作<br/>(source_enabled → add_job)才开始采集<br/>→ 启动后: Collector采集→Processor处理→Store存储→SSE推送"]
+    step6["Step 6: SSE 推送生效 — 后端通用, 前端待接线 (说明)<br/>后端 /api/v1/stream/{category} 频道通用,<br/>可 EventSource(/api/v1/stream/sports) 订阅<br/>⚠️ 前端侧边栏目前固定4项: 财经/科技/仪表盘/设置 (Sidebar.vue)<br/>→ 自定义分类不会自动生成导航条目与视图<br/>→ stream/{category} 目前仅被前端订阅 finance/tech/dashboard"]
     step1 --> step2 --> step3 --> step4 --> step5 --> step6
 ```
+
+> ⚠️ **三处未实现（潜在体验问题）**：
+> 1. **前端表单不完整**：`CategoryEditor.vue:63-78` 只提交 name+description（type 固定为 custom），后端支持的 slug/icon/color/刷新频率/关键词过滤均无 UI 控件；
+> 2. **新建源不会自动开始采集**：`source_created` 发布在 **channel:dashboard**（`services/source.py:286-294`），worker 忽略该事件（`scheduler/worker.py:35-37`），需 worker 重启或后续启用操作；
+> 3. **自定义分类无前台视图**：侧边导航写死（`Sidebar.vue:21-32`），无 SportsView/sportsStore，后端 SSE 频道虽通用但前端未订阅。
 
 #### 3.3.2 修改分类的流程
 
 ```
-修改分类属性 (如刷新频率、关键词过滤):
+修改分类属性 (如名称、刷新频率、关键词过滤) — 仅适用于自定义分类:
 
-1. 前端: CategoryAdmin → 编辑分类 → PUT /api/v1/categories/{id}
-2. API:  验证 + UPDATE categories SET ...
-3. DB:    更新 categories 行
-4. SSE:   如果修改了 refresh_interval →
-          → Scheduler.reschedule_job(collect_{source_id}, seconds=new_interval)
-          → 对该分类下所有 sources 重新调度
-5. SSE:   如果修改了 keywords_filter →
-          → FilterProcessor 下次使用新的关键词列表
-          → 不影响已入库的条目 (已过滤过的不会变)
+1. 前端: SettingsView → CategoryEditor → PUT /api/v1/categories/{id}
+2. API:  权限校验:
+         - 系统预定义分类 (tenant_id=system) 的任何更新一律返回 Forbidden
+           (services/category.py:225-226)
+         - 跨租户分类返回 Forbidden
+         - slug 唯一性校验后 UPDATE categories
+3. DB:   更新 categories 行
+4. ⚠️ 无调度联动: 源的采集频率取各源自身的 refresh_interval_seconds,
+   修改分类的 refresh_interval_seconds 不影响已运行的源任务。
+   方案中"改分类 → Scheduler.reschedule_job 重排该分类下
+   所有源"未实现 (services/category.py::update_category 无任何调度代码)
+5. 修改 keywords_filter:
+   → FilterProcessor 下次采集使用新的分类关键词列表
+     (源级 keywords_filter 存在时优先生效)
+   → 不影响已入库的条目 (已过滤过的不会变)
 ```
 
 #### 3.3.3 删除分类的流程
 
 ```
-删除分类 (级联删除):
+删除分类 (现状: 前置条件删除, 无级联, 无 SSE 事件):
 
-1. 前端: CategoryAdmin → 删除分类 → DELETE /api/v1/categories/{id}
-2. API:  验证 + 检查分类下是否有活跃数据源
-         → 提示确认: "删除此分类将同时删除 N 个数据源"
-3. DB:    DELETE categories WHERE id = {id}
-         → CASCADE DELETE sources (ON DELETE CASCADE)
-         → CASCADE DELETE items (ON DELETE CASCADE)
-         → CASCADE DELETE source_health (ON DELETE CASCADE)
-4. SSE:   Scheduler.remove_all_jobs(category_sources)
-         → EventRouter 移除频道订阅
-         → 向订阅此频道的前端发送 category_deleted 事件
-         → 前端: 从侧边导航移除 Tab, 切换到默认分类
+1. 前端: SettingsView → CategoryEditor → DELETE /api/v1/categories/{id}
+2. API 校验 (services/category.py::delete_category):
+   - 不存在 → 404 CATEGORY_NOT_FOUND
+   - 系统预定义分类 → 403 Forbidden
+   - 跨租户分类 → 403 Forbidden
+   - 分类下仍有数据源 (>0) → 400 VALIDATION_ERROR,
+     "Remove sources before deleting the category" (要求先删源)
+3. DB:    DELETE categories WHERE id = {id} (HTTP 204)
+          此时分类下已无源, 不发生级联删除
+4. ⚠️ 不发布任何 category_deleted SSE 事件;
+   方案中"CASCADE 级联删除 + 事件通知 + 侧边栏 Tab 移除"未实现
 ```
 
 #### 3.3.4 添加新二级子分类的流程
@@ -277,9 +300,9 @@ graph TD
 ```mermaid
 graph TD
     subgraph system["预定义分类 — 系统级, 所有租户共享"]
-        sys_finance["💰财经 finance<br/>type=finance<br/>tenant_id=system"]
-        sys_tech["🔬科技 tech<br/>type=tech<br/>tenant_id=system"]
-        sys_feature["特性:<br/>tenant_id=system 系统内置 UUID固定<br/>不可删除, 不可修改名称/slug/type<br/>可修改: refresh_interval_seconds, keywords_filter<br/>预配置数据源: 财经6个 + 科技20个<br/>预配置二级子分类: 财经6个 + 科技24个"]
+        sys_finance["chart-line 财经 finance<br/>type=finance<br/>tenant_id=system"]
+        sys_tech["cpu 科技 tech<br/>type=tech<br/>tenant_id=system"]
+        sys_feature["特性:<br/>tenant_id=system 系统内置 UUID固定<br/>任何更新/删除一律返回 Forbidden<br/>(刷新/关键词的租户级覆盖未实现)<br/>预配置数据源: 财经6个 + 科技22个<br/>(AI 5+机器人 5+嵌入式 5+太空 5+跨领域 2)<br/>预配置二级子分类: 财经6个 + 科技24个"]
     end
     subgraph tenant_a["租户自定义分类 — Tenant A (company-a)"]
         ta_sports["🏃体育 sports<br/>type=custom<br/>tenant_id=tenant_a"]
@@ -311,8 +334,10 @@ SQL查询逻辑:
      OR (tenant_id = 'system')                      -- 预定义分类
   ORDER BY type ASC, name ASC                       -- 预定义优先
 
-结果: 租户看到 = 预定义分类(不可删) + 自定义分类(可删)
-前端: 侧边导航显示所有可见分类, 预定义分类有 🔒 标识表示不可删除
+结果: 租户看到 = 预定义分类(不可删/不可改) + 自定义分类(可删/可改)
+前端: 分类管理在 SettingsView → CategoryEditor 面板;
+     ⚠️ 侧边导航目前固定4项 财经/科技/仪表盘/设置 (Sidebar.vue:21-32),
+     不随分类列表动态扩展
 
 数据隔离:
   - 租户 A 看不到租户 B 的自定义分类 (WHERE tenant_id隔离)
@@ -328,13 +353,22 @@ SQL查询逻辑:
 | 查看 | ✅ 所有租户可见 | ✅ 仅本租户可见 |
 | 创建 | ❌ 仅系统管理员 | ✅ 租户admin/member |
 | 修改名称/slug/type | ❌ 不可修改 | ✅ 可修改 |
-| 修改刷新频率/关键词 | ✅ 可修改(租户级覆盖) | ✅ 可修改 |
-| 删除分类 | ❌ 不可删除 | ✅ 租户admin可删除 |
-| 添加/删除数据源 | ✅ 租户admin可操作 | ✅ 租户admin可操作 |
+| 修改刷新频率/关键词 | ❌ 不可修改（任何更新一律返回 Forbidden，`services/category.py:225-226`） | ✅ 可修改 |
+| 删除分类 | ❌ 不可删除 (Forbidden) | ✅ 租户admin可删除（需先删除分类下所有数据源，见§3.3.3） |
+| 添加数据源 | ✅ 可添加（须通过 `collector_available` 前置校验） | ✅ 可添加 |
+| 删除数据源 | ❌ 系统源一律 Forbidden（可被查看/启用） | ✅ 可删除 |
 | 修改二级子分类 | ✅ 可新增虚拟子分类 | ✅ 可自由定义 |
 | SSE订阅 | ✅ 所有租户可订阅 | ✅ 仅本租户可订阅 |
 
+> 系统源权限细则（`app/services/source.py`）：系统租户下的源可被任何租户查看与启用，但删除一律返回 `Forbidden("Cannot delete system-level sources")`（:420-421）。
+>
+> ⚠️ **未实现**："租户级覆盖"——租户对预定义分类的刷新频率/关键词/颜色的覆盖后端零实现，见 §3.4.4。
+
 #### 3.4.4 租户级配置覆盖
+
+> ⚠️ **未实现**：以下覆盖机制仅为设计意图——`tenants.settings.refresh_overrides` / `color_overrides` / `color_scheme` 后端零实现（全仓仅本文档提及，无任何读取方）。
+
+设计意图（未实现）:
 
 ```
 租户级刷新频率覆盖:
@@ -345,20 +379,28 @@ SQL查询逻辑:
 
 租户可在 tenants.settings 中覆盖:
   tenants.settings = {
-    "refresh_overrides": {
-      "finance": 60,    // 租户A希望财经降频到60s (降低API消耗)
-      "tech": 300       // 保持默认
-    },
-    "color_overrides": {
-      "finance": "#FF0000",  // 租户A希望财经分类使用自定义颜色
-    },
-    "color_scheme": "international",  // 租户A覆盖配色方案为国际配色(绿涨红跌), 默认为中国配色(红涨绿跌)
-  }
+    "refresh_overrides": { "finance": 60, "tech": 300 },
+    "color_overrides": { "finance": "#FF0000" },
+    "color_scheme": "international",  // 绿涨红跌; 默认 chinese 红涨绿跌
   }
 
 实际刷新频率 = tenants.settings.refresh_overrides[category.slug]
                ?? category.refresh_interval_seconds
 ```
+
+**现状**:
+- 预定义分类完全不可修改（§3.4.3：任何更新返回 Forbidden），刷新频率以种子值为准（finance 30s / tech 300s）；
+- 配色方案 `color_scheme` 实际是**前端按用户偏好**存储，与租户、分类均无关：存于 localStorage（`color_scheme` 键，默认 `chinese` 红涨绿跌，可切换 `international` 绿涨红跌），并与后端用户偏好同步（`frontend/src/stores/auth.ts:60-63, 96-97, 149`）。
+
+#### 3.4.5 分类相关 API 端点一览（基础 CRUD 之外）
+
+| 端点 | 方法 | 说明 | 实现位置 |
+|------|------|------|---------|
+| `/api/v1/categories/predefined` | GET | 系统预定义分类列表（含 source_count，按 name 升序） | `services/category.py::get_predefined_categories` |
+| `/api/v1/categories/{id}/sources` | GET | 分类详情 + 全部数据源列表（含 health_status / priority / refresh_interval_seconds） | `get_category_with_sources` |
+| `/api/v1/categories/{id}/subcategories` | GET | 二级子分类动态统计：按 `items.topic_tags` 聚合计数；财经/科技按固定二级 slug 白名单过滤，自定义分类返回全部标签 | `list_subcategories`（:375-460） |
+
+> 数据模型补充：categories 表另含 `priority_sort`（Boolean，默认 false）与 `is_active` 字段（`models/category.py:24-25`）；`CategoryUpdate` 支持 `priority_sort` / `is_active` 的部分更新。
 
 ### 3.5 预定义分类清单
 
@@ -425,8 +467,8 @@ SQL查询逻辑:
 
 | 一级分类 | slug | 图标 | 颜色 | type | 刷新频率(默认) | SSE频道 | 二级子分类数 |
 |---------|------|------|------|------|--------------|---------|------------|
-| 财经 | finance | 💰 | #FF6B6B | finance | 30s | channel:finance | 6 |
-| 科技 | tech | 🔬 | #3B82F6 | tech | 300s(5min) | channel:tech | 24 |
+| 财经 | finance | chart-line (lucide图标名) | #FF6B6B | finance | 30s | channel:finance | 6 |
+| 科技 | tech | cpu (lucide图标名) | #3B82F6 | tech | 300s(5min) | channel:tech | 24 |
 
 > 后续可扩展的预定义分类: 新闻 (news, 📰, #6366F1, 300s)、体育 (sports, 🏃, #22C55E, 300s) 等，初始版本仅实现财经和科技。
 
@@ -490,7 +532,7 @@ graph TD
     end
     subgraph level3_tags["三级标签 — 话题级, 动态, 无上限"]
         auto["从新闻内容自动提取<br/>gpt-4, llama-3, optimus,<br/>starlink, risc-v-v, groq, ..."]
-        manual["用户手动标注<br/>用户可在 NewsCard 上添加自定义标签"]
+        manual["用户手动标注<br/>(⚠️未实现: 无API/UI)"]
     end
     t_finance --> fin_l2
     t_ai --> ai_l2
@@ -500,6 +542,8 @@ graph TD
     ai_l2 --> auto
     ai_l2 --> manual
 ```
+
+> ⚠️ **未实现**：三级标签用户手动标注——无打标/取消打标 API；NewsCard 无标签编辑 UI；三级标签目前仅来自采集时的关键词匹配。
 
 #### 3.6.2 标签存储与索引
 
@@ -536,8 +580,9 @@ items.topic_tags: JSONB数组
 #### 3.6.3 标签自动提取算法
 
 ```python
-# processors/categorizer.py — TechTopicExtractor
-# 与 [tech-tab.md](tech-tab.md) §3.4.2 一致
+# processors/categorizer.py — 模块级 KEYWORD_TO_TAG 映射 + TechTopicExtractor
+# 现状: 仅关键词匹配 (大小写不敏感子串匹配), 无匹配时兜底打 "general";
+# ⚠️ TF-IDF / LLM 三级标签提取未实现。
 
 class TechTopicExtractor:
     """
@@ -548,33 +593,15 @@ class TechTopicExtractor:
     
     算法步骤:
     1. 一级标签: 由 source.category_id 决定 (固定)
-       如: source绑定到tech分类 → 一级标签 = "tech"
-    
-    2. 二级标签: 关键词规则匹配 (预定义200+关键词→二级标签映射)
-       keyword_to_tag = {
-         "GPT":        ["ai", "llm"],
-         "transformer": ["ai", "llm"],
-         "Optimus":     ["robotics", "humanoid"],
-         "ROS2":        ["robotics", "robot-software"],
-         "RISC-V":      ["embedded", "risc-v"],
-         "Starlink":    ["space", "satellite-internet"],
-         "SpaceX":      ["space", "commercial-space", "rocket-tech"],
-         "FPGA":        ["embedded", "fpga"],
-         "TinyML":      ["embedded", "embedded-ai", "iot-edge"],
-         ...
-       }
-    
-    3. 三级标签: TF-IDF辅助提取
-       a. 对无规则匹配的内容, TF-IDF提取高频术语作为候选
-       b. 术语出现频率 > 阈值 → 作为三级标签
-       c. 未来增强: 调用轻量LLM对标题+摘要分类
+    2. 二级标签: 关键词规则匹配 (KEYWORD_TO_TAG 映射表, 约190个关键词)
+    3. ⚠️ 未实现 — 三级标签: TF-IDF辅助提取 / LLM 标注（原设计步骤，无代码实现）
     
     标签去重: topic_tags中不重复 (Set去重)
     标签排序: 一级 → 二级 → 三级 (保持层级顺序)
     """
     
     # 一级标签: 由 source.category_id 确定
-    # 二级标签: 关键词→二级标签映射表 (200+关键词)
+    # 二级标签: 关键词→二级标签映射表 (约190个关键词，'200+'为约数表述)
     keyword_to_tag: dict[str, list[str]] = {
         # === AI领域 ===
         "GPT": ["ai", "llm"],
@@ -638,6 +665,23 @@ class TechTopicExtractor:
         "crude oil": ["finance", "commodities"],
     }
 ```
+
+**财经分类打标逻辑**（`categorizer.py::_determine_finance_tags`，:283-319）:
+
+`category.type == "finance"` 的源不走上述关键词映射表，而是按条目 `type` / `extra_data` / 标题摘要关键词确定标签，最终 `topic_tags = ["finance"] + finance_tags`：
+
+```
+判定优先级 (自上而下, 命中即返回):
+1. type == "cn_stock" 或 extra_data.region == "CN"      → ["china-stock"]
+2. type in ("index", "cn_index")                        → ["market-indices"]
+3. type == "commodity"                                  → ["commodities"]
+4. 文本含 etf/nav/估值/基金净值/fund                     → ["fund-nav"]
+5. 文本含 指数/index/s&p/nasdaq/沪深300/上证/深证        → ["market-indices"]
+6. 文本含 黄金/原油/gold/oil/commodity/期货/大宗商品      → ["commodities"]
+7. 默认兜底                                              → ["china-stock"]
+```
+
+> 实况说明：二级标签 `watchlist` / `search` **仅存在于标签字典/排序表**（`services/category.py::SUBCATEGORY_LABEL_MAP` :31-32、`categorizer.py` level2_order :228-230），`_determine_finance_tags` 实际只产出 china-stock / market-indices / commodities / fund-nav 四种——watchlist/search 为按需行情与搜索的 UI 功能，不产生于采集打标。
 
 #### 3.6.4 标签与前端组件映射
 
@@ -716,15 +760,16 @@ graph LR
 ```
 标签热度统计 (每15分钟刷新):
 
-GET /api/v1/tech/topics → 返回标签列表+热度
+GET /api/v1/tech/topics → 返回标签列表+热度 (Redis缓存 TTL=900s/15min)
   {
     "data": [
-      { "tag": "ai", "label": "人工智能", "level": 1, "count": 234 },
-      { "tag": "llm", "label": "大语言模型", "level": 2, "count": 89 },
-      { "tag": "gpt-4", "label": "GPT-4", "level": 3, "count": 23 },
-      ...
+      { "tag": "ai",    "label": "人工智能",   "count": 234, "last_active_at": "2026-08-24T12:00:00" },
+      { "tag": "llm",   "label": "大语言模型", "count": 89,  "last_active_at": "..." },
+      { "tag": "gpt-4", "label": "GPT-4",      "count": 23,  "last_active_at": "..." }
     ]
   }
+  # 实际响应字段仅 tag / label / count / last_active_at
+  # (schemas/tech.py::TechTopicResponse); 无 level / trending_change
 
 热度计算:
   SELECT tag, COUNT(*) as count
@@ -733,8 +778,8 @@ GET /api/v1/tech/topics → 返回标签列表+热度
   GROUP BY tag
   ORDER BY count DESC
 
-SSE推送: topic_stats_update (每15分钟)
-  → TopicFilter 组件动态更新热门标签列表
+SSE推送: ⚠️ 未实现——后端不存在 `topic_stats_update` 事件;
+  前端仅通过 API 请求 + 15分钟缓存刷新热门标签 (services/tech.py:348, redis ex=900)
 ```
 
 ## 4. 关键决策
@@ -745,11 +790,11 @@ SSE推送: topic_stats_update (每15分钟)
 | 二级子分类实现 | 虚拟子分类 (topic_tags 中的标签) | 子分类数量多(30+)，独立建表过度设计；topic_tags 已支持过滤和展示，利用 GIN 索引高效查询 |
 | 数据源绑定层级 | 绑定到一级分类 (sources.category_id) | 一个数据源可能覆盖多个二级子分类（如 HackerNews 覆盖4个领域）；二级子分类通过 Categorizer 自动打标签归入 |
 | 标签体系 | 三级扁平数组存储 (topic_tags JSONB) | 比 nested JSONB 更易查询；GIN 索引 `@>` 操作符天然支持层级过滤；扁平数组可同时表达层级和具体标签 |
-| 标签提取 | 规则匹配 + TF-IDF辅助 | 规则匹配可控、简单可靠；TF-IDF补充无规则匹配的内容；后续可增加 LLM 标注增强 |
+| 标签提取 | 关键词规则匹配（⚠️TF-IDF未实现） | 规则匹配可控、简单可靠；TF-IDF/LLM三级标签提取为原方案，无代码实现 |
 | 跨领域新闻 | 多标签支持 (一条新闻多个 topic_tags) | "太空中的AI" 可同时有 ["tech", "ai", "space"] 标签，在所有相关面板中显示 |
 | 多租户分类 | 预定义共享 + 自定义私有 | 预定义分类所有租户共享避免重复配置；自定义分类仅本租户可见保证隔离 |
 | 财经子分类映射 | 对应前端子面板而非 topic_tags 过滤 | 财经数据模型特殊（行情专用表而非 items 通用表），子面板切换比标签过滤更直觉 |
-| 预定义分类不可删 | tenant_id=system + 前端🔒标识 | 避免租户误删核心分类导致数据丢失；刷新频率和关键词可覆盖 |
+| 预定义分类不可删改 | tenant_id=system + 任何更新返回Forbidden | 避免租户误删/误改核心分类导致数据丢失；原"刷新频率和关键词可租户级覆盖"方案未实现（§3.4.4） |
 | 分类扩展流程 | 6步全链路: 前端→API→DB→数据源→采集器→SSE | 确保新分类从创建到数据推送全流程打通，无遗漏环节 |
 
 ## 5. 边界情况
@@ -760,8 +805,8 @@ SSE推送: topic_stats_update (每15分钟)
 - **租户分类数达到上限**: tenants.max_categories=10 → API 返回 400 `VALIDATION_ERROR` + 提示"已达分类上限"，前端禁用"添加分类"按钮
 - **数据源达到上限**: tenants.max_sources=50 → 同上，限制数据源数量
 - **预定义分类 slug 冲突**: 租户创建 slug="finance" 的自定义分类 → 被系统预定义 slug 占用 → UNIQUE(tenant_id, slug) 约束阻止，API 返回 `DUPLICATE_CATEGORY`
-- **删除自定义分类的级联影响**: 删除分类 → CASCADE 删除 sources + items + source_health → 数据不可恢复 → 前端二次确认弹窗 + 输入分类名称确认
-- **Categorizer 关键词映射表更新**: 添加新关键词映射 → 需重启服务或热加载配置 → 已入库的新闻不会重新分类，仅新采集的新闻生效；可提供"重新分类"按钮触发批量更新
+- **自定义分类删除限制**: 分类下仍有数据源时 `ValidationError` 直接拒绝删除（需先删源，`services/category.py:282-288`）；**不存在 `category_deleted` SSE 事件**；原表述"CASCADE级联删除 + 二次确认弹窗"与实现不符
+- **Categorizer 关键词映射表更新**: `KEYWORD_TO_TAG` 为代码级常量，修改需重新发布才生效；已入库的新闻不会重新分类，仅新采集的新闻生效；⚠️ **未实现**："重新分类"按钮不存在，无批量重打标手段
 - **财经与科技混合标签**: 财经新闻如果也有 tech 标签（如"科技公司财报"）→ 允许混合标签，但财经新闻主分类是 finance，tech 标签仅作为辅助过滤
 - **空分类无数据**: 新创建的分类未添加数据源 → SSE 频道推送 heartbeat 但无 item_update → 前端显示空状态"添加数据源以获取内容"
 - **标签查询性能**: items 表百万级时 topic_tags GIN 查询 → PostgreSQL GIN 索引高效，但需定期 VACUUM 维护索引健康

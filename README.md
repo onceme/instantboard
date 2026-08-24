@@ -63,9 +63,9 @@ InstantBoard 是一个**实时信息聚合消息板**服务，采用前后端分
 - 🏷️ **话题标签过滤** — 三级标签体系（领域→子分类→话题），支持跨领域筛选
 - 📡 **20+ 数据源** — RSS/API/网页抓取三种采集方式，自动故障转移
 - 🔐 **5 种 SSO 登录** — 默认启用 Google / GitHub，可按需启用 Azure AD / Apple / Facebook
-- 🏢 **多租户架构** — PostgreSQL 行级隔离 (RLS)，租户独立配置
-- 🛡️ **多层安全** — JWT 双 Token + Nginx 限流 + CSP + CORS
-- 📱 **响应式设计** — Tailwind CSS 适配桌面/平板/手机
+- 🏢 **多租户架构** — 应用层 `tenant_id` 过滤隔离，租户独立配置（详见"多租户"章节）
+- 🛡️ **多层安全** — JWT 双 Token + Refresh 轮换黑名单 + CORS（Nginx 限流 / CSP 为规划项，见下方标注）
+- 📱 **响应式设计** — 手写 CSS 变量 + 媒体查询适配桌面/平板/手机
 - 🌓 **深/浅色主题** — 运行时切换，支持涨跌颜色配置
 - 📈 **轻量监控仪表盘** — 系统/CPU/内存、数据源健康、SSE 连接统计
 
@@ -75,12 +75,12 @@ InstantBoard 是一个**实时信息聚合消息板**服务，采用前后端分
 
 | 层级 | 技术 | 说明 |
 |------|------|------|
-| **前端** | Vue 3.4 + TypeScript + Vite 5 | Composition API, Pinia 状态管理, Tailwind CSS |
+| **前端** | Vue 3.4 + TypeScript + Vite 8 | Composition API, Pinia 状态管理, 手写 CSS（tailwindcss 仅为未使用的历史 devDependency） |
 | **后端** | Python 3.11+ / FastAPI | Async 全链路, SQLAlchemy 2.0 ORM, APScheduler |
 | **实时推送** | SSE + Redis Pub/Sub | 单向服务端推送, 30s 心跳, 自动重连 |
-| **数据库** | PostgreSQL 17 | JSONB 支持, 行级安全 (RLS), 11 张核心表 |
+| **数据库** | PostgreSQL 17（开发）/ 15（生产·测试） | JSONB 支持, 应用层 `tenant_id` 隔离, 12 张核心表 |
 | **缓存** | Redis 7 | 行情缓存 / 会话 / Pub/Sub / 限流 |
-| **反向代理** | Nginx 1.25 | SSL, 限流, 静态资源, API 代理 |
+| **反向代理** | Nginx 1.25 | SSL, 静态资源, API 代理（limit_req 限流规则已注释，未启用） |
 | **容器** | Docker Compose | 开发/生产统一编排 |
 | **CI/CD** | GitHub Actions | Lint → Test → Build → Deploy |
 
@@ -96,7 +96,7 @@ graph TB
     Browser -->|"REST API 请求"| Nginx
     Browser -.->|"SSE 实时流"| Nginx
 
-    subgraph Nginx["🔒 Nginx 反向代理 / SSL / 限流"]
+    subgraph Nginx["🔒 Nginx 反向代理 / SSL"]
     end
 
     Nginx --> App
@@ -110,13 +110,13 @@ graph TB
             Collector["📡 Collector Engine<br/>7 个采集器"]
             Scheduler["⏰ Scheduler<br/>APScheduler"]
         end
-        SSE["📡 SSE EventRouter + Redis Pub/Sub<br/>8 种事件类型 · 5 个频道 · 30s 心跳"]
+        SSE["📡 SSE EventRouter + Redis Pub/Sub<br/>7 种业务事件 (+heartbeat) · 5 个频道 · 30s 心跳"]
     end
 
-    App -->|"SQLAlchemy 2.0<br/>JSONB · RLS"| PG
-    App -->|"hiredis · aioredis<br/>缓存 · Pub/Sub · 限流"| Redis
+    App -->|"SQLAlchemy 2.0<br/>JSONB · tenant_id 隔离"| PG
+    App -->|"redis-py (redis.asyncio)<br/>缓存 · Pub/Sub · 限流"| Redis
 
-    PG[("🐘 PostgreSQL 17<br/>11 张核心表")]
+    PG[("🐘 PostgreSQL 17(开发) / 15(生产)<br/>12 张核心表")]
     Redis[("🔴 Redis 7<br/>12 种 Key 模式")]
 
     style Browser fill:#e3f2fd,stroke:#1565c0,color:#000
@@ -140,7 +140,7 @@ graph TB
 | Docker Compose | V2+ | 服务编排 |
 | Git | 2.0+ | 代码拉取 |
 
-> 💡 如果不使用 Docker，需要：Python 3.11+、Node.js 18+、PostgreSQL 17、Redis 7
+> 💡 如果不使用 Docker，需要：Python 3.11+、Node.js 24+（vite 8 / eslint 9 要求 Node 20+，CI 与镜像均使用 24）、PostgreSQL 15+（开发环境 compose 使用 17）、Redis 7
 
 ### 一键启动（Docker）
 
@@ -166,8 +166,8 @@ bash scripts/setup-dev.sh
 |------|------|
 | 前端界面 | http://localhost:3000 |
 | 后端 API | http://localhost:8000 |
-| API 文档 (Swagger) | http://localhost:8000/api/v1/docs |
-| API 文档 (ReDoc) | http://localhost:8000/api/v1/redoc |
+| API 文档 (Swagger) | http://localhost:8000/docs |
+| API 文档 (ReDoc) | http://localhost:8000/redoc |
 
 **Docker Compose 服务清单**（开发环境）：
 
@@ -176,9 +176,11 @@ bash scripts/setup-dev.sh
 | `postgres` | postgres:17 | 5432 | 主数据库 |
 | `redis` | redis:7-alpine | 6379 | 缓存 + Pub/Sub |
 | `api` | 自定义 Python 3.11-slim | 8000 | FastAPI (热重载) |
-| `frontend` | 自定义 Node 18-alpine | 3000 | Vite dev server (HMR) |
+| `frontend` | 自定义 Node 24-alpine | 3000 | Vite dev server (HMR) |
 
 > MongoDB 6 默认不启动，可通过 `--profile mongodb` 按需启用。
+
+> 💡 上表的宿主机端口发布与热重载挂载全部来自 `docker/docker-compose.override.yml`（开发专用覆盖层，`docker compose up` 自动加载）：基础 `docker-compose.yml` 刻意不发布任何宿主机端口，由 override 发布 5432/6379/27017/8000/3000/3001 并挂载前后端源码目录实现热重载。显式使用 `-f` 合并生产文件时不会加载 override，因此生产不会暴露这些端口。
 
 ### 本地开发（无 Docker）
 
@@ -229,6 +231,8 @@ cp .env.example .env
 | `LOG_LEVEL` | `INFO` | 日志级别 |
 | `API_PORT` | `8000` | 后端 API 端口 |
 | `FRONTEND_PORT` | `3000` | 前端开发端口 |
+| `SCHEDULER_ENABLED` | `true` | 是否启动内嵌调度器（生产 api 容器由 compose 强制置 `false`，采集由独立 worker 容器承担） |
+| `SSL_CERT_FILE` | `/etc/ssl/certs/ca-certificates.crt` | CA 证书路径（后端镜像已内置，供外部 HTTPS 采集使用） |
 
 #### 数据库
 
@@ -286,6 +290,7 @@ ENABLED_SSO_PROVIDERS=google,github,azure_ad,apple,facebook
 |------|------|
 | `ALPHA_VANTAGE_API_KEY` | Alpha Vantage API Key (备用数据源) |
 | `FINNHUB_API_KEY` | Finnhub API Key (可选) |
+| `FINNHUB_API_KEYS` | Finnhub 多 Key 列表（逗号分隔，采集器轮换使用以规避限流） |
 
 > yfinance (Yahoo Finance) 为主数据源，无需 API Key。
 
@@ -322,7 +327,7 @@ instantboard/
 │   │   │   ├── sse.py        # SSE 推送
 │   │   │   ├── health.py     # 健康检查
 │   │   │   └── admin.py      # 管理端点
-│   │   ├── models/           # 11 个 SQLAlchemy 模型
+│   │   ├── models/           # 12 个 SQLAlchemy 模型
 │   │   ├── schemas/          # Pydantic 请求/响应 schema
 │   │   ├── services/         # 7 个业务逻辑服务
 │   │   ├── collectors/       # 7 个数据采集器 (4财经 + 3科技)
@@ -337,8 +342,8 @@ instantboard/
 │
 ├── frontend/                 # Vue.js 3 前端
 │   ├── src/
-│   │   ├── views/            # 5 个页面视图
-│   │   ├── components/       # 30 个 UI 组件
+│   │   ├── views/            # 7 个页面视图 (含 AdminLoginView、SSOCallbackView)
+│   │   ├── components/       # 31 个 UI 组件
 │   │   │   ├── layout/       # AppLayout, Header, Sidebar
 │   │   │   ├── finance/      # 9 个财经组件
 │   │   │   ├── tech/         # 6 个科技组件
@@ -356,7 +361,8 @@ instantboard/
 │   └── Dockerfile            # 多阶段构建
 │
 ├── docker/                   # Docker 编排
-│   ├── docker-compose.yml    # 开发环境
+│   ├── docker-compose.yml    # 开发环境基础文件（刻意不发布宿主机端口）
+│   ├── docker-compose.override.yml  # 开发专用覆盖（端口发布 + 源码热重载挂载）
 │   ├── docker-compose.prod.yml  # 生产环境 (overlay)
 │   ├── docker-compose.test.yml  # 测试环境
 │   ├── nginx/                # Nginx 配置 + SSL
@@ -395,11 +401,13 @@ instantboard/
 
 | 面板 | 功能 |
 |------|------|
-| **Overview** | 混合视图 — 自选摘要 + 重点行情 + 头条新闻 |
+| **Overview** | 概览视图（规划为自选摘要 + 重点行情 + 头条新闻的混合视图） |
 | **Watchlist** | 完整自选列表 — 可拖拽排序，实时行情刷新 |
 | **Search** | 搜索 — 支持代码/名称/中文名搜索，支持股票/基金/指数/商品 |
 | **Indices** | 市场指数 — 13+ 全球指数网格卡片展示 |
 | **Commodities** | 大宗商品 — 7+ 期货品种，按贵金属/能源/工业/农产品分组 |
+
+> ⚠️ **未实现**：Overview 面板目前仅渲染市场指数 (MarketIndices) 组件，自选摘要与头条新闻尚不存在。
 
 **右侧固定面板**（大屏幕始终可见）：
 - 📌 WatchlistMini — 自选列表迷你版（3-5 项摘要）
@@ -429,9 +437,11 @@ NAV_estimate = NAV_official × (1 + 跟踪指数涨跌幅 × 跟踪比率)
 | 类别 | 品种 |
 |------|------|
 | 贵金属 | 黄金, 白银 |
-| 能源 | WTI 原油, 天然气 |
+| 能源 | WTI 原油, Brent 原油, 天然气 |
 | 工业金属 | 铜 |
-| 农产品 | 大豆, 玉米 |
+| 农产品 | 大豆 |
+
+> 💡 备注：种子采集配置的商品 symbols 与展示清单尚有出入（采集含玉米 ZC=F、不含 Brent BZ=F），待修复。
 
 **数据刷新频率**：
 
@@ -482,21 +492,26 @@ NAV_estimate = NAV_official × (1 + 跟踪指数涨跌幅 × 跟踪比率)
 
 > 仅 Admin 角色用户可访问。
 
-**五类指标监控**：
+**指标监控**：
 
-| 类别 | 指标示例 | 采集频率 |
+| 类别 | 指标示例 | 采集方式 |
 |------|---------|---------|
-| 🖥️ 系统状态 | API 状态、SSE 连接数、QPS、响应时间、错误率 | 10-30 秒 |
-| 📡 数据源健康 | 各数据源状态/成功率/延迟/最新采集时间 | 5 分钟 |
-| 🗄️ 数据库 | PG 连接池/库大小、Redis 内存/连接数/Key数 | 30 秒 |
-| 💻 资源消耗 | CPU/内存使用率、磁盘 IO/容量、网络流量 | 10-30 秒 |
-| 📊 业务指标 | 活跃用户数、今日数据条目、分类分布 | 5 分钟 |
+| 🖥️ 系统状态 | API 运行时长、CPU/内存/磁盘/网络、SSE 连接统计 | 30 秒循环采集 + 按需查询 |
+| 📡 数据源健康 | 各数据源状态/成功率/延迟/最新采集时间 | 采集器写入 Redis 健康缓存（TTL 5 分钟） |
+| 🗄️ 数据库 | PG 连接数/库大小、Redis 内存/连通性 | 按需查询 |
+| 💻 资源消耗 | CPU/内存使用率、磁盘容量、网络流量 | 30 秒循环，变化超过阈值时增量推送 |
+| 📊 业务指标 | 活跃用户数、今日数据条目、分类分布 | ❌ 未实现 |
+
+> ⚠️ **未实现**：业务指标类（活跃用户数 / 今日新增 / 分类分布）后端无任何采集逻辑与 API。
+> ⚠️ **未实现**：QPS / 平均响应时间 / 错误率——请求中间件会将其写入 Redis，但没有任何 API 暴露，仪表盘也不展示。
 
 **资源优化策略**：
-- psutil 非阻塞采集 (< 1ms/次)
-- SSE 增量推送（仅推送变化值）
-- Chart.js 懒加载 + 非活跃自动暂停
-- 每小时归档 1 条到 PostgreSQL（每天仅 24 行）
+- psutil 采样经 `asyncio.to_thread` 异步执行，不阻塞事件循环（注意 `cpu_percent(0.5)` 本身有 0.5 秒采样间隔）
+- SSE 增量推送（CPU/内存变化超过 5% 阈值才推送）
+- Chart.js 路由级动态导入
+- 每 5 分钟归档 1 条快照到 PostgreSQL（约每天 288 行）
+
+> ⚠️ **未实现**：图表"非活跃自动暂停"逻辑不存在；`make` / 前端均无对应代码。
 
 ---
 
@@ -545,9 +560,11 @@ curl http://localhost:8000/api/v1/auth/sso/providers
 - SSE 连接复用 Access Token 作为 `token` query 参数（短时效，随 Access Token 过期）
 
 > ⚠️ 安全提示：两个 token 均存于 localStorage，页面一旦被 XSS 注入，token 可被脚本窃取。
-> 现有缓解：Vue 默认转义 + DOMPurify + CSP、Access Token 短时效、Refresh 轮换 + 黑名单、
+> 现有缓解：Vue 默认转义、Access Token 短时效、Refresh 轮换 + 黑名单、
 > 本地管理员入口 `/ibadmin` 会话隔离。完整风险评估见
 > [docs/design/security.md](docs/design/security.md) §3.2 / §3.6。
+>
+> ⚠️ **未实现**：规划中的 XSS 缓解"DOMPurify"与"CSP"尚未落地——DOMPurify 不在前端依赖中，全站也没有任何 Content-Security-Policy 响应头（现有安全响应头仅 X-Frame-Options / X-Content-Type-Options / X-XSS-Protection / Referrer-Policy）。
 
 **角色权限**：
 
@@ -571,6 +588,7 @@ curl http://localhost:8000/api/v1/auth/sso/providers
 |------|------|
 | `ADMIN_EMAIL` | 允许登录的管理员邮箱 |
 | `ADMIN_PASSWORD_HASH` | 管理员密码的 bcrypt 哈希（**只存哈希，不存明文**） |
+| `ADMIN_PASSWORD` | 明文密码便捷项，**仅非生产环境生效**（启动时自动哈希并告警）；生产环境禁止使用，必须配置 `ADMIN_PASSWORD_HASH` |
 
 两者都配置时本地管理员登录才会启用（`admin_login_enabled`）；未配置时接口返回 `503 ADMIN_LOGIN_DISABLED`。
 
@@ -599,20 +617,21 @@ make gen-admin-hash
 - 纯 HTTP，无需特殊协议升级
 - HTTP/2 多路复用
 
-**8 种事件类型**：
+**7 种业务事件**（另有 `heartbeat` 心跳保活）：
 
-| 事件 | 频道 | 频率 |
-|------|------|------|
-| `quote_update` | finance | 30 秒 |
-| `market_index_update` | finance | 30 秒 |
-| `commodity_update` | finance | 60 秒 |
-| `nav_estimate_update` | finance | 120 秒 |
-| `item_update` | tech | 2-5 分钟 |
-| `topic_stats_update` | tech | 15 分钟 |
-| `source_health_update` | finance/tech | 实时 |
-| `system_metric_update` | dashboard | 10 秒 |
+| 事件 | 频道 | 触发时机 |
+|------|------|---------|
+| `quote_update` | finance | REST 请求刷新行情缓存时顺带推送 |
+| `market_index_update` | finance | REST 请求刷新指数缓存时顺带推送 |
+| `commodity_update` | finance | REST 请求刷新商品缓存时顺带推送 |
+| `nav_estimate_update` | finance | REST 请求刷新 NAV 估值缓存时顺带推送 |
+| `item_update` | tech | 调度器采集完成时推送（各源 2-5 分钟间隔） |
+| `source_health_update` | dashboard | 数据源健康状态变化时实时推送 |
+| `system_metric_update` | dashboard | 30 秒采集循环；仅当 CPU/内存数值变化超过阈值 (5%) 时才推送 |
 
-> 所有频道均有 30 秒心跳保活。通过 Redis Pub/Sub 实现多进程间的消息分发。
+> - 行情类事件（quote/market_index/commodity/nav）**并非调度器周期推送**，而是 REST 请求触发缓存刷新时顺带推送；调度器采集只产生 `item_update`。
+> - `system_metric_update` 常被误认为 10 秒推送周期：10 秒实为指标在 Redis 中的缓存 TTL，推送节奏由 30 秒采集循环 + 变化阈值决定。
+> - 所有频道均有 30 秒心跳保活。通过 Redis Pub/Sub 实现多进程间的消息分发。
 
 ---
 
@@ -620,14 +639,15 @@ make gen-admin-hash
 
 启动后端后自动生成交互式 API 文档：
 
-- **Swagger UI**: http://localhost:8000/api/v1/docs
-- **ReDoc**: http://localhost:8000/api/v1/redoc
+- **Swagger UI**: http://localhost:8000/docs
+- **ReDoc**: http://localhost:8000/redoc
 
 **主要端点一览**：
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | `GET` | `/api/v1/health` | 健康检查 |
+| `GET` | `/api/v1/health/detail` | 详细健康检查（PostgreSQL/Redis 连通性） |
 | `GET` | `/api/v1/auth/sso/providers` | 获取已启用的 SSO 提供商 *(无需认证)* |
 | `POST` | `/api/v1/auth/sso/{provider}` | SSO 登录 |
 | `POST` | `/api/v1/auth/refresh` | 刷新 Token |
@@ -638,6 +658,7 @@ make gen-admin-hash
 | `GET` | `/api/v1/finance/commodities` | 大宗商品 |
 | `GET` | `/api/v1/finance/fund/{symbol}/nav` | 基金 NAV 估值 |
 | `GET/POST/DELETE` | `/api/v1/finance/watchlist` | 自选列表 CRUD |
+| `PUT` | `/api/v1/finance/watchlist/reorder` | 自选列表排序 |
 | `GET` | `/api/v1/tech/news` | 科技新闻列表 |
 | `GET` | `/api/v1/tech/topics` | 话题标签 |
 | `GET` | `/api/v1/categories` | 分类列表 |
@@ -725,6 +746,8 @@ make test-docker
 
 > 测试配置使用 SQLite + MockRedis，无需外部依赖。pytest 配置在 `backend/pyproject.toml`。
 
+> ⚠️ **未实现**：`make test-e2e` 目标虽存在，但仓库中目前没有任何端到端测试用例。
+
 ---
 
 ## 生产部署
@@ -750,12 +773,13 @@ make prod-up
 
 | 服务 | 说明 | 资源限制 |
 |------|------|---------|
-| `nginx` | 反向代理 + SSL + 限流 | 0.5 CPU / 256M |
-| `api` | FastAPI + Gunicorn | 1.0 CPU / 512M |
-| `worker` | 后台任务处理 | 0.5 CPU / 256M |
-| `postgres` | PostgreSQL 17 | 1.0 CPU / 768M |
+| `nginx` | 反向代理 + SSL | 0.5 CPU / 256M |
+| `api` | FastAPI + Gunicorn（`SCHEDULER_ENABLED=false`，调度器由 worker 独占） | 1.0 CPU / 512M |
+| `worker` | 后台采集任务（内嵌 APScheduler + 心跳） | 0.5 CPU / 256M |
+| `postgres` | PostgreSQL **15**-alpine（数据目录由 15 初始化，升级 17 需先 pg_dump/restore 停机迁移） | 1.0 CPU / 768M |
 | `redis` | Redis 7 (密码保护) | 0.5 CPU / 256M |
 | `frontend` | 静态资源 (build 产物) | 0.25 CPU / 128M |
+| `mongodb` | 可选，MongoDB 6（`--profile mongodb` 按需启用，默认不启动） | 0.5 CPU / 512M |
 
 ### 开发 vs 生产差异
 
@@ -788,7 +812,7 @@ CI 使用 QEMU + buildx 构建多架构 manifest list 并推送至 GHCR，部署
 
 | 工作流 | 触发条件 | 步骤 |
 |--------|---------|------|
-| **CI** (`ci.yml`) | Push/PR 到任何分支 | Lint → TypeCheck → Test → Build |
+| **CI** (`ci.yml`) | Push 到 `main`/`staging`/`develop`，PR 到 `main`/`staging`（Node 24 + PostgreSQL 15） | Lint → TypeCheck → Test → Build |
 | **CD Staging** (`cd-staging.yml`) | Push 到 `staging` | 构建镜像 → 推送 GHCR → SSH 部署 → 冒烟测试 |
 | **CD Production** (`cd-production.yml`) | Release 发布 | 构建镜像 → 推送 GHCR → 滚动部署 → 健康检查 → 失败回滚 |
 
@@ -807,7 +831,7 @@ CI 使用 QEMU + buildx 构建多架构 manifest list 并推送至 GHCR，部署
 |--------|------|------|--------|
 | yfinance | Python 库 | 全球股票/指数/期货/基金 | 🔵 首选 |
 | Alpha Vantage | REST API | 美股/外汇/技术指标 | 🟢 备用 |
-| 东方财富 | 网页抓取 | A 股/港股/中国基金 | 🟢 补充 |
+| 东方财富 | HTTP API (push2.eastmoney.com) | A 股/港股/中国基金 | 🟢 补充 |
 
 ### 科技数据源（按领域）
 
@@ -859,10 +883,12 @@ graph LR
 
 InstantBoard 支持多租户架构：
 
-- **数据隔离**：PostgreSQL 行级安全 (RLS)，每个查询自动过滤 `tenant_id`
+- **数据隔离**：应用层 `tenant_id` 过滤（每个查询由代码附加租户条件）
 - **Redis 隔离**：Key 前缀 `t:{tenant_id}:*`
 - **租户计划**：free / pro / enterprise
 - **租户限制**：max_users, max_categories, max_sources
+
+> ⚠️ **未实现**：PostgreSQL 行级安全 (RLS)（无 `ENABLE ROW LEVEL SECURITY` / `CREATE POLICY`），租户隔离完全依赖应用层过滤，绕过应用直连数据库时不存在隔离。
 
 启动后自动创建默认租户（`default`），所有数据归属该租户。
 
@@ -915,7 +941,7 @@ docker info | grep "Architecture"
 ### 添加新的数据采集器
 
 1. 在 `backend/app/collectors/` 创建新文件
-2. 继承 `BaseCollector`，实现 `fetch()` 方法
+2. 继承 `BaseCollector`，实现 `fetch_data()` / `parse_data()` 抽象方法（可按需覆写可选的 `validate_data()`）
 3. 在 `collectors/__init__.py` 的 `COLLECTOR_REGISTRY` 中注册
 
 ### 添加新的 API 端点

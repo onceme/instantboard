@@ -1,5 +1,7 @@
 # InstantBoard 部署指南
 
+> 最后修订：2026-08-24（文档与代码对照审计后修订）
+
 ## SSO 提供商配置
 
 InstantBoard 支持 5 种 SSO 提供商（Google、GitHub、Azure AD、Apple、Facebook），**默认只启用 Google 和 GitHub**。
@@ -84,7 +86,7 @@ curl http://localhost:8000/api/v1/auth/sso/providers
 
 - **配置驱动**：所有 5 种提供商的代码实现均已保留，启用/禁用仅通过环境变量控制
 - **向后兼容**：数据库 CHECK 约束包含全部 5 个提供商值，不受配置影响
-- **安全校验**：未在 `ENABLED_SSO_PROVIDERS` 中的提供商调用登录接口时，返回 `400 PROVIDER_NOT_ENABLED`
+- **安全校验**：未在 `ENABLED_SSO_PROVIDERS` 中的提供商调用登录接口时，返回 `400`、错误码 **`VALIDATION_ERROR`**（`core/sso_handlers.py:436` 抛出 `ValueError`，由 `services/auth.py:65-67` 包装为 `ValidationError`）。代码中不存在 `PROVIDER_NOT_ENABLED` 错误码
 - **前端集成**：前端通过 `GET /api/v1/auth/sso/providers` 接口获取启用列表，未配置的提供商登录按钮自动隐藏
 
 ## JWT 配置
@@ -123,6 +125,14 @@ CORS_ORIGINS=https://your-domain.com
 ALPHA_VANTAGE_API_KEY=your_key
 ```
 
+### 其他部署相关环境变量
+
+| 变量 | 说明 |
+|------|------|
+| `ADMIN_PASSWORD` | **仅 `ENV` 非生产时可用**的明文便捷项：启动时被一次性 bcrypt 哈希后丢弃明文；`ENV=production` 时被忽略并记 error 日志，生产必须用 `ADMIN_PASSWORD_HASH`（`.env.example:79-83`） |
+| `SSL_CERT_FILE` | Python 出站 HTTPS 校验使用的 CA bundle（`.env.example:152-161`）；Docker 镜像已在 Dockerfile 内置该环境，仅本地 venv 等非 Docker 运行需要设置 |
+| `FINNHUB_API_KEYS` | Finnhub 多 Key 列表（轮换配额用）；另有单 Key 版 `FINNHUB_API_KEY` |
+
 ## GitHub Secrets 必要清单
 
 部署 workflow 依赖以下 GitHub Repository Secrets（Settings → Secrets → Actions）：
@@ -139,12 +149,21 @@ ALPHA_VANTAGE_API_KEY=your_key
   部署动作才会解析失败）
 - `PROD_DOMAIN` — 用于部署后 health check
 - `PROD_DATABASE_URL` / `PROD_REDIS_URL` / `PROD_SECRET_KEY` / `PROD_JWT_SECRET` / `PROD_CORS_ORIGINS` — 生产环境敏感配置
+- `PROD_DB_PASSWORD` / `PROD_REDIS_PASSWORD` — 生产 PostgreSQL / Redis 密码。`docker-compose.prod.yml` 使用 `${...:?...}` 强制要求（:177、:201、:203），**缺失则容器启动直接失败**
 
 > **Smoke test 说明**：`cd-staging.yml` 的冒烟测试依次探测
 > `${BASE_URL}/api/v1/health` 与 `${BASE_URL}/`（最多 6 次、间隔 5 秒），任一失败即
 > `exit 1` 阻断部署（历史上曾有 `|| echo` 兜底吞掉失败，已移除）。`BASE_URL` 由
 > `STAGING_SITE_ORIGIN` secret 驱动：staging 切到 HTTPS 后，只需把该 secret 配成
 > `https://ib.bithollow.org:65533`，无需改任何代码。
+
+### ⚠️ `make prod-up` 的 .env 可见性问题（重要）
+
+Makefile 的 `COMPOSE_PROD` 为 `cd docker && docker compose -f docker-compose.yml -f docker-compose.prod.yml`（Makefile:19），**在 `docker/` 目录执行且不传 `--env-file`**。Compose 的 `${PROD_*}` 插值只读取当前工作目录下的 `.env`，即 `docker/.env`，**不会读取仓库根目录的 `.env`**。因此：
+
+- 直接 `make prod-up` 时，若 `PROD_*` 只写在仓库根 `.env`，会因 `:?` 校验失败而无法启动；
+- CI 已用显式 `--env-file .env` 规避（`cd-staging.yml:110`，`cd-production.yml` 各部署步骤同理）；
+- 本地手动部署二选一：把 `PROD_*` 写入 `docker/.env`，或命令显式附加 `--env-file ../.env`。
 
 ## 启用 HTTPS（staging 切换流程）
 
@@ -230,7 +249,7 @@ docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml \
 - `curl -I https://ib.bithollow.org:65533/` 响应头包含
   `Strict-Transport-Security: max-age=...; includeSubDomains`（无 `preload`）；
 - SSO 全流程：登录页 → 跳转提供商 → 回调 → 登录成功；
-- 仪表盘 SSE 指示器变绿（EventSource 走 `wss`/https 同源）；
+- 仪表盘 SSE 指示器变绿（EventSource 走 **https 同源**；SSE 是 HTTP 长连接，无 `wss` 协议）
 - `docker compose ps` 中 nginx 持续 `healthy`（healthcheck 探测 `/healthz`，
   不受 301 影响）。
 
@@ -283,7 +302,7 @@ Nginx 的 HTTPS 行为和监听端口完全由 `.env` 控制：
 | `HTTP_PORT` | `80` | HTTP 监听端口（也用于外部映射） |
 | `HTTPS_PORT` | `443` | HTTPS 监听端口（仅当 `ENABLE_HTTPS=true` 时监听）；注意这是宿主/容器侧端口，公网端口可能不同 |
 | `ENABLE_HTTPS` | `false` | 设为 `true` 启用 HTTPS + HTTP→HTTPS 301 跳转（见上文"启用 HTTPS"切换流程） |
-| `PUBLIC_BASE_URL` | `https://$host` | 对外可见的站点 origin（含公网端口），301 跳转目标；如 `https://ib.bithollow.org:65533` |
+| `PUBLIC_BASE_URL` | `https://ib.bithollow.org:65533` | `.env.example:148` 内置值；对外可见的站点 origin（含公网端口），HTTP→HTTPS 301 跳转目标。**注意**：`https://$host` 不是默认值，而是该变量为空时 `entrypoint.sh:17-21` 的运行时回退（仅适用标准 443 场景） |
 | `HSTS_MAX_AGE` | `31536000` | HSTS max-age（秒）；配置永不包含 `preload`（非标公网端口禁用） |
 | `SSL_CERT_DIR` | `./nginx/ssl` | 证书目录路径（含 `fullchain.pem`/`privkey.pem`） |
 

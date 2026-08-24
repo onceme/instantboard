@@ -1,7 +1,7 @@
 ---
-version: 1.0
+version: 1.1
 author: designer
-date: 2026-08-06
+date: 2026-08-24
 status: finalized
 cross_refs: [security.md, api.md, database.md, architecture.md]
 ---
@@ -89,10 +89,12 @@ sequenceDiagram
 
 ```json
 {
-  "email": "admin@example.com",     // EmailStr
-  "password": "..."                  // str, max_length=72（bcrypt 上限 72 字节）
+  "email": "admin@example.com",
+  "password": "..."
 }
 ```
+
+说明：`email` 为 EmailStr；`password` 为字符串，max_length=72（bcrypt 上限 72 字节）。
 
 响应 `SuccessResponse[TokenResponse]`（与 SSO 登录返回结构完全一致，前端可复用同一
 token 存取逻辑）：
@@ -134,14 +136,26 @@ JWT claims（access/refresh 均携带）：`sub`、`tenant_id`、`role`、`provi
 
 ### 4.2 client_ip 取值
 
-小工具函数 `get_client_ip(request)`（`app/dependencies.py`）：
+小工具函数 `get_client_ip(request)`（`app/dependencies.py:101-127`）：
 
-1. `X-Forwarded-For` 首段（逗号分隔取第一个，strip）；
+1. `X-Forwarded-For` **从右向左**解析：逆序遍历逗号分隔的跳数，取第一个可解析为合法
+   IP 的段（跳过空白与不可解析段）；
 2. 兜底 `request.client.host`，再兜底 `"unknown"`。
 
-nginx 检查结论：`docker/nginx/conf.d/http-server.conf.template` 与
-`https-server.conf.template` 的 `location /api/`、`location /api/v1/auth/` 均已设置
-`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`，**无需改动**。
+> 为什么"取最右"而不是"取最左"：信任模型是单层可信代理（用户防火墙 + nginx）。nginx 在
+> `/api/` 路径用 `$proxy_add_x_forwarded_for` 把真实对端**追加**到链尾，因此最右一跳才是
+> 真实来源，其左侧各跳最终都来自客户端自身、可被伪造。取最左的旧实现允许客户端发送自己的
+> `X-Forwarded-For` 直接伪造地址（可借此绕过 IP 维度锁定），故改为从右向左。多级代理部署
+> 需改用"显式可信跳数"配置，此规则不再适用。
+
+nginx 检查结论（`docker/nginx/conf.d/http-server.conf.template` 与
+`https-server.conf.template` 一致）：
+
+- `location /api/`：`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`
+  （追加真实对端到链尾，与"从右向左"解析配套）；
+- `location /api/v1/auth/`（最长前缀匹配，优先于 `/api/`）：
+  `proxy_set_header X-Forwarded-For $remote_addr;` —— 这是**刻意覆盖而非追加**：客户端自带的
+  XFF 链在此被整体丢弃，确保管理员登录路径上 `get_client_ip` 只能看到直连对端，属防伪造设计。
 
 ### 4.3 refresh kill-switch（撤销开关）
 
@@ -163,6 +177,10 @@ nginx 检查结论：`docker/nginx/conf.d/http-server.conf.template` 与
 | `ADMIN_PASSWORD` | str \| None | **仅非生产容忍**的明文（见下） |
 
 计算属性：`admin_login_enabled = bool(admin_email) and bool(admin_password_hash)`。
+
+> 空字符串环境变量（`ADMIN_EMAIL=` / `ADMIN_PASSWORD_HASH=` / `ADMIN_PASSWORD=` 配置为空串）
+> 在 `Settings.model_post_init` 中被统一归一化为 `None`（`config.py:152-158`），
+> 视同未配置并影响 `admin_login_enabled` 判定。
 
 明文 `ADMIN_PASSWORD` 处理（Settings 初始化时一次性完成）：
 
@@ -233,6 +251,8 @@ make gen-admin-hash PASS='MySecret'
 - 未启用 → 503 `ADMIN_LOGIN_DISABLED`。
 - refresh kill-switch：禁用配置后 local 会话 refresh 被 401 拒绝；SSO 会话 refresh
   不受影响。
+- client_ip：携带伪造 `X-Forwarded-For: 1.2.3.4` 直连时，取到的应为真实对端（最右合法
+  IP / nginx 覆盖后的 `$remote_addr`），而非伪造段。
 
 ## 11. 边界情况与遗留风险
 
@@ -242,8 +262,9 @@ make gen-admin-hash PASS='MySecret'
 - lock 命中返回 401 而非 429，是刻意选择：不向探测者暴露"账户存在且被锁定"的状态。
 - 已签发的 access token 在撤销开关生效后仍有效至其自然过期（默认 ≤60 分钟）；
   这是 JWT 无状态模型的固有属性，可接受。
-- `X-Forwarded-For` 可被客户端伪造首段；生产部署应由 nginx（`realip`/可信代理）
-  保证该头只追加真实来源。当前模板直连部署下风险可控。
+- `X-Forwarded-For` 防伪造已由两处机制覆盖：代码从右向左取第一个合法 IP
+  （`dependencies.py:101-127`），且 nginx 对 `/api/v1/auth/` location 直接以
+  `$remote_addr` **覆盖**该头（见 §4.2）。多级代理部署时两处规则需一并重新评估。
 
 ## 12. 与其他模块的依赖
 

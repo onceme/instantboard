@@ -1,7 +1,7 @@
 ---
-version: 1.0
+version: 1.1
 author: designer
-date: 2026-06-23
+date: 2026-08-24
 status: draft
 cross_refs: [architecture.md, api.md, database.md, data-flow.md, finance-tab.md, tech-tab.md]
 ---
@@ -35,59 +35,68 @@ cross_refs: [architecture.md, api.md, database.md, data-flow.md, finance-tab.md,
 
 ### 3.1 所有外部数据源清单表格
 
-| # | 名称 | 类型 | URL | 频率 | 数据格式 | 费用 | 所属模块 |
-|---|------|------|-----|------|---------|------|---------|
-| 1 | Yahoo Finance (yfinance) | API/库 | yfinance Python包 | 30s-5min | JSON | 免费 | 财经 |
-| 2 | Alpha Vantage | REST API | alphavantage.co | 30s-5min | JSON | 免费(限量)/付费 | 财经 |
-| 3 | 东方财富 | Web抓取 | eastmoney.com | 15s-5min | HTML→JSON | 免费 | 财经 |
-| 4 | Finnhub | REST API | finnhub.io | 30s | JSON | 免费(限量)/付费 | 财经 |
-| 5 | IEX Cloud | REST API | iexcloud.io | 30s | JSON | 免费(限量)/付费 | 财经 |
-| 6 | 天天基金 | Web抓取 | fund.eastmoney.com | 每日 | HTML→JSON | 免费 | 财经 |
-| 7 | MIT Tech Review | RSS | technologyreview.com/feed | 5min | RSS XML | 免费 | 科技-AI |
-| 8 | HackerNews | RSS/API | hnrss.org / news.ycombinator.com | 2min | RSS/JSON | 免费 | 科技-全领域 |
-| 9 | Arxiv CS.AI | RSS/API | arxiv.org/list/cs.AI/recent | 30min | RSS XML | 免费 | 科技-AI |
-| 10 | OpenAI Blog | Web抓取 | openai.com/blog | 30min | HTML→JSON | 免费 | 科技-AI |
-| 11 | The Robot Report | RSS | robotreport.com | 5min | RSS XML | 免费 | 科技-机器人 |
-| 12 | IEEE Robotics | RSS | ieee.org/publications | 每日 | RSS XML | 免费 | 科技-机器人 |
-| 13 | Hackaday | RSS | hackaday.com/blog/feed | 5min | RSS XML | 免费 | 科技-嵌入式 |
-| 14 | Embedded.com | RSS | embedded.com/rss | 5min | RSS XML | 免费 | 科技-嵌入式 |
-| 15 | RISC-V International | RSS/Web | riscv.org/blog | 30min | RSS/HTML | 免费 | 科技-嵌入式 |
-| 16 | SpaceNews | RSS | spacenews.com/feed | 5min | RSS XML | 免费 | 科技-太空 |
-| 17 | NASA News | RSS | nasa.gov/rss | 30min | RSS XML | 免费 | 科技-太空 |
-| 18 | SpaceX Updates | Web抓取 | spacex.com/updates | 30min | HTML→JSON | 免费 | 科技-太空 |
-| 19 | Ars Technica Space | RSS | arstechnica.com/science | 5min | RSS XML | 免费 | 科技-太空 |
-| 20 | Reddit | API | reddit.com/r/{sub} | 10min | JSON | 免费(限流) | 科技-全领域 |
-| 21 | Google News Tech | RSS | news.google.com/rss/search?q=technology | 5min | RSS XML | 免费 | 科技-通用 |
-| 22 | ESA News | RSS | esa.int/RSS | 30min | RSS XML | 免费 | 科技-太空 |
+| # | 名称 | 类型 | URL | 频率 | 数据格式 | 费用 | 所属模块 | 现状 |
+|---|------|------|-----|------|---------|------|---------|------|
+| 1 | Yahoo Finance | API (非官方, httpx直连) | query1.finance.yahoo.com/v8/finance/chart/{symbol} | 30s-60s | JSON | 免费 | 财经 | ✅ 活跃 (3条种子源) |
+| 2 | Alpha Vantage | REST API | alphavantage.co | 按需 | JSON | 免费(限量)/付费 | 财经 | ✅ 采集器已实现; 种子为未激活模板 |
+| 3 | 东方财富 | 公开数据接口 | push2.eastmoney.com | 15s + failover按需 | JSON | 免费 | 财经 | ✅ 活跃种子 + 指数failover第一顺位 |
+| 4 | Finnhub | REST API | finnhub.io | 按需 (failover链内) | JSON | 免费(限量)/付费 | 财经 | ✅ 采集器已实现; 无定时种子源 |
+| 5 | IEX Cloud | REST API | iexcloud.io | - | JSON | 免费(限量)/付费 | 财经 | ⚠️ 未实现 |
+| 6 | 天天基金 | Web抓取 | fund.eastmoney.com | 每日 | HTML→JSON | 免费 | 财经 | ⚠️ 未激活种子 (无web_scrape采集器) |
+| 7 | MIT Tech Review | RSS | technologyreview.com/feed | 5min | RSS XML | 免费 | 科技-AI | ✅ 活跃 |
+| 8 | HackerNews | RSS | hnrss.org | 2min | RSS/JSON | 免费 | 科技-全领域 | ✅ 活跃 |
+| 9 | Arxiv CS.AI | RSS/API | arxiv.org/rss/cs.AI | 30min | RSS XML | 免费 | 科技-AI | ✅ 活跃 |
+| 10 | OpenAI Blog | Web抓取 | openai.com/blog | 30min | HTML→JSON | 免费 | 科技-AI | ⚠️ 未激活种子 (无web_scrape采集器) |
+| 11 | The Robot Report (经Google News) | RSS | news.google.com/rss/search?q=robotics+... | 5min | RSS XML | 免费 | 科技-机器人 | ✅ 活跃 |
+| 12 | IEEE Robotics | RSS | ieee.org/publications | 每日 | RSS XML | 免费 | 科技-机器人 | ✅ 活跃 |
+| 13 | Hackaday | RSS | hackaday.com/blog/feed | 5min | RSS XML | 免费 | 科技-嵌入式 | ✅ 活跃 |
+| 14 | Embedded.com | RSS | embedded.com/feed | 5min | RSS XML | 免费 | 科技-嵌入式 | ✅ 活跃 |
+| 15 | RISC-V International | Web抓取 | riscv.org/blog | 30min | HTML→JSON | 免费 | 科技-嵌入式 | ⚠️ 未激活种子 (无web_scrape采集器) |
+| 16 | SpaceNews | RSS | spacenews.com/feed | 5min | RSS XML | 免费 | 科技-太空 | ✅ 活跃 |
+| 17 | NASA News | RSS | nasa.gov/rss | 30min | RSS XML | 免费 | 科技-太空 | ✅ 活跃 |
+| 18 | SpaceX Updates | Web抓取 | spacex.com/updates | 30min | HTML→JSON | 免费 | 科技-太空 | ⚠️ 未激活种子 (无web_scrape采集器) |
+| 19 | Ars Technica Space | RSS | arstechnica.com/science/feed | 5min | RSS XML | 免费 | 科技-太空 | ✅ 活跃 |
+| 20 | Reddit | API | reddit.com/r/{sub} | 10min | JSON | 免费(限流) | 科技-全领域 | ⚠️ 未激活种子 (无social采集器) |
+| 21 | Google News Tech | RSS | news.google.com/rss/search?q=technology | 5min | RSS XML | 免费 | 科技-通用 | ✅ 活跃 |
+| 22 | ESA News | RSS | esa.int/RSS | 30min | RSS XML | 免费 | 科技-太空 | ✅ 活跃 |
+
+> ⚠️ **种子与采集器现状**（以 `app/db/init_db.py` 与 `app/collectors/__init__.py` 为准）：
+> - 已注册采集器仅 7 个：`yfinance` / `alpha_vantage` / `eastmoney` / `finnhub` / `rss` / `hackernews` / `arxiv`（`COLLECTOR_REGISTRY`）。
+> - **无 `web_scrape` / `social` 采集器**：此类种子源（#6/#10/#15/#18，另含机器人领域 Automotive News 与 #20 Reddit）一律 `is_active=False`，仅作为未来开发模板保留；`beautifulsoup4`/`lxml` 依赖已声明但无任何 HTML 抓取代码。
+> - **IEX Cloud** 完全未实现（无采集器/配置/种子）；**Twitter/X** 完全缺失。
+> - Finnhub 无定时采集种子源（种子财经源共 6 条，不含 Finnhub），仅在财经 failover 链内按需调用（见 §3.5）。
+> - source_type 为 api/web_scrape 的源通过 `config.library` 回退解析采集器（见 §3.5.1）；解析失败时 `collector_available=false`，且激活会被拒绝。
 
 ### 3.2 财经数据源详细列表
 
-#### 3.2.1 Yahoo Finance / yfinance
+#### 3.2.1 Yahoo Finance
 
 | 属性 | 值 |
 |------|-----|
-| **类型** | Python库 (非官方Yahoo Finance API封装) |
-| **覆盖范围** | 全球股票、指数、ETF、基金、期货、外汇 |
-| **URL** | 通过 `yfinance.Ticker(symbol)` Python API调用 |
-| **数据格式** | JSON (.info, .history) |
+| **类型** | 非官方REST API (httpx直连Yahoo chart API；**不使用yfinance库**——依赖在requirements中但无任何代码import) |
+| **覆盖范围** | 全球股票、指数、ETF、期货 (chart API覆盖范围) |
+| **URL** | `https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range=5d` |
+| **数据格式** | JSON (chart meta + indicators) |
 | **费用** | 免费 |
 | **API Key** | 无需 |
-| **频率限制** | 无官方限制 (非官方API, Yahoo可能随时变更/限流) |
+| **频率限制** | 无官方限制 (Yahoo可能随时429限流；采集器附带浏览器模拟头降低被封概率，429时视为本次失败交棒failover) |
 | **数据延迟** | ~1-2分钟 |
-| **优点** | 免费、无需Key、覆盖全球、Python直接调用 |
+| **优点** | 免费、无需Key、全球覆盖 |
 | **缺点** | 非官方API不稳定、可能被Yahoo封禁、无SLA |
 | **优先级** | **首选** (Primary) |
-| **采集器** | `FinanceCollector` |
+| **采集器** | `YFinanceCollector` (`app/collectors/finance/yfinance_collector.py`) |
 
-**关键配置** (`sources.config` JSONB):
+**关键配置** (`sources.config` JSONB, 种子示例):
 ```json
 {
   "library": "yfinance",
   "symbols": ["^GSPC", "^DJI", "^IXIC", "000001.SS", "^HSI", "^N225", "^FTSE", "^GDAXI"],
   "history_period": "5d",
-  "retry_on_fail": True
+  "retry_on_fail": true
 }
 ```
+
+> 注: 采集器只消费 `library`（供 `resolve_collector` 回退解析）与 `symbols`；`history_period`/`retry_on_fail` 字段在种子中存在但**不被消费**（采集器硬编码 `range=5d`、`interval=1d`）。
 
 #### 3.2.2 Alpha Vantage
 
@@ -119,7 +128,11 @@ cross_refs: [architecture.md, api.md, database.md, data-flow.md, finance-tab.md,
 | **数据延迟** | 实时 (A股) |
 | **优点** | A股数据最全最准、基金NAV官方数据 |
 | **缺点** | 非官方接口可能变更、需控制抓取频率 |
-| **优先级** | **A股首选** / **美股备用** |
+| **优先级** | **市场指数failover链第一顺位** + **独立活跃种子源** |
+
+> **实际地位**（由原"补充"提级）：
+> 1. `market_indices` failover 链第一顺位：`_get_failover_chain` 返回 eastmoney→yfinance（`services/finance.py:719-727`）；
+> 2. 独立活跃种子源："东方财富-A股实时"，`config={"library":"eastmoney","data_type":"cn_indices"}`，刷新 15s（`init_db.py:38-48`）；其 source_type 为 `web_scrape`，靠 `config.library` 回退解析到 `EastMoneyCollector`（见 §3.5.1）。
 
 #### 3.2.4 Finnhub
 
@@ -135,7 +148,7 @@ cross_refs: [architecture.md, api.md, database.md, data-flow.md, finance-tab.md,
 | **数据延迟** | 实时 |
 | **优点** | WebSocket实时推送、官方API、搜索和基本面数据丰富 |
 | **缺点** | 免费版大宗商品支持有限、覆盖不如yfinance全面 |
-| **优先级** | **可选备用** (Failover #2) |
+| **优先级** | **按需备用** (非CN stock_quote链第3顺位；无定时种子源，仅failover时调用) |
 | **采集器** | `FinnhubCollector` |
 
 **API Endpoints (已实现)**:
@@ -150,14 +163,15 @@ cross_refs: [architecture.md, api.md, database.md, data-flow.md, finance-tab.md,
 ```json
 {
   "data_type": "stock_quote",
-  "symbols": ["AAPL", "MSFT", "GOOGL"],
-  "api_key_env": "FINNHUB_API_KEY"
+  "symbols": ["AAPL", "MSFT", "GOOGL"]
 }
 ```
 
+> 注: `FinnhubCollector` **不读取 `config.api_key_env`**，Key 直接来自 `settings.finnhub_api_key`（单Key）/ `settings.finnhub_api_keys`（逗号分隔多Key列表）（`finnhub_collector.py:39-45`）。
+
 支持的 `data_type` 值: `stock_quote`, `market_indices`, `commodities`, `search`, `company_profile`
 
-**API Key轮换策略**: 多Key池 (round-robin), 429限流时自动切换下一个Key, 所有Key限流时等待60s
+**API Key轮换策略**: 多Key池进程内round-robin（`FinnhubCollector._key_index` 顺序取Key，内存索引、进程重启丢失、不跨进程/实例共享）；**无429限流标记、无Key间限流状态共享、无Key失效通知**（429仅使当前请求等待60s重试一次）
 
 **错误处理**:
 - 401/403: 标记Key失效, 返回None → 上层触发failover到下一个数据源
@@ -180,6 +194,8 @@ cross_refs: [architecture.md, api.md, database.md, data-flow.md, finance-tab.md,
 | **缺点** | 仅中国基金、非官方接口 |
 | **优先级** | **中国基金NAV必备** |
 
+> ⚠️ **未实现**：目前仅保留为未激活种子模板（"天天基金-官方NAV"，`is_active=False`，`init_db.py:103-111`）。系统**无任何 web_scrape 采集器**，官方 NAV 抓取整体缺失；`get_fund_nav` 只读取库中已有的 NAV 估算数据，不做在线采集（见 §3.5.1）。
+
 #### 3.2.6 IEX Cloud (可选)
 
 | 属性 | 值 |
@@ -190,6 +206,8 @@ cross_refs: [architecture.md, api.md, database.md, data-flow.md, finance-tab.md,
 | **数据格式** | JSON |
 | **费用** | 免费(限量) / 付费 |
 | **优先级** | **可选** (美股深度数据需求时启用) |
+
+> ⚠️ **未实现**：无采集器、无配置字段、无种子源。
 
 ### 3.3 科技数据源详细列表
 
@@ -203,6 +221,8 @@ cross_refs: [architecture.md, api.md, database.md, data-flow.md, finance-tab.md,
 | 4 | **ROS Blog** | RSS | `https://ros.org/blog/rss.xml` | 每周 | 免费 | `{parse_rules: {}}` |
 | 5 | **Automotive News** | Web | `https://www.autonews.com` | 每日 | 免费(有限) | `{parse_rules: {title: "h2.article-title", summary: "p.excerpt"}}` |
 
+> ⚠️ Automotive News 为 `web_scrape` 源，种子 `is_active=False`（系统无 web_scrape 采集器）。
+
 #### 3.3.2 AI领域 (5个数据源)
 
 | # | 名称 | 类型 | URL | 频率 | 费用 | config示例 |
@@ -212,6 +232,8 @@ cross_refs: [architecture.md, api.md, database.md, data-flow.md, finance-tab.md,
 | 3 | **Arxiv CS.AI** | RSS | `https://arxiv.org/rss/cs.AI` | 30min | 免费 | `{parse_rules: {summary: "abstract", extra: {arxiv_id: "id"}}}` |
 | 4 | **OpenAI Blog** | Web | `https://openai.com/blog` | 30min | 免费 | `{parse_rules: {title: "h2", summary: "p.excerpt"}}` |
 | 5 | **The Batch (deeplearning.ai)** | RSS/Web | `https://deeplearning.ai/the-batch/` | 每周 | 免费 | `{parse_rules: {}}` |
+
+> ⚠️ OpenAI Blog 为 `web_scrape` 源，种子 `is_active=False`（系统无 web_scrape 采集器）。
 
 #### 3.3.3 大规模嵌入式领域 (5个数据源)
 
@@ -223,6 +245,8 @@ cross_refs: [architecture.md, api.md, database.md, data-flow.md, finance-tab.md,
 | 4 | **EE Times** | RSS/Web | `https://www.eetimes.com/rss/` | 每日 | 免费(有限) | `{parse_rules: {}}` |
 | 5 | **Zephyr Project Blog** | RSS | `https://zephyrproject.org/blog/rss` | 每月 | 免费 | `{parse_rules: {}}` |
 
+> ⚠️ RISC-V International 种子类型为 `web_scrape` 且 `is_active=False`（系统无 web_scrape 采集器）；启用需改用 RSS 替代或实现抓取采集器。
+
 #### 3.3.4 太空科技领域 (5个数据源)
 
 | # | 名称 | 类型 | URL | 频率 | 费用 | config示例 |
@@ -233,6 +257,8 @@ cross_refs: [architecture.md, api.md, database.md, data-flow.md, finance-tab.md,
 | 4 | **ESA News** | RSS | `https://www.esa.int/RSS` | 30min | 免费 | `{parse_rules: {}}` |
 | 5 | **Ars Technica Space** | RSS | `https://arstechnica.com/science/feed/` | 5min | 免费 | `{parse_rules: {summary: "excerpt"}}` |
 
+> ⚠️ SpaceX Updates 为 `web_scrape` 源，种子 `is_active=False`（系统无 web_scrape 采集器）。
+
 #### 3.3.5 跨领域通用数据源
 
 | # | 名称 | 类型 | URL | 频率 | 费用 | 说明 |
@@ -240,6 +266,8 @@ cross_refs: [architecture.md, api.md, database.md, data-flow.md, finance-tab.md,
 | 1 | **Reddit** | API | `https://www.reddit.com/r/{subreddit}/new.json` | 10min | 免费(限流) | 子版: r/artificial, r/robotics, r/embedded, r/space |
 | 2 | **Google News Tech** | RSS | `https://news.google.com/rss/search?q=technology+AI+robotics` | 5min | 免费 | 通用科技新闻 |
 | 3 | **Twitter/X** | Social | Twitter API v2 (Lists) | 10min | 付费($100/月) | 高成本, 仅付费租户可选启用 |
+
+> ⚠️ **未实现**：Reddit 种子存在但 `is_active=False`（`init_db.py:291-299`），系统无 social 采集器、无 `REDDIT_CLIENT_ID` 配置；Twitter/X 完全缺失。
 
 ### 3.4 数据源健康监控设计
 
@@ -321,35 +349,38 @@ avg_response_time_ms: 平均响应时间
 
 #### 3.5.1 Failover链配置
 
-```python
-# config/failover.py
+Failover 链**硬编码**于 `app/services/finance.py::_get_failover_chain`（:703-735），**不存在 `config/failover.py` 或任何配置文件**：
 
-FINANCE_FAILOVER_CHAINS = {
-    "stock_quote": [
-        {"source_type": "api", "name": "yfinance", "config": {"library": "yfinance"}},
-        {"source_type": "api", "name": "alpha_vantage", "config": {"api_key_env": "ALPHA_VANTAGE_API_KEY"}},
-        {"source_type": "api", "name": "finnhub", "config": {"api_key_env": "FINNHUB_API_KEY"}},
-    ],
-    "cn_stock_quote": [
-        {"source_type": "web_scrape", "name": "eastmoney", "config": {"url_pattern": "..."}},
-        {"source_type": "api", "name": "yfinance", "config": {"library": "yfinance"}},
-    ],
-    "fund_nav": [
-        {"source_type": "web_scrape", "name": "fund_eastmoney", "config": {}},
-        {"source_type": "web_scrape", "name": "eastmoney", "config": {}},
-    ],
-    "market_indices": [
-        {"source_type": "api", "name": "yfinance", "config": {"library": "yfinance"}},
-        {"source_type": "api", "name": "alpha_vantage", "config": {"api_key_env": "ALPHA_VANTAGE_API_KEY"}},
-    ],
-    "commodities": [
-        {"source_type": "api", "name": "yfinance", "config": {"library": "yfinance"}},
-        {"source_type": "api", "name": "alpha_vantage", "config": {"api_key_env": "ALPHA_VANTAGE_API_KEY"}},
-    ],
-}
-
-TECH_FAILOVER = None  # 科技源无failover链 (RSS源之间不替代, 每个源独立)
 ```
+# 代码实况 (按 data_type 分发):
+stock_quote (非CN符号):
+    [yfinance, alpha_vantage, finnhub]
+
+stock_quote (CN符号: .SS/.SZ后缀或0/3开头代码):
+    [eastmoney, yfinance]
+
+market_indices:
+    [eastmoney, yfinance]
+    # eastmoney 覆盖A股指数 (国内源、staging可达)，
+    # yfinance 全覆盖兜底；配合 _fetch_indices_with_failover
+    # 的"按symbol归并"逻辑合并多源结果
+
+commodities:
+    [yfinance, alpha_vantage]
+
+其他 data_type (search / company_profile / fund_nav 等):
+    [yfinance]   # 默认单源
+```
+
+> **fund_nav 说明**：无 `fund_nav` 专属链（落入默认 `[yfinance]`）；且 `get_fund_nav` 本身仅读取库中已有 NAV 估算数据，**不走 failover、不做在线采集**（官方 NAV 抓取整体未实现，见 §3.2.5）。
+>
+> 科技源不配置 failover 链（见 §3.5.3）。
+
+**采集器解析机制**（`app/collectors/__init__.py::resolve_collector`）：
+
+1. 先按 `source_type` 查 `COLLECTOR_REGISTRY`（rss / hackernews / arxiv）；
+2. source_type 无对应采集器时（api / web_scrape），按 `config.library` 回退解析：yfinance / alpha_vantage / eastmoney / finnhub / rss / hackernews / arxiv；
+3. 仍无法解析返回 `None` → 该源尚不可采集：响应字段 `collector_available` 向前端暴露此状态；创建/更新激活前经 `_check_collector_available` 前置校验（`services/source.py:118-131`）抛出 `NoCollectorAvailable`（`exceptions.py:31-41`），防止源处于"永久激活却从不采集"的状态。
 
 #### 3.5.2 自动Failover流程
 
@@ -374,6 +405,8 @@ graph TD
     fh_start -->|"失败"| fh_fail
 ```
 
+> 此图对应**非CN stock_quote**链；其他 data_type 的链见 §3.5.1。Failover 在 FinanceService 的抓取方法内按 symbol/批次执行：链上当前源返回空或失败即交棒下一源。
+
 #### 3.5.3 科技源独立策略
 
 科技数据源不设failover链，理由：
@@ -388,7 +421,7 @@ graph TD
 
 ```mermaid
 graph TD
-    env["1. 环境变量 (.env) — 开发环境<br/>ALPHA_VANTAGE_API_KEY=xxx<br/>FINNHUB_API_KEY=xxx<br/>IEX_CLOUD_API_KEY=xxx"]
+    env["1. 环境变量 (.env) — 开发环境<br/>ALPHA_VANTAGE_API_KEY=xxx<br/>FINNHUB_API_KEY=xxx<br/>FINNHUB_API_KEYS=k1,k2 (逗号分隔多Key)<br/>YAHOO_FINANCE_API_KEY=xxx (死配置⚠️)"]
     secrets["2. Docker secrets / .env.production — 生产环境<br/>通过GitHub Secrets注入 → 服务器.env.production"]
     no_code["3. 不入代码 — .gitignore包含.env*"]
     no_db["4. 不入数据库 — Key不在PG/MongoDB中存储"]
@@ -401,8 +434,10 @@ graph TD
 
 #### 3.6.2 Key轮换策略
 
+> ⚠️ **未实现**：`config/api_keys.py::APIKeyManager` **不存在**——无 Redis 轮换索引、无 429 限流标记、无 Key 失效检测/通知、无 `AllKeysRateLimited` 异常。现状仅 Finnhub 多 Key 进程内 round-robin（`finnhub_collector.py:34-52`，见 §3.2.4）。以下为设计意图，保留供参考：
+
 ```python
-# config/api_keys.py
+# config/api_keys.py (设计意图, 未实现)
 
 class APIKeyManager:
     """
@@ -443,23 +478,23 @@ class APIKeyManager:
 
 | 服务 | 环境变量 | 必需? | 免费 | 付费 | 说明 |
 |------|---------|------|------|------|------|
-| Yahoo Finance | 无 | 否 | - | - | yfinance无需Key |
-| Alpha Vantage | `ALPHA_VANTAGE_API_KEY` 或 `ALPHA_VANTAGE_API_KEYS` | 推荐(备用源) | 5/min | $49/月 600/min | 多Key逗号分隔 |
-| Finnhub | `FINNHUB_API_KEY` | 可选 | 60/min | $29/月 | WebSocket需付费 |
-| IEX Cloud | `IEX_CLOUD_API_KEY` | 可选 | 限量 | $9/月起 | 美股深度数据 |
+| Yahoo Finance | `YAHOO_FINANCE_API_KEY` ⚠️死配置 | 否 | - | - | httpx直连、无需Key；字段已定义但无使用方 |
+| Alpha Vantage | `ALPHA_VANTAGE_API_KEY` | 推荐(备用源) | 5/min | $49/月 600/min | **仅单Key**，`ALPHA_VANTAGE_API_KEYS` 多Key不支持 |
+| Finnhub | `FINNHUB_API_KEY` / `FINNHUB_API_KEYS` | 可选 | 60/min | $29/月 | 支持多Key列表（进程内round-robin） |
+| IEX Cloud | ⚠️ 未实现 | 可选 | 限量 | $9/月起 | 无采集器/配置/种子 |
 | 东方财富 | 无 | 否 | - | - | 无需Key, 控制频率即可 |
-| Reddit | 无(公开) / `REDDIT_CLIENT_ID` | 可选 | 限量 | - | OAuth2更稳定 |
+| Reddit | ⚠️ 未实现 | 可选 | 限量 | - | 无 `REDDIT_CLIENT_ID` 配置、无 social 采集器 |
 
 ## 4. 关键决策
 
 | 决策 | 选择 | 理由 |
 |------|------|------|
 | 财经主数据源 | yfinance | 免费、无需Key、全球覆盖、Python库直调 |
-| 财经failover | 多源链式切换 | yfinance→Alpha Vantage→Finnhub，自动切换保障可用 |
+| 财经failover | 多源链式切换 (硬编码链, 见§3.5.1) | 非CN stock_quote: yfinance→Alpha Vantage→Finnhub；market_indices: eastmoney→yfinance，自动切换保障可用 |
 | 科技源策略 | 独立无failover | RSS源内容不同不可替代，失败仅标记不影响其他 |
 | 健康监控 | source_health表+Redis缓存 | PG持久记录+Redis快速查询，双重保障 |
 | API Key存储 | .env环境变量 | 不入代码/数据库/日志，安全且易管理 |
-| Key限流处理 | 多Key池+自动轮换 | 避免单Key限流阻塞，429时自动切换 |
+| Key限流处理 | Finnhub多Key池进程内round-robin | 缓解单Key限流；统一Key管理器（限流标记/失效检测）未实现，见§3.6.2 |
 | 采集频率 | 分类级别配置(30s-5min可调) | 高频行情30s, 低频新闻5min, 灵活可配 |
 
 ## 5. 边界情况
@@ -469,9 +504,9 @@ class APIKeyManager:
 - **东方财富接口变更**: 公开接口可能变更 → Web抓取需要维护parse_rules；变更后需更新config
 - **Reddit API限流**: 公开JSON接口限流 → 降低频率(10min)；OAuth2 API更稳定但需Client ID
 - **RSS源停止更新**: 源7天无新内容 → source_health标记degraded，前端提示
-- **所有财经源不可用**: failover全链失败 → 使用Redis缓存数据(旧数据) + SSE推送"数据源暂时不可用"
+- **所有财经源不可用**: ⚠️ 方案的"Redis旧数据兜底 + SSE不可用提示"**未实现**——当前全链失败直接抛出 `ServiceUnavailable`（"Market indices data temporarily unavailable" / "Commodity data temporarily unavailable"，`services/finance.py:216-217, 264-265`），无旧数据兜底、无提示推送
 - **API Key泄露**: .env文件泄露 → 立即更换Key；生产使用Docker secrets更安全
-- **新数据源添加**: Admin CRUD创建 → Scheduler动态注册采集任务 → 无需重启服务
+- **新数据源添加**: ⚠️ "无需重启服务"仅部分成立——创建后 `source_created` 事件发布在 **channel:dashboard**，但 worker 忽略该事件（`SOURCE_EVENT_NAMES` 仅含 `source_enabled`/`source_disabled`/`source_deleted`，`scheduler/worker.py:35-37`），新源需 worker 重启或后续启用操作才开始采集。启用/停用/删除事件由 worker 实时消费以增删采集任务；worker 每 15s 上报心跳（Redis TTL 45s），API 侧 45s 无心跳视为 worker 掉线。创建/更新前有 `collector_available` 前置校验，无可解析采集器的源无法被启用（`NoCollectorAvailable`）
 
 ## 6. 与其他模块的依赖
 

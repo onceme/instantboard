@@ -1,8 +1,8 @@
 ---
-version: 1.0
+version: 1.1
 author: designer
-date: 2026-06-23
-status: draft
+date: 2026-08-24
+status: reviewed
 cross_refs: [architecture.md, database.md, security.md]
 ---
 
@@ -20,317 +20,138 @@ cross_refs: [architecture.md, database.md, security.md]
 
 ### 3.1 项目目录结构
 
-```mermaid
-graph LR
-    subgraph root["instantboard/"]
-        subgraph github[".github/"]
-            workflows["workflows/ (ci, cd-staging, cd-production)"]
-            templates["ISSUE_TEMPLATE + PR_TEMPLATE"]
-        end
-        subgraph be["backend/"]
-            app["app/"]
-            app_main["main.py — FastAPI入口"]
-            app_config["config/ (settings, logging)"]
-            app_api["api/v1/ (auth, categories, sources, finance, tech, dashboard, stream, admin)"]
-            app_models["models/ (user, tenant, category, source, item, watchlist, source_health, dashboard)"]
-            app_schemas["schemas/ (auth, category, source, finance, tech, dashboard, common)"]
-            app_services["services/ (finance, tech, dashboard, category, source, watchlist)"]
-            app_collectors["collectors/ (base, rss, api, web, finance, tech)"]
-            app_processors["processors/ (dedup, filter, categorizer, transformer)"]
-            app_scheduler["scheduler/ (jobs, manager)"]
-            app_sse["sse/ (event_router, manager)"]
-            app_auth["auth/ (sso, jwt, middleware, tenant, rate_limit)"]
-            app_db["db/ (postgres, redis, mongodb, session)"]
-            alembic["alembic/ (env, versions)"]
-            tests["tests/ (api, services, collectors, processors, integration)"]
-            reqs["requirements/ (base, dev, prod)"]
-            pyproject["pyproject.toml + Dockerfile + entrypoint.sh + manage.py"]
-        end
-        subgraph fe["frontend/"]
-            fe_public["public/ (favicon, index.html)"]
-            fe_src["src/"]
-            fe_views["views/ (Finance, Tech, Dashboard, Settings, Login)"]
-            fe_components["components/ (common, finance, tech, dashboard, settings)"]
-            fe_stores["stores/ (auth, finance, tech, dashboard, settings, sse)"]
-            fe_composables["composables/ (useSSE, useAuth, useFetch, useResponsive, useTheme, useWatchlist)"]
-            fe_types["types/ (finance, tech, dashboard, common)"]
-            fe_utils["utils/ (api, format, constants)"]
-            fe_styles["styles/ (variables, global, mixins, dark, light)"]
-            fe_config["package.json + tsconfig + vite.config + Dockerfile"]
-        end
-        subgraph docker_grp["docker/"]
-            compose["docker-compose (dev, prod, test)"]
-            nginx["nginx/ (dev, prod, ssl)"]
-            dockerfiles["Dockerfiles (api, frontend, worker)"]
-            db_config["配置 (postgres, redis, mongodb)"]
-        end
-        env_files[".env.example + .env + .gitignore"]
-        makefile["Makefile + README.md"]
-        subgraph docs_grp["docs/"]
-            design["design/ (architecture, infrastructure, api, frontend, database, security, finance-tab, tech-tab, dashboard-tab, data-flow, data-sources, content-categories)"]
-            api_docs["api/ — OpenAPI自动文档"]
-        end
-        scripts["scripts/ (setup-dev, run-tests, seed-data, generate-migration, clean-dev)"]
-    end
-```
-
-**项目目录完整结构**:
+> 本目录树经 2026-08-24 审计后按仓库真实结构重写（原图约 25 处不符，已废弃旧版）。
 
 ```text
 instantboard/
 ├── .github/
-│   └── workflows/
-│       ├── ci.yml                # PR 触发: lint + test
-│       ├── cd-staging.yml        # 合到 staging 分支: build + deploy staging
-│       └── cd-production.yml     # 合到 main 分支: build + deploy production
-│   └── ISSUE_TEMPLATE/
+│   ├── workflows/
+│   │   ├── ci.yml                # push:[main,staging,develop] + PR:[main,staging]
+│   │   ├── cd-staging.yml        # 合入 staging 触发
+│   │   └── cd-production.yml     # GitHub Release published 触发（非"合到 main"）
+│   ├── ISSUE_TEMPLATE/
 │   └── PULL_REQUEST_TEMPLATE.md
 ├── backend/
 │   ├── app/
-│   │   ├── __init__.py
 │   │   ├── main.py               # FastAPI 入口 (app 创建、路由注册、lifespan)
-│   │   ├── config/
-│   │   │   ├── __init__.py
-│   │   │   ├── settings.py       # Pydantic BaseSettings (从 .env 读取)
-│   │   │   └── logging.py        # 日志配置
+│   │   ├── config.py             # ⚠️ 单文件 Pydantic BaseSettings（无 app/config/ 目录）
+│   │   ├── dependencies.py       # FastAPI 依赖 (get_db / get_optional_token / ...)
+│   │   ├── alembic/              # alembic.ini + env.py；⚠️ 无 versions/ 目录（无任何迁移脚本）
 │   │   ├── api/
-│   │   │   ├── __init__.py
-│   │   │   ├── v1/
-│   │   │   │   ├── __init__.py
-│   │   │   │   ├── router.py     # v1 路由汇总
-│   │   │   │   ├── auth.py       # 认证端点
-│   │   │   │   ├── categories.py # 分类 CRUD
-│   │   │   │   ├── sources.py    # 数据源 CRUD
-│   │   │   │   ├── finance.py    # 财经端点
-│   │   │   │   ├── tech.py       # 科技端点
-│   │   │   │   ├── dashboard.py  # Dashboard 端点
-│   │   │   │   ├── stream.py     # SSE 端点
-│   │   │   │   └── admin.py      # 管理端点 (多租户管理)
+│   │   │   ├── router.py         # v1 路由汇总（注册 9 个模块, router.py:15-23）
+│   │   │   └── v1/
+│   │   │       ├── auth.py       # 认证端点
+│   │   │       ├── categories.py # 分类 CRUD
+│   │   │       ├── sources.py    # 数据源 CRUD
+│   │   │       ├── finance.py    # 财经端点
+│   │   │       ├── tech.py       # 科技端点
+│   │   │       ├── dashboard.py  # Dashboard 端点
+│   │   │       ├── health.py     # 健康检查
+│   │   │       ├── sse.py        # SSE 端点（挂载于 /stream 前缀；⚠️ 不叫 stream.py）
+│   │   │       └── admin.py      # 管理端点（多租户管理）
 │   │   ├── models/
-│   │   │   ├── __init__.py
+│   │   │   ├── base.py           # Declarative Base / 公共字段
 │   │   │   ├── user.py           # 用户模型
 │   │   │   ├── tenant.py         # 租户模型
 │   │   │   ├── category.py       # 分类模型
-│   │   │   ├── source.py         # 数据源模型
-│   │   │   ├── item.py           # 信息条目模型
-│   │   │   ├── watchlist.py      # 自选列表模型
-│   │   │   ├── source_health.py  # 数据源健康模型
-│   │   │   └── dashboard.py      # Dashboard 指标模型
+│   │   │   ├── source.py         # 数据源模型（SourceHealth 亦在本文件；⚠️ 无 source_health.py）
+│   │   │   ├── item.py           # 信息条目（含去重唯一约束）
+│   │   │   ├── watchlist.py      # 自选列表
+│   │   │   ├── finance.py        # FinanceQuote / FinanceSymbol / FundNAVEstimate
+│   │   │   ├── dashboard.py      # Dashboard 指标
+│   │   │   └── sse.py            # SSE 连接审计
 │   │   ├── schemas/
-│   │   │   ├── __init__.py
-│   │   │   ├── auth.py           # 认证 Pydantic schema
-│   │   │   ├── category.py       # 分类 schema
-│   │   │   ├── source.py         # 数据源 schema
-│   │   │   ├── finance.py        # 财经 schema
-│   │   │   ├── tech.py           # 科技 schema
-│   │   │   ├── dashboard.py      # Dashboard schema
-│   │   │   └── common.py         # 公共 schema (分页、错误、响应包装)
-│   │   ├── services/
-│   │   │   ├── __init__.py
-│   │   │   ├── finance_service.py
-│   │   │   ├── tech_service.py
-│   │   │   ├── dashboard_service.py
-│   │   │   ├── category_service.py
-│   │   │   ├── source_service.py
-│   │   │   └── watchlist_service.py
+│   │   │   ├── base.py           # 公共 schema（分页、错误、响应包装；⚠️ 不叫 common.py）
+│   │   │   ├── auth.py / category.py / source.py
+│   │   │   ├── finance.py / tech.py / dashboard.py
+│   │   │   └── admin.py / item.py / sse.py
+│   │   ├── services/             # ⚠️ 无 *_service 后缀
+│   │   │   ├── auth.py           # 认证业务
+│   │   │   ├── finance.py        # 财经业务
+│   │   │   ├── tech.py           # 科技业务
+│   │   │   ├── dashboard.py      # Dashboard 业务
+│   │   │   ├── category.py       # 分类业务
+│   │   │   ├── source.py         # 数据源业务（含源生命周期事件发布）
+│   │   │   └── sse.py            # SSE 业务（连接管理 / 事件发布）
 │   │   ├── collectors/
-│   │   │   ├── __init__.py
-│   │   │   ├── base.py           # BaseCollector (抽象基类)
-│   │   │   ├── rss_collector.py
-│   │   │   ├── api_collector.py
-│   │   │   ├── web_collector.py
-│   │   │   ├── finance_collector.py
-│   │   │   └── tech_collector.py
+│   │   │   ├── base.py           # BaseCollector（collect + record_health）
+│   │   │   ├── finance/          # yfinance / alpha_vantage / eastmoney / finnhub _collector.py
+│   │   │   └── tech/             # rss / hackernews / arxiv _collector.py
 │   │   ├── processors/
-│   │   │   ├── __init__.py
-│   │   │   ├── dedup.py          # 去重处理器
+│   │   │   ├── base.py           # 处理器链
+│   │   │   ├── dedup.py          # 去重（Redis MD5(title:url)）
 │   │   │   ├── filter.py         # 关键词过滤
-│   │   │   ├── categorizer.py    # 自动分类
-│   │   │   └── transformer.py    # 数据格式转换
-│   │   ├── scheduler/
-│   │   │   ├── __init__.py
-│   │   │   ├── jobs.py           # 定时任务定义
-│   │   │   └── manager.py        # APScheduler/Celery 管理器
-│   │   ├── sse/
-│   │   │   ├── __init__.py
-│   │   │   ├── event_router.py   # SSE 事件路由
-│   │   │   └── manager.py        # SSE 连接管理
-│   │   ├── auth/
-│   │   │   ├── __init__.py
-│   │   │   ├── sso.py            # SSO 集成 (5种)
-│   │   │   ├── jwt.py            # JWT 管理
-│   │   │   ├── middleware.py     # 认证中间件
-│   │   │   ├── tenant.py         # 多租户隔离中间件
-│   │   │   └── rate_limit.py     # 限流中间件
-│   │   └── db/
-│   │       ├── __init__.py
-│   │       ├── postgres.py       # PostgreSQL 连接管理
-│   │       ├── redis.py          # Redis 连接管理
-│   │       └ mongodb.py         # MongoDB 连接管理 (可选)
-│   │       └ session.py         # SQLAlchemy session 管理
-│   ├── alembic/
-│   │   ├── env.py
-│   │   ├── versions/
-│   │   └ alembic.ini
-│   ├── tests/
-│   │   ├── __init__.py
-│   │   ├── conftest.py           # pytest fixtures (db, client, auth)
-│   │   ├── api/
-│   │   │   ├── test_auth.py
-│   │   │   ├── test_categories.py
-│   │   │   ├── test_finance.py
-│   │   │   ├── test_tech.py
-│   │   │   ├── test_dashboard.py
-│   │   │   └ test_stream.py
-│   │   ├── services/
-│   │   ├── collectors/
-│   │   └ processors/
-│   │   └ integration/
-│   │   │   └ test_sse_integration.py
-│   │   │   └ test_data_pipeline.py
-│   ├── requirements/
-│   │   ├── base.txt              # 核心依赖
-│   │   ├── dev.txt               # 开发依赖 (pytest, ruff, etc.)
-│   │   └ prod.txt               # 生产依赖 (gunicorn, etc.)
-│   ├── pyproject.toml            # 项目元数据 + ruff + pytest 配置
-│   ├── Dockerfile                # 多阶段构建
-│   └ entrypoint.sh              # 容器入口脚本
-│   └ manage.py                  # 管理命令 (类似 Django manage.py)
+│   │   │   ├── categorizer.py    # 自动分类 / topic 提取
+│   │   │   └── transformer.py    # 格式转换
+│   │   ├── scheduler/            # ⚠️ 无 jobs.py
+│   │   │   ├── manager.py        # AsyncSchedulerManager（APScheduler）
+│   │   │   └── worker.py         # 生产独立进程入口（python -m app.scheduler.worker + Redis 心跳）
+│   │   ├── core/                 # ⚠️ 认证/中间件/Redis 均在此（无 auth/、sse/ 目录）
+│   │   │   ├── constants.py / exceptions.py
+│   │   │   ├── security.py       # JWT 签发/校验（原"auth/jwt.py"）
+│   │   │   ├── sso_handlers.py   # 5 种 SSO（原"auth/sso.py"）
+│   │   │   ├── middleware.py     # CORS / 请求日志 / 限流中间件（空壳）
+│   │   │   ├── redis.py          # Redis 客户端 + RedisKeys（不在 db/ 下）
+│   │   │   └── sse_router.py     # SSE EventRouter（原"sse/event_router.py"）
+│   │   ├── db/
+│   │   │   ├── init_db.py        # create_tables（启动建表）
+│   │   │   └── session.py        # SQLAlchemy session
+│   │   └── tests/                # ⚠️ 空的脚手架残留（真实测试在 backend/tests/），建议清理
+│   ├── tests/                    # 真实测试目录
+│   │   ├── conftest.py
+│   │   ├── unit/
+│   │   └── integration/
+│   ├── requirements/             # base.txt / dev.txt / prod.txt
+│   ├── pyproject.toml            # 元数据 + ruff + pytest + mypy 配置
+│   ├── Dockerfile                # ⚠️ 在 backend/ 根（多阶段: development / production）
+│   └── entrypoint.sh             # 容器入口（含 create_tables / alembic -c 正确用法）
 ├── frontend/
-│   ├── public/
-│   │   ├── favicon.ico
-│   │   └ index.html             # SPA 入口 HTML
+│   ├── index.html                # ⚠️ SPA 入口在 frontend/ 根（非 public/）
 │   ├── src/
-│   │   ├── App.vue               # 根组件
-│   │   ├── main.ts               # 入口 (createApp + plugins)
+│   │   ├── App.vue / main.ts
+│   │   ├── api/                  # API 请求封装
 │   │   ├── router/
-│   │   │   ├── index.ts          # Vue Router 路由定义
-│   │   ├── views/
-│   │   │   ├── FinanceView.vue
-│   │   │   ├── TechView.vue
-│   │   │   ├── DashboardView.vue
-│   │   │   ├── SettingsView.vue
-│   │   │   └ LoginView.vue
+│   │   ├── views/                # FinanceView / TechView / DashboardView / SettingsView /
+│   │   │                         # LoginView / AdminLoginView / SSOCallbackView（共 7 个）
 │   │   ├── components/
-│   │   │   ├── common/
-│   │   │   │   ├── AppHeader.vue
-│   │   │   │   ├── AppSidebar.vue
-│   │   │   │   ├── AppFooter.vue
-│   │   │   │   ├── MessageCard.vue
-│   │   │   │   ├── SearchBar.vue
-│   │   │   │   ├── LoadingSpinner.vue
-│   │   │   │   └ ErrorAlert.vue
-│   │   │   ├── finance/
-│   │   │   │   ├── MarketTicker.vue
-│   │   │   │   ├── WatchlistPanel.vue
-│   │   │   │   ├── StockDetail.vue
-│   │   │   │   ├── FundDetail.vue
-│   │   │   │   ├── NAVCalculator.vue
-│   │   │   │   ├── MarketIndexCard.vue
-│   │   │   │   ├── CommodityCard.vue
-│   │   │   │   ├── FinanceSearch.vue
-│   │   │   │    FinanceSubNav.vue
-│   │   │   ├── tech/
-│   │   │   │   ├── TopicFilter.vue
-│   │   │   │   ├── NewsFeed.vue
-│   │   │   │   ├── NewsCard.vue
-│   │   │   │   ├── TopicTag.vue
-│   │   │   │   ├── CategoryPanel.vue
-│   │   │   ├── dashboard/
-│   │   │   │   ├── HealthPanel.vue
-│   │   │   │   ├── MetricsChart.vue
-│   │   │   │   ├── ServiceStatus.vue
-│   │   │   │   ├── SystemInfo.vue
-│   │   │   │   ├── DataSourceHealth.vue
-│   │   │   ├── settings/
-│   │   │   │   ├── CategoryEditor.vue
-│   │   │   │   ├── SourceEditor.vue
-│   │   │   │   ├── ProfileSettings.vue
-│   │   │   │   ├── ThemeToggle.vue
-│   │   ├── stores/
-│   │   │   ├── auth.ts            # 认证状态
-│   │   │   ├── finance.ts         # 财经数据状态
-│   │   │   ├── tech.ts            # 科技数据状态
-│   │   │   ├── dashboard.ts       # Dashboard 状态
-│   │   │   ├── settings.ts        # 设置状态
-│   │   │   ├── sse.ts             # SSE 连接管理
-│   │   ├── composables/
-│   │   │   ├── useSSE.ts          # SSE 连接 composable
-│   │   │   ├── useAuth.ts         # 认证 composable
-│   │   │   ├── useFetch.ts        # REST fetch composable
-│   │   │   ├── useResponsive.ts   # 响应式断点 composable
-│   │   │   ├── useTheme.ts        # 主题 composable
-│   │   │   ├── useWatchlist.ts    # 自选列表 composable
-│   │   ├── types/
-│   │   │   ├── finance.ts         # 财经 TypeScript 类型
-│   │   │   ├── tech.ts            # 科技 TypeScript 类型
-│   │   │   ├── dashboard.ts       # Dashboard 类型
-│   │   │   ├── common.ts          # 公共类型
-│   │   ├── utils/
-│   │   │   ├── api.ts             # API 客户端配置
-│   │   │   ├── format.ts          # 格式化工具
-│   │   │   ├── constants.ts       # 常量定义
-│   │   ├── styles/
-│   │   │   ├── variables.scss     # CSS 变量 (主题色、断点)
-│   │   │   ├── global.scss        # 全局样式
-│   │   │   ├── mixins.scss        # SCSS mixins
-│   │   │   ├── dark.scss          # 暗色主题
-│   │   │   ├── light.scss         # 亮色主题
-│   ├── package.json
-│   ├── tsconfig.json
-│   ├── vite.config.ts
-│   ├── Dockerfile                 # 前端构建镜像
-│   ├── .eslintrc.cjs
-│   └ .prettierrc.json
+│   │   │   ├── layout/           # AppLayout / Header / Sidebar
+│   │   │   ├── common/           # EmptyState / ErrorAlert / LoadingSpinner / ThemeToggle
+│   │   │   ├── finance/          # FinanceGrid / QuoteCard / Watchlist / WatchlistMini /
+│   │   │   │                     # SearchSymbols / MarketIndices / Commodities / FundNAV / FinanceSubNav
+│   │   │   ├── tech/             # NewsFeed / NewsCard / TopicFilter / TopicTag / CategoryPanel / TechSubNav
+│   │   │   ├── dashboard/        # HealthPanel / ServicesHealth / SystemStatus /
+│   │   │   │                     # DataSourcesHealth / SSEStats / ChartWrapper
+│   │   │   └── settings/         # CategoryEditor / SourceEditor / ProfileSettings
+│   │   ├── stores/               # Pinia（auth / finance / tech / dashboard / settings / sse）
+│   │   ├── composables/          # useAuth / useInfiniteScroll / useResponsive / useSSE / useTheme
+│   │   ├── types/                # ⚠️ 单文件 types/index.ts
+│   │   ├── utils/                # api.ts / sse.ts / format.ts 等
+│   │   └── styles/               # variables.css + global.css（⚠️ 纯 CSS，无 SCSS）
+│   ├── package.json / tsconfig*.json / vite.config.ts
+│   ├── Dockerfile                # ⚠️ 在 frontend/ 根（多阶段: dev / prod）
+│   ├── entrypoint.sh / nginx.conf
+│   ├── eslint.config.js          # ⚠️ flat config（非 .eslintrc.cjs）
+│   └── .prettierignore           # ⚠️ 无 .prettierrc.json
 ├── docker/
-│   ├── docker-compose.yml         # 开发环境编排
-│   ├── docker-compose.prod.yml    # 生产环境编排 (overlay)
-│   ├── docker-compose.test.yml    # 测试环境编排
+│   ├── docker-compose.yml        # 开发基础编排（刻意不发布任何宿主机端口）
+│   ├── docker-compose.override.yml  # 开发覆盖：端口发布 + 热重载挂载
+│   ├── docker-compose.prod.yml   # 生产编排
+│   ├── docker-compose.test.yml
 │   ├── nginx/
-│   │   ├── nginx.dev.conf         # 开发 Nginx 配置
-│   │   ├── nginx.prod.conf        # 生产 Nginx 配置 (SSL + rate-limit)
-│   │   └ ssl/                    # SSL 证书 (生产)
-│   ├── api/
-│   │   └ Dockerfile              # 后端多阶段构建
-│   ├── frontend/
-│   │   └ Dockerfile              # 前端构建+Nginx托管
-│   ├── worker/
-│   │   └ Dockerfile              # Celery Worker 镜像
-│   ├── postgres/
-│   │   ├── init.sql              # 初始化脚本
-│   │    postgresql.conf         # PostgreSQL 配置
-│   ├── redis/
-│   │   ├── redis.conf            # Redis 配置
-│   ├── mongodb/
-│   │   ├── init.js               # MongoDB 初始化
-│   │    mongod.conf             # MongoDB 配置
-├── .env.example                   # 环境变量模板 (不含敏感值)
-├── .env                           # 本地开发环境变量 (不入Git)
-├── .gitignore
-├── Makefile                       # 开发命令快捷脚本
-├── README.md
-├── docs/
-│   ├── design/                    # 设计文档 (本目录)
-│   │   ├── architecture.md
-│   │   ├── infrastructure.md
-│   │   ├── api.md
-│   │   ├── frontend.md
-│   │   ├── database.md
-│   │   ├── security.md
-│   │   ├── finance-tab.md
-│   │   ├── tech-tab.md
-│   │   ├── dashboard-tab.md
-│   │   ├── data-flow.md
-│   │   ├── data-sources.md
-│   │   └ content-categories.md
-│   └ api/                        # 自动生成的 OpenAPI 文档
-└── scripts/
-│   ├── setup-dev.sh              # 开发环境一键初始化
-│   ├── run-tests.sh              # 运行所有测试
-│   ├── seed-data.sh              # 数据库种子数据
-│   └ generate-migration.sh       # 生成数据库迁移
-│    clean-dev.sh                 # 清理开发容器和数据
+│   │   ├── nginx.conf            # 主配置（limit_req_zone 全被注释）
+│   │   ├── conf.d/*.template     # http/https 模板
+│   │   └── entrypoint.sh         # envsubst 渲染
+│   ├── postgres/                 # init.sql（⚠️ 无 postgresql.conf）
+│   └── redis/                    # redis.conf
+├── scripts/                      # gen_admin_password_hash.py 等
+├── .env.example                  # 178 行环境变量模板
+├── Makefile
+└── docs/
+    ├── design/                   # 设计文档（本目录）
+    └── deployment.md             # 部署指南（⚠️ 无 docs/api/ 目录）
 ```
+
+> ⚠️ **未实现**：Alembic 迁移体系——`app/alembic/` 仅有 `alembic.ini + env.py`，无 `versions/` 目录、无任何迁移脚本；建表依赖 `entrypoint.sh` 的 `create_tables()`。
 
 ### 3.2 Git 仓库初始化策略
 
@@ -360,65 +181,45 @@ graph TD
 - `main`: 必须通过 CI、必须 1 个 approve、禁止直接 push
 - `staging`: 必须通过 CI
 
-**Git hooks** (via `pre-commit`):
-- `pre-commit`: ruff lint + 格式化
-- `pre-push`: 运行单元测试
+**Git hooks**:
+
+> ⚠️ **未实现**：`pre-commit` 仅作为 dev 依赖声明，仓库内无 `.pre-commit-config.yaml`，pre-commit / pre-push 钩子均未实际安装。
 
 ### 3.3 GitHub Actions CI/CD 流程
 
-#### CI 流程 (`ci.yml`) — PR 和 push 到任何分支触发
+#### CI 流程 (`ci.yml`) — push 到 main/staging/develop + PR 到 main/staging 触发（ci.yml:3-7）
 
 ```yaml
 name: CI
-on: [push, pull_request]
+on:
+  push:
+    branches: [main, staging, develop]
+  pull_request:
+    branches: [main, staging]
 jobs:
   lint-backend:
-    runs-on: ubuntu-latest
-    steps:
-      - checkout
-      - setup-python 3.11
-      - pip install requirements/dev.txt
-      - ruff check app/
-      - ruff format --check app/
-  
+    # setup-python 3.11 → pip install requirements/dev.txt + pip install -e .
+    # ruff check app/
+    # ruff format --check app/ tests/
+    # mypy 软门禁: mypy app/ --ignore-missing-imports || true
+    #   （当前约 425 个类型错误待清理；计划按模块修复后去掉 "|| true" 转硬门禁，
+    #    期间不得新增错误 — ci.yml:42-47）
   lint-frontend:
-    runs-on: ubuntu-latest
-    steps:
-      - checkout
-      - setup-node 18
-      - npm ci
-      - eslint src/
-      - prettier --check src/
-  
+    # setup-node 24 → npm ci（ci.yml:59）
+    # eslint . --max-warnings=0 / prettier --check . / npm run type-check
   test-backend:
-    runs-on: ubuntu-latest
     services:
-      postgres: (image: postgres:15, env from .env.example)
-      redis: (image: redis:7)
-    steps:
-      - checkout
-      - setup-python 3.11
-      - pip install requirements/dev.txt
-      - pytest --cov=app --cov-report=xml
-      - upload coverage to Codecov
-  
+      postgres: postgres:15-alpine   # 与生产保持一致（ci.yml:83）
+      redis: redis:7-alpine
+    # ENV=test, SCHEDULER_ENABLED=false; pytest --cov → Codecov
   test-frontend:
-    runs-on: ubuntu-latest
-    steps:
-      - checkout
-      - setup-node 18
-      - npm ci
-      - vitest run --coverage
-      - upload coverage
-  
+    # Node 24 → npm run test
   build-frontend:
-    runs-on: ubuntu-latest
-    steps:
-      - checkout
-      - setup-node 18
-      - npm ci
-      - npm run build
-      - verify dist/ exists
+    needs: [lint-frontend, test-frontend]
+    # npm run build → 校验 dist/ 存在
+  build-docker:                     # ci.yml:185-214
+    needs: [test-backend, build-frontend]
+    # buildx: backend (target: production) + frontend (target: prod), push=false
 ```
 
 #### CD Staging (`cd-staging.yml`) — 合到 staging 分支触发
@@ -443,103 +244,70 @@ jobs:
       - run smoke tests
 ```
 
-#### CD Production (`cd-production.yml`) — 合到 main 分支触发
+#### CD Production (`cd-production.yml`) — GitHub Release 发布触发（`on: release: [published]`，cd-production.yml:3-5；**不是**"合到 main"）
 
 ```yaml
 name: Deploy Production
 on:
-  push:
-    branches: [main]
+  release:
+    types: [published]
 jobs:
   build-and-push:
-    similar to staging, but tag: production-latest + git SHA
+    # buildx + QEMU: linux/amd64,linux/arm/v7 → push GHCR
+    # tag: production-latest + production-{sha} + {release_tag}
   deploy:
-    steps:
-      - SSH to production server
-      - docker compose -f docker-compose.prod.yml pull
-      - rolling deploy (backend first, then frontend)
-      - health check (curl /api/v1/health)
-      - run integration smoke tests
-      - rollback on failure
+    # SSH: docker compose -f docker-compose.yml -f docker-compose.prod.yml --env-file .env up -d
+    # health check: /api/v1/health；滚动更新（先 api/worker，后 frontend/nginx）
 ```
 
 ### 3.4 Docker 开发环境配置
 
 ```yaml
-# docker/docker-compose.yml (开发环境)
-version: "3.8"
+# docker/docker-compose.yml（开发基础编排 — 刻意不发布任何宿主机端口）
 services:
   api:
-    build:
-      context: ../backend
-      dockerfile: ../docker/api/Dockerfile
-      target: development  # 开发阶段镜像
-    ports:
-      - "8000:8000"
-    volumes:
-      - ../backend/app:/app/app  # 热重载
+    build: { context: ../backend, dockerfile: Dockerfile, target: development }
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     environment:
-      - ENV=development
-      - DATABASE_URL=postgresql://instantboard:devpass@postgres:5432/instantboard_dev
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-instantboard}:${DB_PASSWORD:-devpass}@postgres:5432/${POSTGRES_DB:-instantboard_dev}
       - REDIS_URL=redis://redis:6379/0
-      - MONGODB_URL=mongodb://mongodb:27017/instantboard_dev
-      - JWT_SECRET=dev-secret-key-change-in-production
-    depends_on:
-      - postgres
-      - redis
-  
+      - ENV=development
+    # 端口发布与热重载卷挂载全部在 override（见下）
+
   postgres:
-    image: postgres:15
-    ports:
-      - "5432:5432"  # 开发时可直接连接
-    environment:
-      - POSTGRES_USER=instantboard
-      - POSTGRES_PASSWORD=devpass
-      - POSTGRES_DB=instantboard_dev
-    volumes:
-      - postgres_dev_data:/var/lib/postgresql/data
-      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
-  
+    image: postgres:17     # ⚠️ 开发为 17（Debian 系，与既有数据目录兼容），生产为 15
+    volumes: [postgres_dev_data, ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql]
+
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_dev_data:/data
     command: redis-server /usr/local/etc/redis/redis.conf
-  
+
   mongodb:
     image: mongo:6
-    ports:
-      - "27017:27017"
-    environment:
-      - MONGO_INITDB_ROOT_USERNAME=instantboard
-      - MONGO_INITDB_ROOT_PASSWORD=devpass
-    volumes:
-      - mongodb_dev_data:/data/db
-      - ./mongodb/init.js:/docker-entrypoint-initdb.d/init.js
-    profiles: ["mongodb"]  # 初始版本默认不启动, 需显式启用: docker compose --profile mongodb up
-  
-  frontend:
-    build:
-      context: ../frontend
-      dockerfile: ../docker/frontend/Dockerfile
-      target: development
-    ports:
-      - "3000:3000"  # Vite dev server
-    volumes:
-      - ../frontend/src:/app/src
-      - ../frontend/public:/app/public
-    environment:
-      - VITE_API_URL=http://localhost:8000
-      - VITE_SSE_URL=http://localhost:8000
-    depends_on:
-      - api
+    profiles: ["mongodb"]  # 默认不启动
 
-volumes:
-  postgres_dev_data:
-  redis_dev_data:
-  mongodb_dev_data:
+  frontend:
+    build: { context: ../frontend, dockerfile: Dockerfile, target: dev }  # ⚠️ 目标名为 dev
+    command: npm run dev -- --host 0.0.0.0 --port 3000
+```
+
+```yaml
+# docker/docker-compose.override.yml（开发覆盖）
+# ⚠️ 仅在 `docker compose` 不带 -f 时自动加载；显式 -f（如生产合并）时不加载。
+# 所有宿主机端口发布与热重载挂载都放在这里——因为 Compose 对列表字段按拼接合并，
+# 基础文件无法"取消发布"端口/卷，故基础文件刻意无端口、无挂载。
+services:
+  postgres:   { ports: ["${POSTGRES_PORT:-5432}:5432"] }
+  redis:      { ports: ["${REDIS_PORT:-6379}:6379"] }
+  mongodb:    { ports: ["${MONGODB_PORT:-27017}:27017"] }   # 仅 profile 启用时生效
+  api:
+    ports: ["${API_PORT:-8000}:8000"]
+    volumes: [../backend/app:/app/app, ../backend/entrypoint.sh:/app/entrypoint.sh]
+  frontend:
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"          # Vite dev server
+      - "${FRONTEND_STATIC_PORT:-3001}:80"     # 可选：静态产物调试
+    volumes: [../frontend/src:/app/src, ../frontend/public:/app/public, ../frontend/vite.config.ts:/app/vite.config.ts]
 ```
 
 ### 3.5 Docker 生产部署配置
@@ -561,30 +329,25 @@ services:
       - api
 
   api:
-    build:
-      target: production  # 生产阶段镜像 (无 dev 依赖)
-    ports: []  # 不对外暴露，仅 Nginx 内部访问
+    image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_PREFIX:-onceme/instantboard}-api:${IMAGE_TAG:-latest}
+    build: { context: ../backend, dockerfile: Dockerfile, target: production }
     environment:
       - ENV=production
-      - DATABASE_URL=${PROD_DATABASE_URL}  # 从 .env.production
-      - REDIS_URL=${PROD_REDIS_URL}
-      - SECRET_KEY=${PROD_SECRET_KEY}
-    restart: always
-    healthcheck:
-      test: curl -f http://localhost:8000/api/v1/health || exit 1
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      # environment 优先于 env_file，覆盖 .env 中的 SCHEDULER_ENABLED=true：
+      # 生产由独立 worker 负责调度，避免双调度器重复采集
+      - SCHEDULER_ENABLED=false
+      - DATABASE_URL=${PROD_DATABASE_URL:?...}   # :? 强制要求，缺失则启动失败
+      - REDIS_URL=${PROD_REDIS_URL:?...}
+      - SECRET_KEY=${PROD_SECRET_KEY:?...}
+    command: gunicorn app.main:app --worker-class uvicorn.workers.UvicornWorker ...
 
   worker:
-    build:
-      context: ../backend
-      dockerfile: ../docker/worker/Dockerfile
-    environment: (同 api 生产环境变量)
-    restart: always
-    depends_on:
-      - redis
-      - postgres
+    # ⚠️ 复用 backend Dockerfile（target: production），无独立 worker 镜像
+    # （docker-compose.prod.yml:97-117）
+    image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_PREFIX:-onceme/instantboard}-api:${IMAGE_TAG:-latest}
+    environment: [ENV=production, 同 api 的 :? 密钥三项]
+    command: python -m app.scheduler.worker      # APScheduler 独立进程 + Redis 心跳
+    # healthcheck: 容器内读心跳键校验 45s 新鲜度
 
   postgres:
     ports: []  # 不对外暴露
@@ -611,7 +374,8 @@ services:
 | 数据库端口 | 直接暴露（可本地调试） | 不暴露 |
 | 前端 | Vite dev server (3000) | Nginx 托管构建产物 |
 | 热重载 | volume mount + --reload | 无，构建后静态 |
-| Worker | 集成在 API 进程 (APScheduler) | 独立 Celery worker |
+| Worker | 内嵌 API 进程（APScheduler，SCHEDULER_ENABLED=true） | 独立进程：复用 backend 镜像 + `command: python -m app.scheduler.worker`（api 侧 SCHEDULER_ENABLED=false） |
+| 数据库镜像 | postgres:17（开发） | postgres:15-alpine（生产，与既有数据目录锁定版本） |
 | Nginx | 不使用 | 必须使用 (SSL + rate-limit) |
 | MongoDB | 按需 profile 启动 | 按需 profile 启动 |
 | Health check | 无 | 必须 |
@@ -732,42 +496,58 @@ worker 容器里（`python -m app.scheduler.worker`）。仪表盘的服务健�
 
 ### 3.7 .env 配置管理
 
-```
-# .env.example (模板，入Git)
-ENV=development
-DATABASE_URL=postgresql://instantboard:devpass@postgres:5432/instantboard_dev
-REDIS_URL=redis://redis:6379/0
-MONGODB_URL=mongodb://instantboard:devpass@mongodb:27017/instantboard_dev
-JWT_SECRET=change-this-in-production
-JWT_EXPIRATION_MINUTES=60
+```text
+# .env.example 实际为 178 行模板（要点，键名与文件一致）:
 
-# SSO OAuth Credentials (需要用户自行申请)
-GOOGLE_OAUTH_CLIENT_ID=
-GOOGLE_OAUTH_CLIENT_SECRET=
-AZURE_AD_CLIENT_ID=
-AZURE_AD_CLIENT_SECRET=
-GITHUB_OAUTH_CLIENT_ID=
-GITHUB_OAUTH_CLIENT_SECRET=
-APPLE_CLIENT_ID=
-APPLE_TEAM_ID=
-APPLE_KEY_ID=
-APPLE_PRIVATE_KEY_PATH=
-FACEBOOK_APP_ID=
-FACEBOOK_APP_SECRET=
+# --- General ---
+ENV / LOG_LEVEL
 
-# Financial Data API Keys
-YAHOO_FINANCE_API_KEY=
-ALPHA_VANTAGE_API_KEY=
+# --- PostgreSQL ---
+DATABASE_URL=postgresql+asyncpg://instantboard:devpass@localhost:5432/instantboard_dev
+  # 模板 host 为 localhost（本机直连口径；容器内由 compose 覆盖为 postgres 服务名）
+DB_PASSWORD / POSTGRES_USER / POSTGRES_DB / POSTGRES_PORT
+DATABASE_POOL_SIZE=20 / DATABASE_MAX_OVERFLOW=10 / DATABASE_POOL_RECYCLE=3600
 
-# CORS
-CORS_ORIGINS=http://localhost:3000,http://localhost:8000
+# --- Redis ---
+REDIS_URL / REDIS_PORT / REDIS_PASSWORD / REDIS_MAX_MEMORY=512mb
 
-# SSE
-SSE_HEARTBEAT_INTERVAL=30
+# --- MongoDB（初始版本不启用）---
+MONGODB_URL / MONGO_USER / MONGO_PASSWORD / MONGODB_PORT
 
-# Rate Limiting
-RATE_LIMIT_PER_MINUTE=60
-RATE_LIMIT_BURST=10
+# --- JWT ---
+JWT_SECRET          # ≥32 字符；staging/production 下占位符或过短将拒绝启动
+JWT_ALGORITHM=HS256
+JWT_ACCESS_TOKEN_EXPIRE_MINUTES=60    # ⚠️ 实际键名（非 JWT_EXPIRATION_MINUTES）
+JWT_REFRESH_TOKEN_EXPIRE_DAYS=7
+
+# --- SSO ---
+ENABLED_SSO_PROVIDERS=google,github + 5 家提供商凭据（含 AZURE_AD_TENANT_ID）
+
+# --- 本地管理员登录 ---
+ADMIN_EMAIL / ADMIN_PASSWORD_HASH（bcrypt，make gen-admin-hash 生成）
+ADMIN_PASSWORD（仅非生产环境的明文便捷项）
+
+# --- Financial API Keys ---
+YAHOO_FINANCE_API_KEY / ALPHA_VANTAGE_API_KEY / FINNHUB_API_KEY / FINNHUB_API_KEYS
+
+# --- CORS / SSE / 限流 ---
+CORS_ORIGINS / SSE_HEARTBEAT_INTERVAL=30 / RATE_LIMIT_PER_MINUTE / RATE_LIMIT_BURST
+  # ⚠️ 限流配置项目前无消费者（见 architecture.md）
+
+# --- 租户默认 ---
+DEFAULT_TENANT_SLUG / DEFAULT_TENANT_NAME
+
+# --- 调度器 / 端口 ---
+SCHEDULER_ENABLED=true / API_PORT=8000 / FRONTEND_PORT=3000 / VITE_API_URL / VITE_SSE_URL
+
+# --- Nginx / SSL ---
+SERVER_NAME / HTTP_PORT / HTTPS_PORT / ENABLE_HTTPS / PUBLIC_BASE_URL /
+HSTS_MAX_AGE / SSL_CERT_DIR / SSL_CERT_FILE（出站 CA bundle，仅非 Docker 运行需要）
+
+# --- 生产附加（PROD_*）---
+PROD_DATABASE_URL / PROD_REDIS_URL / PROD_SECRET_KEY / PROD_JWT_SECRET /
+PROD_DB_PASSWORD / PROD_REDIS_PASSWORD / PROD_POSTGRES_DB / PROD_POSTGRES_USER /
+PROD_MONGO_USER / PROD_MONGO_PASSWORD / PROD_DOMAIN / PROD_CORS_ORIGINS
 ```
 
 **分层策略**:
@@ -779,81 +559,53 @@ RATE_LIMIT_BURST=10
 ### 3.8 Makefile / 开发命令脚本
 
 ```makefile
-.PHONY: help dev up down test lint build deploy clean seed
+# 实际 Makefile 要点（199 行，以仓库文件为准）
 
-help:           ## 显示所有可用命令
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk '...'
+COMPOSE      := cd docker && docker compose
+COMPOSE_PROD := cd docker && docker compose -f docker-compose.yml -f docker-compose.prod.yml
+# ⚠️ COMPOSE_PROD 不带 --env-file，${PROD_*} 插值仅读 docker/ 目录下的 .env
+#（详见 deployment.md「make prod-up 的 .env 可见性问题」）
 
-# === 开发环境 ===
-dev:            ## 启动开发环境 (docker compose up)
-	cd docker && docker compose up -d
+# 开发环境
+dev / up / down            # dev/up 会自动从 .env.example 复制 .env
+logs / logs-api / logs-worker / logs-frontend / logs-db
+backend-shell / frontend-shell / db-shell / redis-shell
 
-up:             ## 启动所有服务
-	cd docker && docker compose up -d
+# 测试
+test:                       # = test-backend + test-frontend（⚠️ compose 测试是独立的
+test-docker:                #   docker-compose.test.yml 目标）
+test-unit / test-integration / test-e2e   # ⚠️ test-e2e 目前无用例
+test-backend:               # 容器内 pytest（容器不可用时回退宿主机）
+test-frontend:              # npm run test
 
-down:           ## 停止所有服务
-	cd docker && docker compose down
+# 代码质量
+lint / lint-fix / format
 
-logs:           ## 查看日志
-	cd docker && docker compose logs -f api
+# 构建
+build / build-api / build-frontend   # ⚠️ 均为构建 Docker 镜像（无宿主机 npm 构建目标）
+build-prod
 
-# === 后端开发 ===
-backend-shell:  ## 进入后端容器 shell
-	cd docker && docker compose exec api bash
+# 数据库
+migrate / makemigration
+# ⚠️ 已知问题: 二者均未带 -c app/alembic/alembic.ini，从容器工作目录执行会找不到配置；
+# 正确用法参见 backend/entrypoint.sh:46
+seed:                       # 实际执行 python -c "from app.db.init_db import init_db; ..."（Makefile:143-145，非 manage.py）
+gen-admin-hash              # 生成 ADMIN_PASSWORD_HASH（PASS=... 或交互式）
 
-migrate:        ## 运行数据库迁移
-	cd docker && docker compose exec api alembic upgrade head
-
-makemigration:  ## 生成迁移文件
-	cd docker && docker compose exec api alembic revision --autogenerate -m "$(msg)"
-
-seed:           ## 填充种子数据
-	cd docker && docker compose exec api python manage.py seed
-
-# === 前端开发 ===
-frontend-shell: ## 进入前端容器 shell
-	cd docker && docker compose exec frontend bash
-
-frontend-build: ## 构建前端生产版本
-	cd frontend && npm run build
-
-# === 测试 ===
-test:           ## 运行所有测试
-	cd docker && docker compose -f docker-compose.test.yml up --abort-on-container-exit
-
-test-backend:   ## 运行后端测试
-	cd docker && docker compose exec api pytest --cov
-
-test-frontend:  ## 运行前端测试
-	cd docker && docker compose exec frontend vitest run
-
-# === Lint ===
-lint:           ## 运行所有 lint
-	cd backend && ruff check app/ && ruff format --check app/
-	cd frontend && npx eslint src/ && npx prettier --check src/
-
-lint-fix:       ## 自动修复 lint 问题
-	cd backend && ruff check --fix app/ && ruff format app/
-	cd frontend && npx eslint --fix src/ && npx prettier --write src/
-
-# === 生产构建 ===
-build:          ## 构建所有生产镜像
-	cd docker && docker compose -f docker-compose.prod.yml build
-
-# === 清理 ===
-clean:          ## 清理开发容器和 volumes
-	cd docker && docker compose down -v --rmi local
-
-clean-data:     ## 仅清理数据 volumes
-	cd docker && docker compose down -v
+# 清理 / 生产 / 无 Docker
+clean / clean-data / reset-db
+prod-up / prod-down / prod-logs
+local-dev / local-dev-backend / local-dev-frontend
 ```
+
+> ⚠️ **未实现**：`frontend-build`（npm 生产构建）目标不存在——`build-frontend` 是构建前端 **Docker 镜像**；`test-e2e` 无任何用例；git hooks / Alembic 迁移脚本见上文对应标注。
 
 ## 4. 关键决策
 
 | 决策 | 选择 | 理由 |
 |------|------|------|
 | Git 分支策略 | GitHub Flow | 项目初期简单够用，不需要 GitFlow 的复杂分支 |
-| CI 触发时机 | 所有 push + PR | 尽早发现问题 |
+| CI 触发时机 | push 到 main/staging/develop + PR 到 main/staging | 尽早发现问题，同时避免对临时分支重复跑全量流水线 |
 | 开发环境 | Docker Compose 全容器 | 避免污染开发机，新人一键启动 |
 | 前端开发服务 | 容器内 Vite dev server | 端口映射到宿主机，开发体验不变 |
 | MongoDB 启动策略 | 生产环境用 profile 按需 | 不必强制启动，节省资源 |

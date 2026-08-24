@@ -1,8 +1,8 @@
 ---
-version: 1.0
+version: 1.1
 author: designer
-date: 2026-06-23
-status: draft
+date: 2026-08-24
+status: reviewed
 cross_refs: [architecture.md, api.md, database.md, data-sources.md, content-categories.md]
 ---
 
@@ -41,69 +41,49 @@ cross_refs: [architecture.md, api.md, database.md, data-sources.md, content-cate
 
 ```mermaid
 graph TD
-    Scheduler["Scheduler (定时触发)<br>APScheduler/Celery 定时触发采集任务<br>每个source独立调度, 按refresh_interval_seconds"]
+    Scheduler["Scheduler (定时触发)<br>APScheduler 定时触发采集任务 (开发内嵌/生产独立进程)<br>每个source独立调度, 任务ID = collect_{source_id}"]
     Scheduler -->|"触发"| Collector["Collector (数据采集)<br>根据source_type选择采集器:<br>rss_collector / api_collector / web_collector / finance_collector"]
     Collector -->|"raw_data"| Processor["Processor (数据处理)<br>1. 去重 (Redis Set + PG UNIQUE)<br>2. 过滤 (keywords_filter)<br>3. 分类 (auto categorize + topic extraction)<br>4. 格式转换 (统一为Item schema)"]
-    Processor -->|"processed_item"| Store["Store (存储+缓存)<br>1. PostgreSQL items表 (持久化)<br>2. Redis quote/nav/commodity缓存 (实时)<br>3. MongoDB raw_content (原始数据, 如启用)"]
+    Processor -->|"processed_item"| Store["Store (存储+缓存)<br>1. PostgreSQL items表 (持久化)<br>2. Redis quote/nav/commodity缓存 (实时)"]
     Store -->|"stored"| PubSub["Pub/Sub (消息分发)<br>Redis PUBLISH channel:{category} event<br>→ SSEEventRouter 接收并转发"]
     PubSub -->|"sse_event"| SSEPush["SSE Push (前端消费)<br>EventSource → 前端 Pinia store → Vue组件更新"]
 ```
 
+> ⚠️ **未实现**：原流程中"3. MongoDB raw_content（原始数据）"无任何代码实现，连降级路径都不存在，已从流程图中移除。
+
 #### 3.1.2 各采集器类型实现
 
+```text
+# 实际结构：按数据域分子包，注册表见 app/collectors/__init__.py COLLECTOR_REGISTRY（7 个）
+collectors/
+├── base.py                       # BaseCollector 抽象基类
+├── finance/
+│   ├── yfinance_collector.py     # yfinance 行情/指数/商品
+│   ├── alpha_vantage_collector.py
+│   ├── eastmoney_collector.py    # 东方财富（国内行情/指数, failover 链首）
+│   └── finnhub_collector.py
+└── tech/
+    ├── rss_collector.py          # feedparser 解析 RSS
+    ├── hackernews_collector.py   # HackerNews API
+    └── arxiv_collector.py        # arXiv API
+```
+
 ```python
-# collectors/base.py
+# collectors/base.py (伪代码)
 
 class BaseCollector:
-    """采集器抽象基类"""
-    
-    async def collect(self, source: Source) -> list[RawItem]:
-        """采集数据，返回原始条目列表"""
+    async def collect(self, source: Source) -> CollectionResult:
+        """采集数据, 返回 CollectionResult(success / items / error / response_time_ms)"""
         raise NotImplementedError
-    
-    async def update_health(self, source_id: UUID, success: bool, 
-                           response_time_ms: int, error: str = None):
-        """更新数据源健康状态 (每次采集后调用)"""
-        # 写入 source_health 表 + Redis缓存
-        # 连续失败3次 → status='degraded'
-        # 连续失败10次 → status='down'
-        # 成功1次 → 从degraded恢复为healthy
 
-# collectors/rss_collector.py
-class RSSCollector(BaseCollector):
-    """RSS源采集器 — feedparser解析"""
-    async def collect(self, source):
-        # 1. httpx.AsyncClient GET source.url
-        # 2. feedparser.parse(response.text)
-        # 3. 提取: title, summary, link, published, author
-        # 4. 返回 RawItem列表
-
-# collectors/api_collector.py
-class APICollector(BaseCollector):
-    """API源采集器 — JSON解析"""
-    async def collect(self, source):
-        # 1. httpx.AsyncClient GET source.url (带config中的headers/params)
-        # 2. JSON解析 (config.parse_rules指定字段映射)
-        # 3. 返回 RawItem列表
-
-# collectors/web_collector.py  
-class WebCollector(BaseCollector):
-    """网页抓取采集器 — BeautifulSoup解析"""
-    async def collect(self, source):
-        # 1. httpx.AsyncClient GET source.url
-        # 2. BeautifulSoup(html, 'lxml')
-        # 3. 按config.parse_rules提取目标区域
-        # 4. 返回 RawItem列表
-
-# collectors/finance_collector.py
-class FinanceCollector(BaseCollector):
-    """财经数据采集器 — yfinance/Alpha Vantage"""
-    async def collect(self, source):
-        # 特殊: 不产生items, 而产生quotes/indices/commodities
-        # 1. yfinance.Ticker(symbol).info / .history
-        # 2. 存入 finance_quotes 表 + Redis缓存
-        # 3. SSE推送 quote_update / market_index_update / commodity_update
+    async def record_health(self, source_id, success, response_time_ms, error=None):
+        """记录数据源健康状态 (base.py:139)"""
+        # 写入 source_health 表
+        # 连续失败 ≥3 次 → status='degraded'；≥10 次 → status='down'
+        # 成功 1 次 → 状态升一级 (down→degraded, degraded→healthy)
 ```
+
+> ⚠️ **未实现**：早期设计中的通用 `api_collector` / `web_collector` 不存在；`source_type=api/web_scrape` 的模板源通过 `config.library` 显式指名上述 7 个采集器之一（`resolve_collector`）。
 
 ### 3.2 SSE 实时推送数据流详细设计
 
@@ -145,97 +125,70 @@ graph LR
 #### 3.2.3 SSE EventRouter 实现
 
 ```python
-# sse/event_router.py
+# app/core/sse_router.py (伪代码摘要)
+
+class SSEConnection:
+    """client_id / categories / tenant_id / user_id / asyncio.Queue(maxsize=1000)"""
 
 class SSEEventRouter:
-    """
-    SSE事件路由器
-    
-    职责:
-    1. 管理所有SSE连接 (client_id → subscriptions映射)
-    2. 监听Redis Pub/Sub频道
-    3. 收到消息后匹配订阅者并转发
-    4. 连接断开时清理映射
-    """
-    
     # 连接映射: {client_id: SSEConnection}
-    connections: dict[str, SSEConnection] = {}
-    
     # 订阅映射: {channel: set[client_id]}
-    subscriptions: dict[str, set[str]] = {}
-    
-    async def add_connection(self, client_id: str, channels: list[str]):
-        """新SSE连接加入"""
-        self.connections[client_id] = SSEConnection(client_id, channels)
-        for channel in channels:
-            self.subscriptions.setdefault(channel, set()).add(client_id)
-    
-    async def remove_connection(self, client_id: str):
-        """SSE连接断开 — 清理映射"""
-        conn = self.connections.pop(client_id, None)
-        if conn:
-            for channel in conn.channels:
-                self.subscriptions[channel].discard(client_id)
-    
-    async def on_pub_sub_message(self, channel: str, event_data: dict):
-        """Redis Pub/Sub消息到达 — 转发给订阅者"""
-        subscribers = self.subscriptions.get(channel, set())
-        for client_id in subscribers:
-            conn = self.connections.get(client_id)
-            if conn and conn.is_active:
-                await conn.send_event(event_data)
-    
+
+    def register(self, client_id, categories, tenant_id, user_id): ...
+    def unregister(self, client_id): ...
+
+    async def push_event(self, category, event_type, data, tenant_id):
+        """构造消息 {event_type, channel, data, tenant_id, event_id, published_at}
+        → redis PUBLISH channel:{category}
+        发布失败时降级为直接调用 _on_redis_message 内存转发"""
+
+    async def _on_redis_message(self, channel, event_data):
+        """按 tenant_id 字符串精确匹配转发给频道订阅者;
+        再向 'all' 聚合订阅者二次投递 (跳过已投递者)"""
+
     async def start_redis_listener(self):
-        """启动Redis Pub/Sub监听 (后台任务)"""
-        redis_client = get_redis()
-        pubsub = redis_client.pubsub()
-        await pubsub.subscribe("channel:finance", "channel:tech", "channel:dashboard")
-        
-        async for message in pubsub.listen():
-            if message["type"] == "message":
-                channel = message["channel"]
-                data = json.loads(message["data"])
-                await self.on_pub_sub_message(channel, data)
+        """订阅 5 个频道: finance / tech / dashboard / admin / all
+        (注意: channel:admin 有订阅但当前无任何发布者)"""
+
+    def start_heartbeat(self, interval=30): ...
 ```
 
 #### 3.2.4 SSE 端点实现
 
 ```python
-# api/v1/stream.py
+# app/api/v1/sse.py
 
-@router.get("/stream/{category}")
-async def sse_stream(category: str, token: str = Query(...)):
+@router.get("/stream/{category}")          # 挂载在 /api/v1/stream 前缀下
+async def sse_stream(category: str, token: str = Query(...), db = Depends(get_db)):
     """
     SSE推送端点
-    
-    流程:
-    1. 验证JWT token (query param)
-    2. 注册SSE连接到EventRouter
-    3. 返回StreamingResponse (事件流)
-    4. 心跳每30s
-    5. 连接断开时清理
+    1. JWT 验证 (query param token, extract_user_from_token)
+    2. 注册连接到 EventRouter (client_id 每次连接唯一)
+    3. StreamingResponse 事件流: connected 握手 → 事件循环/心跳
+    4. 断开时清理 (finally: sse_service.disconnect)
     """
-    # JWT验证
-    user = verify_jwt(token)
-    
-    # 注册连接
-    client_id = f"{user.id}:{category}"
-    await event_router.add_connection(client_id, [category])
-    
+    user_info = extract_user_from_token(token)
+    if user_info is None:
+        raise InvalidToken()
+
+    # 末段为随机 uuid（非会话 ID/ session_id）, sse.py:80
+    client_id = f"{tenant_id}:{user_id}:{uuid.uuid4()}"
+    await sse_service.connect(client_id, [category], tenant_id, user_id, db)
+
     async def event_generator():
-        try:
-            while True:
-                # 等待事件 (从EventRouter队列)
-                event = await event_router.wait_for_event(client_id, timeout=30)
-                if event:
-                    yield f"event: {event.type}\ndata: {json.dumps(event.data)}\n\n"
-                else:
-                    # 心跳
-                    yield f"event: heartbeat\ndata: {json.dumps({'timestamp': now()})}\n\n"
-        finally:
-            await event_router.remove_connection(client_id)
-    
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+        # 握手: 先推送 connected 事件 (sse.py:93-101)
+        yield f"event: connected\ndata: {{client_id, category, timestamp}}\nid: init\n\n"
+        while True:
+            try:
+                event = await asyncio.wait_for(conn.queue.get(),
+                                               timeout=settings.sse_heartbeat_interval)
+                yield f"event: {event['event_type']}\ndata: ...\nid: {event_id}\n\n"
+            except TimeoutError:
+                # 具名心跳事件（非 : 注释行）
+                yield f"event: heartbeat\ndata: {{'timestamp': ...}}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", ...})
 ```
 
 ### 3.3 数据处理管道设计
@@ -244,7 +197,7 @@ async def sse_stream(category: str, token: str = Query(...)):
 
 ```mermaid
 graph LR
-    RawItem["RawItem<br>(来自Collector)"] --> DedupProcessor["DedupProcessor<br>去重: URL + published_at 组合唯一<br>1. Redis Set快速检查<br>2. PostgreSQL UNIQUE约束兜底<br>3. 相同URL不同发布时间 → 视为不同条目"]
+    RawItem["RawItem<br>(来自Collector)"] --> DedupProcessor["DedupProcessor<br>两层去重键 (注意二者不同):<br>1. Redis Set: MD5(title:url) 快速检查 (processors/dedup.py:40-42)<br>2. PG UNIQUE 兜底: (tenant_id, source_id, url, published_at) (models/item.py:56-63)<br>3. Redis 层不含 published_at"]
     DedupProcessor -->|"unique_item"| FilterProcessor["FilterProcessor<br>过滤: 分类关键词过滤<br>1. 检查category.keywords_filter<br>2. 标题/摘要必须包含至少1个关键词<br>3. 过滤列表为空 → 不过滤, 全量通过"]
     FilterProcessor -->|"filtered_item"| Categorizer["Categorizer<br>分类: 自动提取话题标签<br>1. 根据source.category_id确定一级分类<br>2. TechTopicExtractor提取topic_tags<br>3. FinanceCollector自动标记type(stock/fund/...)"]
     Categorizer -->|"categorized_item"| Transformer["Transformer<br>格式转换: RawItem → items表schema<br>1. 统一字段名映射<br>2. 时区统一为UTC<br>3. HTML摘要清理 (去除标签, 截断200字符)<br>4. URL规范化<br>5. priority计算 (source.priority +热度加权)"]
@@ -289,62 +242,50 @@ class ProcessorChain:
         return processed
 ```
 
-### 3.4 异步任务队列设计
+### 3.4 异步任务调度设计（APScheduler 统一）
 
-#### 3.4.1 APScheduler (开发) → Celery (生产) 渐进式方案
+> 早期设计为"APScheduler (开发) → Celery (生产)"渐进式方案。**Celery 从未实现**（无依赖、无 Beat、无 Flower、无 `docker/worker/Dockerfile`），本节已改写为现状：开发与生产统一使用 APScheduler，仅运行位置不同。
 
-| 维度 | APScheduler (开发) | Celery (生产) |
-|------|-------------------|---------------|
-| 运行位置 | 集成在API进程内 | 独立Worker容器 |
-| 任务定义 | Python函数装饰器 | Celery task装饰器 |
-| 调度方式 | interval/cron触发 | Celery Beat调度 |
-| 重试 | 简单(max_retries) | 完善(自动重试+exponential backoff) |
-| 监控 | API日志 | Flower Web面板 |
-| 扩展性 | 单进程 | 多Worker水平扩展 |
-| 依赖 | 无额外服务 | 需Redis作为broker |
+#### 3.4.1 开发内嵌 / 生产独立进程
 
-#### 3.4.2 任务定义
+| 维度 | 开发环境 | 生产环境 |
+|------|---------|---------|
+| 运行位置 | 内嵌 api 进程（`SCHEDULER_ENABLED=true`） | 独立 worker 容器：复用 backend 镜像（target: production）+ `command: python -m app.scheduler.worker`（docker-compose.prod.yml:97-117） |
+| api 侧调度器 | 与调度器同进程 | `SCHEDULER_ENABLED=false` 关闭，避免双调度器重复采集 |
+| 自适应暂停 | 启用：无 SSE 订阅者时暂停任务 | 禁用（`disable_adaptive_pause()`，worker 进程内无 SSE 连接注册表） |
+| 可观测性 | 进程内日志 | Redis 心跳 `scheduler:worker:heartbeat`（15s 写入 / 45s TTL，契约见 infrastructure.md §3.5） |
+
+> ⚠️ **未实现**：任务级自动重试 / 指数退避（原 Celery 语义）与多 worker 水平扩展。当前失败处理为"记录健康状态 → 降频 → 下一调度周期重试"。
+
+#### 3.4.2 任务定义（现状）
 
 ```python
-# scheduler/jobs.py
+# app/scheduler/manager.py
 
-# ===== APScheduler (开发环境) =====
+SOURCE_TYPE_DEFAULT_INTERVALS = {           # manager.py:16-28
+    "finance_quote": 30, "finance_cn_stock": 30, "finance_market_indices": 30,
+    "finance_commodities": 60, "finance_nav": 120,
+    "rss": 300, "hackernews": 120, "arxiv": 1800,
+    "web_scrape": 1800, "api": 60, "social": 600,
+}
 
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
+class AsyncSchedulerManager:
+    # job_defaults: max_instances=1 (防重叠), misfire_grace_time=60, coalesce=True
+    # add_job 传 next_run_time=now 使首次立即执行
+    # 任务 ID 统一为 collect_{source_id} (manager.py:102)
+    # source 未配置间隔 (或 <10s) → 回退其 source_type 默认间隔
 
-scheduler = AsyncIOScheduler()
+    async def add_collection_job(self, source_id, interval_seconds, source_type): ...
+    async def schedule_all_active_sources(self, sources): ...      # 启动时从 DB 全量重建
+    async def adaptive_reschedule(self, source_id, health_status): ...
 
-# 采集任务: 每个source独立调度
-async def schedule_source_collection(source: Source):
-    scheduler.add_job(
-        collect_and_process,
-        trigger="interval",
-        seconds=source.refresh_interval_seconds,
-        id=f"collect_{source.id}",
-        kwargs={"source_id": source.id},
-        max_instances=1,  # 防止重叠执行
-        misfire_grace_time=60,
-    )
-
-# ===== Celery (生产环境) =====
-
-from celery import Celery
-
-app = Celery("instantboard", broker=REDIS_URL)
-
-@app.task(bind=True, max_retries=3, soft_time_limit=30)
-def collect_and_process(self, source_id: str):
-    """Celery任务: 采集+处理+推送"""
-    try:
-        # 同collect_and_process逻辑
-    except Exception as exc:
-        self.retry(exc=exc, countdown=60 * self.request.retries)  # exponential backoff
-
-# Celery Beat调度: 动态注册
-@app.on_after_configure.connect
-def setup_periodic_tasks(sender, **kwargs):
-    # 从数据库读取所有active sources
-    # 为每个source注册periodic task
+# app/scheduler/worker.py — 生产独立进程入口 (python -m app.scheduler.worker)
+# 1. create_tables() 建表
+# 2. disable_adaptive_pause() → scheduler.start()
+# 3. 订阅 channel:dashboard 的源生命周期事件 (先于全量重建, 防启动窗口丢事件)
+# 4. schedule_all_active_sources() 从 DB 全量重建任务
+# 5. heartbeat_loop: 每 15s 写心跳
+# 6. SIGTERM/SIGINT 优雅停机 (先停监听器, 再清心跳)
 ```
 
 #### 3.4.3 任务编排策略
@@ -353,30 +294,29 @@ def setup_periodic_tasks(sender, **kwargs):
 graph TD
     subgraph Startup["启动时"]
         Step1["1. 从 PostgreSQL sources 表读取所有 is_active=True 的source"]
-        Step2["2. 为每个source创建定时任务 (APScheduler/Celery Beat)"]
+        Step2["2. 为每个source创建 APScheduler interval 任务"]
         Step3["3. 任务ID = collect_{source_id} (唯一)"]
         Step1 --> Step2 --> Step3
     end
 
     subgraph Running["运行中"]
-        Step4["4. Admin CRUD修改source → 动态添加/修改/删除对应任务"]
-        Step5["5. 修改refresh_interval → reschedule_job / modify task"]
+        Step4["4. SourceService 修改source → 发布 source_enabled/disabled/deleted<br>(channel:dashboard) → worker 动态增删任务"]
         Step4 --> Step5
     end
 
     subgraph Adaptive["自适应"]
-        Step6{"6. 无SSE订阅者?"}
-        Step6 -->|"是"| PauseTask["暂停对应channel的采集任务"]
+        Step6{"6. 无SSE订阅者?<br>(仅 api 内嵌调度器; worker 已禁用)"}
+        Step6 -->|"是"| PauseTask["暂停对应任务"]
         Step6 -->|"否"| KeepRunning["继续运行"]
-        PauseTask --> Step7["7. 首个订阅者到来 → 恢复任务"]
-        Step8{"8. 连续失败?"}
-        Step8 -->|"是"| ReduceFreq["降频 interval × 2"]
-        Step8 -->|"否"| NormalFreq["保持正常频率"]
-        ReduceFreq --> Step9["9. 恢复成功 → 逐步回调频率"]
+        PauseTask --> Step7["7. 订阅者到来 → 恢复"]
+        Step8{"8. 健康状态恶化?"}
+        Step8 -->|"degraded"| ReduceFreq1["间隔 ×2.0"]
+        Step8 -->|"down"| ReduceFreq2["间隔 ×10.0"]
+        Step8 -->|"healthy"| Recover["multiplier 逐轮减半回调至 ×1.0"]
     end
 
     subgraph Shutdown["优雅停机"]
-        Step10["10. SIGTERM → scheduler.shutdown(wait=True)<br>/ Celery worker graceful shutdown"]
+        Step10["10. SIGTERM → 停止事件监听 → 清理心跳键<br>→ scheduler.shutdown(wait=True)"]
     end
 
     Startup --> Running --> Adaptive --> Shutdown
@@ -388,11 +328,13 @@ graph TD
 
 | 频道名称 | 发布者 | 订阅者 | 消息内容 |
 |---------|--------|--------|---------|
-| `channel:finance` | FinanceCollector/Processor | SSEEventRouter (finance订阅者) | quote_update / market_index_update / commodity_update / nav_estimate_update / alert_update |
-| `channel:tech` | TechCollectors/Processor | SSEEventRouter (tech订阅者) | item_update / topic_stats_update |
-| `channel:dashboard` | DashboardMetricsCollector | SSEEventRouter (dashboard订阅者) | system_metric_update / db_metric_update / business_metric_update / source_health_update |
-| `channel:admin` | Source CRUD API | Scheduler (动态任务调度) | source_created / source_updated / source_deleted |
-| `channel:all` | 任意发布者 | SSEEventRouter (all订阅者) | 聚合所有频道消息 |
+| `channel:finance` | FinanceService / 采集管道 | SSEEventRouter | quote_update / market_index_update / commodity_update / nav_estimate_update |
+| `channel:tech` | 采集管道 | SSEEventRouter | item_update |
+| `channel:dashboard` | SourceService / 调度器 / 指标采集 | SSEEventRouter **+ worker**（`scheduler/worker.py:111`） | SSE 事件：system_metric_update / source_health_update / source_created；源生命周期事件（键为 `event`）：source_enabled / source_disabled / source_deleted —— **注意：发布在 dashboard 频道，而非 admin** |
+| `channel:admin` | **无** | SSEEventRouter | 已被订阅但当前无任何发布者（保留备用） |
+| `channel:all` | — | SSEEventRouter（all 聚合） | 各频道消息向 `all` 订阅者二次投递 |
+
+> ⚠️ **未实现**：`topic_stats_update` / `db_metric_update` / `business_metric_update` / `alert_update` 均无后端发布者——后端 `SSEEventType`（`core/sse_router.py:14-22`）仅 8 种（item_update / quote_update / market_index_update / nav_estimate_update / commodity_update / system_metric_update / source_health_update / heartbeat），上述事件名仅存在于前端枚举死代码（`frontend/src/utils/sse.ts`）。亦不存在 `source_updated` 事件。
 
 #### 3.5.2 消息格式
 
@@ -408,9 +350,12 @@ graph TD
     "timestamp": "2026-06-23T10:00:00Z"
   },
   "tenant_id": "uuid",                // 租户隔离
-  "published_at": "2026-06-23T10:00:00Z"  // 发布时间
+  "event_id": "1719500000-42",
+  "published_at": "2026-08-24T10:00:00Z"  // 发布时间
 }
 ```
+
+> 说明：`event_id` 由 EventRouter 生成（`core/sse_router.py:111`）。源生命周期事件（source_enabled 等）例外：它们使用 `event` 键而非 `event_type`，且不经 `push_event`。
 
 #### 3.5.3 SSE连接与Pub/Sub映射
 
@@ -424,7 +369,7 @@ sequenceDiagram
 
     Client->>SSE: 连接 /api/v1/stream/finance?token=xxx
     SSE->>JWT: 验证token → 提取 tenant_id + user_id
-    JWT->>Router: client_id = "{tenant_id}:{user_id}:{session_id}"
+    JWT->>Router: client_id = "{tenant_id}:{user_id}:{随机uuid}"（每次连接唯一, sse.py:80）
     Router->>Router: add_connection(client_id, channels=["finance"])
     Router->>Redis: 订阅 channel:finance
 
@@ -507,13 +452,13 @@ graph TD
 
 | Key模式 | TTL | 过期策略 | 说明 |
 |---------|-----|---------|------|
-| `t:{tid}:quote:{symbol}` | 30s-5min | 主动更新+被动过期 | 交易时段30s，休市5min |
+| `t:{tid}:quote:{symbol}` | 30s 固定 | 主动更新+被动过期 | `finance.py:77` 固定 30 秒；**无**"休市延长 5min"分支 |
 | `t:{tid}:market_indices` | 60s | 主动更新覆盖 | 每次采集直接SET覆盖 |
 | `t:{tid}:commodities` | 60s | 主动更新覆盖 | 同market_indices |
 | `t:{tid}:nav:{symbol}` | 120s | 主动更新覆盖 | 估值数据 |
-| `t:{tid}:dedup:{source_id}` | 24h | 被动过期 | 去重URL集合，24h后自动清理 |
+| `t:{tid}:dedup:{source_id}` | **永不过期** | 无 TTL | `processors/dedup.py:33` 的 `redis_sadd` 不设 TTL，与原设计"24h 自动清理"不符，**待修复**（当前仅靠 512mb + allkeys-lru 兜底） |
 | `t:{tid}:search:{hash}` | 5min | 被动过期 | 搜索结果缓存 |
-| `t:{tid}:watchlist:{uid}` | 10min | 主动更新 | 自选列表变更时SET覆盖 |
+| `t:{tid}:watchlist:{uid}` | — | — | ⚠️ **未实现**：从无写入，只有增删改时 `redis_delete` 失效（`services/finance.py:403-443` 直接查 PG） |
 | `dashboard:system_metrics` | 10s | 主动更新覆盖 | 系统指标 |
 | `source_health:{sid}` | 5min | 主动更新覆盖 | 数据源健康 |
 
@@ -536,14 +481,11 @@ graph TD
     Degraded --> SSEPushHealth["SSE推送: source_health_update (状态变更时)"]
     Down --> SSEPushHealth
 
-    CollectFail --> Retry["重试策略"]
-    Retry --> APSRetry["APScheduler: max_instances=1, misfire_grace_time=60s"]
-    Retry --> CeleryRetry["Celery: max_retries=3<br>exponential backoff 60s → 120s → 240s"]
-
-    CollectFail --> Failover["failover"]
-    Failover --> YF["yfinance失败 → 尝试Alpha Vantage"]
-    YF --> AV["Alpha Vantage失败 → 尝试Finnhub"]
-    AV --> AllFail["所有备用源失败 → 标记down<br>下次采集周期再试"]
+    CollectFail --> Retry["容错策略"]
+    Retry --> APSRetry["APScheduler: max_instances=1, misfire_grace_time=60s<br>失败当轮不重试, 由健康状态驱动降频"]
+    CollectFail --> Failover["failover (数据类型链, 详见 data-sources.md)"]
+    Failover --> IdxFailover["如指数链: eastmoney → yfinance"]
+    IdxFailover --> AllFail["备用源全失败 → 记录健康状态, 下周期再试"]
 
     CollectSuccess["采集成功"]
     CollectSuccess --> ResetFailures["consecutive_failures = 0"]
@@ -558,13 +500,13 @@ graph TD
     SingleFail["单条处理失败"]
     SingleFail --> LogWarning["logger.warning<br>Processing failed: {url}: {error}"]
     LogWarning --> ContinueChain["不中断链，继续处理下一个条目"]
-    ContinueChain --> MarkMongo["MongoDB raw_content 标记 processing_errors (如启用)"]
 
-    BatchFail["批量处理异常 (如数据库连接失败)"]
-    BatchFail --> Pause["暂停当前处理"]
-    Pause --> MarkUnprocessed["标记所有条目 is_processed=False"]
-    MarkUnprocessed --> RetryNext["下次采集周期重新处理未处理条目"]
+    BatchFail["管道级异常 (如数据库连接失败)"]
+    BatchFail --> LogError["scheduler._run_collection 捕获并记录"]
+    LogError --> RetryNext["不做暂存/批量重试, 等待下一调度周期"]
 ```
+
+> ⚠️ **未实现**：原设计"MongoDB raw_content 标记 processing_errors"无任何代码（连降级路径都没有），已移除。
 
 #### 3.7.3 SSE推送错误处理
 
@@ -597,22 +539,23 @@ graph TD
 ```mermaid
 graph TD
     subgraph RedisUnavailable["Redis不可用"]
-        CacheDegrad["缓存层降级: 直接查PostgreSQL<br>(延迟增加但功能不中断)"]
-        PubSubDegrad["Pub/Sub降级: 内存直接转发<br>(单进程可用, 多进程部分丢失)"]
-        SSEDegrad["SSE降级: 客户端定时REST拉取<br>(前端30s轮询fallback)"]
+        CacheDegrad["缓存层降级: 读路径直落 PostgreSQL"]
+        PubSubDegrad["Pub/Sub降级: push_event 失败时进程内直接转发"]
+        SSEBackoff["SSE客户端: 仅指数退避重连 1s→60s"]
     end
 
     subgraph PGUnavailable["PostgreSQL不可用"]
-        API503["API返回503 SERVICE_UNAVAILABLE"]
-        SSEHeartbeat["SSE推送: heartbeat维持连接<br>但不推送新数据"]
-        CollectContinue["采集继续: 数据暂存Redis/MongoDB<br>PG恢复后批量入库"]
+        API503["API 数据库路径不可用"]
+        SSEHeartbeat["SSE: heartbeat 维持连接, 不推送新数据"]
+        CollectLog["采集: 本轮失败记录日志, 等待下一调度周期"]
     end
 
-    subgraph MongoUnavailable["MongoDB不可用"]
-        PGJSONB["原始内容存储降级为PG JSONB字段<br>(items.extra_data)"]
-        SmallImpact["影响范围小: 仅原始抓取内容<br>不影响核心功能"]
+    subgraph MongoUnavailable["MongoDB"]
+        NotImpl["原始内容存储: ⚠️ 未实现 (无任何代码, 无降级路径)"]
     end
 ```
+
+> ⚠️ **未实现**：SSE 降级为客户端定时 REST 拉取（前端无轮询 fallback，仅指数退避重连）；"数据暂存 Redis/MongoDB、PG 恢复后批量入库"亦未实现。
 
 ### 3.8 数据流时序图
 
@@ -658,9 +601,9 @@ sequenceDiagram
     participant SSEEventRouter
     participant Frontend
 
-    Scheduler->>FinanceCollector: t=0s 触发: market_indices_realtime (每30s)
-    FinanceCollector->>FinanceCollector: t=0.1s 并发yfinance.Ticker('^GSPC', '^DJI', '000001.SS', ...)
-    FinanceCollector->>FinanceCollector: t=0.5s 收到9个指数行情数据
+    Scheduler->>FinanceCollector: t=0s 触发: collect_{source_id}（finance_market_indices 类型, 默认间隔 30s）
+    FinanceCollector->>FinanceCollector: t=0.1s 并发拉取 13 个指数('^GSPC','^DJI','000001.SS',... finance.py:27-41)
+    FinanceCollector->>FinanceCollector: t=0.5s 收到 13 个指数行情数据
     FinanceCollector->>Redis: t=0.6s SET t:{tid}:market_indices (Hash, TTL 60s)
     FinanceCollector->>PostgreSQL: t=0.7s INSERT finance_quotes × 9 (历史记录)
     FinanceCollector->>FinanceCollector: t=0.8s 更新source_health: 成功, avg_response_time=400ms
@@ -677,22 +620,24 @@ sequenceDiagram
 |------|------|------|
 | 实时推送 | SSE (非WebSocket) | 单向推送足够、原生重连、HTTP/2多路复用、实现简单 |
 | 消息分发 | Redis Pub/Sub | 轻量、支持多进程分发、与缓存共用Redis实例 |
-| 异步任务 | APScheduler→Celery渐进 | 开发简单(APScheduler单进程), 生产可靠(Celery独立Worker) |
+| 异步任务 | APScheduler 统一（Celery 未实现） | 开发内嵌进程、生产独立进程，行为一致，避免消息队列运维成本（详见 §3.4） |
 | 去重策略 | Redis Set快速检查 + PG UNIQUE兜底 | Redis快速避免重复处理，PG持久保证最终一致 |
 | 处理管道 | 链式处理器 (可跳过/容错) | 灵活、可扩展、单条失败不中断 |
 | 缓存策略 | Redis主动更新+被动过期 | 行情数据主动SET(保证实时), 搜索/去重被动TTL(自动清理) |
-| 错误恢复 | 多层failover+降级 | yfinance→Alpha Vantage→Finnhub, Redis不可用→PG直查, SSE不可用→REST轮询 |
+| 错误恢复 | 多层 failover + 降级 | 数据类型 failover 链（见 data-sources.md）、Redis 不可用→直查 PG / 进程内转发、SSE 断线→前端指数退避重连（非 REST 轮询） |
 
 ## 5. 边界情况
 
 - **采集重叠**: 同一source任务未完成时下一个周期触发 → APScheduler `max_instances=1` 防重叠
-- **大量新条目涌入**: 单次采集>50条 → 处理器分批处理(每批20条)，避免内存溢出
-- **Redis Pub/Sub消息丢失**: Redis重启时Pub/Sub消息丢失 → SSE降级为内存转发，前端重连后REST补拉
-- **Celery Worker崩溃**: 任务丢失 → Celery任务结果持久化到Redis，Beat重新调度
-- **去重集合膨胀**: 活跃源24h内URL很多 → Redis Set TTL 24h自动清理，不影响内存
+- **大量新条目涌入**: 处理器链逐条处理（失败单条不中断）
+  > ⚠️ **未实现**：原设计">50 条分批处理（每批 20 条）"未实现
+- **Redis Pub/Sub 消息丢失**: Redis 重启时消息丢失；发布失败时进程内直接转发；前端依赖指数退避重连
+  > ⚠️ **未实现**：前端重连后"REST 补拉"不存在（仅 1s→60s 退避，`frontend/src/utils/sse.ts:157-165`）
+- **worker 进程崩溃/重启**: Pub/Sub 为 fire-and-forget，停机期间的源生命周期事件丢失属设计内；以重启时 `schedule_all_active_sources()` 从 DB 全量重建作为自愈兜底（`scheduler/worker.py`）
+- **去重集合膨胀**: `t:{tid}:dedup:{source_id}` 当前**永不过期**（无 24h TTL），仅靠 `maxmemory 512mb + allkeys-lru` 兜底淘汰 → 与设计意图不符，待修复
 - **SSE连接数>1000**: Nginx `worker_connections`限制 → 单机1000+连接需调整Nginx配置
 - **跨进程SSE**: 多worker时Pub/Sub消息需跨进程 → Redis Pub/Sub天然支持多进程
-- **数据库写入瓶颈**: 高频行情写入(30s×9指数) → 使用批量INSERT + 异步写入
+- **数据库写入瓶颈**: 高频行情写入（30s × 13 指数）→ 批量写入 + 异步 IO
 
 ## 6. 与其他模块的依赖
 

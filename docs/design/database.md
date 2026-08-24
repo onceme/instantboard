@@ -1,9 +1,9 @@
 ---
-version: 1.0
+version: 1.1
 author: designer
-date: 2026-06-23
-status: draft
-cross_refs: [architecture.md, api.md, security.md, data-flow.md]
+date: 2026-08-24
+status: revised
+cross_refs: [architecture.md, api.md, security.md, data-flow.md, admin-login.md]
 ---
 
 # InstantBoard 数据库设计
@@ -19,6 +19,9 @@ cross_refs: [architecture.md, api.md, security.md, data-flow.md]
 ## 3. 详细设计
 
 ### 3.1 PostgreSQL 表结构
+
+> 下表结构已与代码 models 逐项核对（12 张表全部吻合）；轻微出入：若干标注为 `DESC` 的
+> 索引在代码中实际为升序创建，不影响功能。以下定义以实际代码为准逐步对齐。
 
 ```sql
 -- ============================================
@@ -46,9 +49,9 @@ CREATE TABLE users (
     email           VARCHAR(255) NOT NULL,
     name            VARCHAR(100) NOT NULL,
     avatar_url      TEXT,
-    sso_provider    VARCHAR(20) NOT NULL  -- 'google'|'azure_ad'|'github'|'apple'|'facebook'
-                    CHECK (sso_provider IN ('google', 'azure_ad', 'github', 'apple', 'facebook')),
-    sso_provider_id VARCHAR(255) NOT NULL,  -- SSO 提供商的用户ID
+    sso_provider    VARCHAR(20) NOT NULL  -- 'google'|'azure_ad'|'github'|'apple'|'facebook'|'local'
+                    CHECK (sso_provider IN ('google', 'azure_ad', 'github', 'apple', 'facebook', 'local')),
+    sso_provider_id VARCHAR(255) NOT NULL,  -- SSO 提供商的用户ID（本地管理员为 'local:{email}'）
     role            VARCHAR(20) NOT NULL DEFAULT 'member'  -- 'admin'|'member'|'viewer'
                     CHECK (role IN ('admin', 'member', 'viewer')),
     preferences     JSONB NOT NULL DEFAULT '{}',           -- 用户偏好 (主题、默认tab等)
@@ -63,11 +66,11 @@ CREATE TABLE users (
 CREATE INDEX idx_users_tenant ON users(tenant_id);
 CREATE INDEX idx_users_sso ON users(sso_provider, sso_provider_id);
 
--- 注意: sso_provider 的 CHECK 约束包含所有 5 个提供商值
--- (google, azure_ad, github, apple, facebook)，
--- 但应用层通过 ENABLED_SSO_PROVIDERS 环境变量控制哪些提供商可被使用。
--- 数据库约束保留全部值以确保向后兼容，
--- 未来若有需要可通过 Alembic 迁移添加 enabled 标志列。
+-- 注意: sso_provider 的 CHECK 约束 (chk_users_sso_provider) 实际为 6 值:
+-- 5 个 SSO 提供商 (google, azure_ad, github, apple, facebook) + 'local'
+-- (本地管理员登录引入, models/user.py:34-35, 见 admin-login.md)。
+-- 应用层通过 ENABLED_SSO_PROVIDERS 环境变量控制哪些 SSO 提供商可被使用,
+-- 数据库约束保留全部值以确保向后兼容。
 
 -- ============================================
 -- 分类与数据源
@@ -218,7 +221,8 @@ CREATE TABLE finance_quotes (
 CREATE INDEX idx_finance_quotes_symbol_time ON finance_quotes(symbol_id, timestamp DESC);
 CREATE INDEX idx_finance_quotes_tenant ON finance_quotes(tenant_id);
 
--- 分区: 按月分区历史行情数据 (>1个月的数据归档到冷分区)
+-- 分区 (待定, 未实现): 当前代码中 finance_quotes 是普通表 (无 PARTITION BY);
+-- 历史行情量增大后再启用按月分区:
 -- ALTER TABLE finance_quotes PARTITION BY RANGE (timestamp);
 
 CREATE TABLE fund_nav_estimates (
@@ -305,18 +309,41 @@ CREATE INDEX idx_dashboard_snapshots_time ON dashboard_snapshots(tenant_id, time
 
 | 场景 | Key 模式 | Value 类型 | TTL | 说明 |
 |------|---------|-----------|-----|------|
-| **用户会话** | `session:{session_id}` | Hash | 24h | JWT refresh token + user info |
-| **行情实时缓存** | `t:{tenant_id}:quote:{symbol}` | Hash | 30s-5min | 当前价格、涨跌幅、时间戳 |
-| **市场指数缓存** | `t:{tenant_id}:market_indices` | Hash | 60s | 所有市场指数汇总 |
-| **大宗商品缓存** | `t:{tenant_id}:commodities` | Hash | 60s | 黄金、原油等 |
-| **基金NAV缓存** | `t:{tenant_id}:nav:{symbol}` | Hash | 120s | 估值数据 |
-| **SSE Pub/Sub** | `channel:{category}` | Pub/Sub | 无 | 数据更新事件分发 |
-| **限流计数** | `rate:{tenant_id}:{ip}:{endpoint}` | String (counter) | 1min | 请求频率计数 |
-| **去重URL集合** | `t:{tenant_id}:dedup:{source_id}` | Set | 24h | 已抓取URL集合 (快速去重) |
-| **自选列表缓存** | `t:{tenant_id}:watchlist:{user_id}` | Sorted Set | 10min | 自选列表+排序 |
-| **数据源健康缓存** | `source_health:{source_id}` | Hash | 5min | 健康状态快速查询 |
+| **用户会话** | `session:{session_id}` | String (JSON) | 24h | JSON 字符串 `{user_id, tenant_id, provider}`；**不含 refresh token**（services/auth.py:106-113），登出时按 user_id 扫描清除 |
+| **行情实时缓存** | `t:{tenant_id}:quote:{symbol}` | String (JSON) | 30s | 当前价格、涨跌幅、时间戳 |
+| **市场指数缓存** | `t:{tenant_id}:market_indices` | String (JSON) | 60s | 所有市场指数汇总 |
+| **大宗商品缓存** | `t:{tenant_id}:commodities` | String (JSON) | 60s | 黄金、原油等 |
+| **基金NAV缓存** | `t:{tenant_id}:nav:{symbol}` | String (JSON) | 120s | 估值数据 |
+| **SSE Pub/Sub** | `channel:{category}` | Pub/Sub | 无 | 数据更新事件分发（finance/tech/dashboard/admin/all） |
+| **搜索缓存** | `t:{tenant_id}:search:{query_hash}` | String (JSON) | 300s | 金融搜索结果缓存（query_hash = md5(q:type:market)） |
+| **去重集合** | `t:{tenant_id}:dedup:{source_id}` | Set | ⚠️ **无 TTL（永不过期）** | 成员为 `MD5(title:url)` 十六进制摘要（processors/dedup.py:41-43），快速去重 |
+| **数据源健康缓存** | `source_health:{source_id}` | ⚠️ 混用两种格式 | 300s / 无 | 采集路径写 JSON 字符串 `ex=300`（collectors/base.py:186）；创建数据源时写 Hash 且**无 TTL**（services/source.py:277-285）——格式不一致，待统一修复 |
+| **自选列表缓存** | `t:{tenant_id}:watchlist:{user_id}` | — | — | 见下方未实现标注 |
 | **系统指标缓存** | `dashboard:system_metrics` | Hash | 10s | 实时系统指标 |
-| **SSO State** | `sso_state:{state_key}` | String | 10min | OAuth state 参数防 CSRF |
+| **请求指标** | `dashboard:request_metrics:{minute}` | String | 3600s | RequestLoggingMiddleware 按分钟统计（core/middleware.py） |
+| **调度器心跳** | `scheduler:worker:heartbeat` | String | 45s | worker 每 15s 续期（3× 间隔）；API 侧以此为新鲜度阈值判断 worker 健康 |
+| **Token 黑名单** | `token_blacklist:{jti}` | String | token 剩余有效期 | access/refresh 撤销（core/security.py:75） |
+| **管理员防爆破** | `admin_login:fail:{email}` / `lock:{email}` | String（计数/锁） | 15min | email 维度：5 次失败触发锁定（详见 admin-login.md §7） |
+| **管理员防爆破 (IP)** | `admin_login:fail_ip:{ip}` / `lock_ip:{ip}` | String（计数/锁） | 1h | IP 维度：20 次失败触发锁定 |
+| **限流计数** | `rate:{tenant_id}:{ip}:{endpoint}` | — | — | 见下方未实现标注 |
+| **IP 黑名单** | `ip_blacklist` | — | — | 见下方未实现标注 |
+| **SSO State** | `sso_state:{state_key}` | — | — | 见下方未实现标注 |
+
+> ⚠️ **未实现（限流）**：`rate:{tenant_id}:{ip}:{endpoint}` 键与 `rate_limit_key()` helper
+> 存在定义，但全代码库零调用，**应用层限流完全未落地**（见 security.md §3.3）。
+>
+> ⚠️ **未实现（自选列表缓存）**：`t:{tid}:watchlist:{uid}` 只删不写——从未有任何逻辑向其填充
+> 数据，实际是死键。
+>
+> ⚠️ **未实现（IP 黑名单）**：`ip_blacklist` 仅有 `RedisKeys.IP_BLACKLIST` 定义，零使用点，
+> 无封禁与检查逻辑。
+>
+> ⚠️ **未实现（SSO state 存储）**：`sso_state:{state_key}` 从未写入——authorize 端点生成
+> state 后直接返回，不存不校验（api/v1/auth.py:62），OAuth CSRF 防护缺失。
+>
+> ⚠️ **说明（key 前缀）**：并非所有 key 都有租户前缀——仅租户级数据键（quote、market_indices、
+> commodities、nav、search、dedup、watchlist）带 `t:{tenant_id}:` 前缀；session、source_health、
+> token_blacklist、admin_login:*、dashboard:*、scheduler:*、channel:* 等均为全局键。
 
 **Redis 配置要点**:
 - `maxmemory-policy: allkeys-lru` — 内存满时淘汰最久未使用的 key
@@ -386,41 +413,44 @@ CREATE INDEX idx_dashboard_snapshots_time ON dashboard_snapshots(tenant_id, time
 
 ### 3.4 数据迁移策略
 
-**工具**: Alembic (SQLAlchemy 生态标准)
+**规划工具**: Alembic (SQLAlchemy 生态标准)
 
-```mermaid
-graph TD
-    subgraph alembic["alembic/"]
-        env["env.py — 配置: 连接DB、自动检测model变化"]
-        template["script.py.mako — 迁移脚本模板"]
-        subgraph versions["versions/"]
-            initial["001_initial.py — 初始迁移: 所有表"]
-            later["002_xxx.py — 后续迁移"]
-        end
-    end
-```
+> ⚠️ **未实现**：迁移体系尚未建立。`backend/app/alembic/` 目录下只有 `alembic.ini` 与
+> `env.py`，**没有 `versions/` 目录、没有任何迁移脚本**。实际的建表入口是容器启动时
+> `entrypoint.sh` 检测到不存在可用迁移，回退执行 `init_db.create_tables()`
+> （即 `Base.metadata.create_all`）。
 
-**迁移流程**:
-1. Model 变更 → `alembic revision --autogenerate -m "描述"`
-2. 检查生成的迁移脚本 (确认自动检测正确)
-3. `alembic upgrade head` 应用迁移
-4. `alembic downgrade -1` 回滚 (开发调试)
+**待办（建立迁移体系）**:
+1. `alembic revision --autogenerate -m "baseline"` 生成基线迁移（= 当前 12 张表）并人工复核
+2. `entrypoint.sh` 改为优先 `alembic upgrade head`，仅在无迁移时回退 `create_tables()`
+3. 无损迁移: 添加列/表可在线执行；有损迁移: 先添加新列 → 数据迁移 → 再删除旧列（多步）
+4. MongoDB 不涉及迁移工具（schema-free，直接修改应用代码）
 
-**生产迁移策略**:
-- 迁移在 Worker 容器启动时自动执行 (`entrypoint.sh: alembic upgrade head`)
-- 无损迁移: 添加列/表可在线执行
-- 有损迁移: 先添加新列 → 数据迁移 → 再删除旧列 (多步迁移)
-- MongoDB 迁移: 不使用工具，schema-free，直接修改应用代码
+**现状风险**: `create_tables()` 不会修改已存在的表——模型变更（新增列、约束扩展等）在存量
+数据库上**不会自动生效**，需手工执行 DDL（示例见 admin-login.md §6 的 CHECK 约束手工变更）。
 
 ### 3.5 多租户数据隔离方案
 
 **方案**: **共享数据库 + 行级隔离 (Shared DB, Shared Schema, Row-level Isolation)**
 
-**实现**:
+**实现（现状）**:
 - 所有业务表包含 `tenant_id` 列 (NOT NULL, FK → tenants)
-- 所有查询自动注入 `WHERE tenant_id = <current_tenant_id>`
-- 通过 FastAPI 中间件 `TenantMiddleware` 从 JWT claims 中提取 `tenant_id` 并注入 SQLAlchemy session context
-- PostgreSQL Row Level Security (RLS) 作为额外保障层
+- 隔离在**端点依赖注入层**完成：`get_current_tenant`（`app/dependencies.py:57-63`）从
+  JWT claims 解析 tenant_id，每个端点显式接收 `tenant_id: str = Depends(get_current_tenant)`，
+  并将其显式传给 service 层，由各查询语句携带 `tenant_id ==` 条件过滤
+- **不存在**统一的"自动注入 `WHERE tenant_id`"机制——每条查询需手工携带租户条件，
+  靠代码评审与测试防止遗漏
+
+> ⚠️ **未实现（TenantMiddleware）**：早期设计为 FastAPI 中间件 `TenantMiddleware` 提取
+> tenant_id 并注入 SQLAlchemy session context；代码中不存在此中间件（`setup_middlewares`
+> 仅注册 CORS + `RequestLoggingMiddleware`），实际采用上述依赖注入方案。
+
+> ⚠️ **未实现（RLS）**：PostgreSQL Row Level Security **完全未启用**——全代码库无
+> `ENABLE ROW LEVEL SECURITY` / `CREATE POLICY` / `current_setting('app.current_tenant_id')`；
+> `docker/postgres/init.sql:26-27` 注释称 "RLS 将由后续 Alembic 迁移创建"，该迁移并不存在
+> （见 §3.4）。**当前租户隔离纯靠应用层代码。** 以下 RLS 设计保留为规划。
+
+<details><summary>规划中的 RLS 设计（未实现）</summary>
 
 ```sql
 -- 启用 RLS (PostgreSQL 特性)
@@ -435,30 +465,19 @@ CREATE POLICY tenant_isolation ON categories
     USING (tenant_id = current_setting('app.current_tenant_id')::UUID);
 ```
 
-**中间件伪代码**:
-```python
-class TenantMiddleware:
-    async def dispatch(request, call_next):
-        # 从 JWT 提取 tenant_id
-        tenant_id = request.state.user.tenant_id
-        # 设置 PostgreSQL session 变量
-        await db.execute(text("SET app.current_tenant_id = :tid"), {"tid": tenant_id})
-        request.state.tenant_id = tenant_id
-        response = await call_next(request)
-        return response
-```
+</details>
 
-**Redis 隔离**: 所有 key 前缀 `t:{tenant_id}:xxx`
-**MongoDB 隑离** (后续版本启用时): 所有查询包含 `tenant_id` 条件
+**Redis 隔离**: 仅租户级数据键带 `t:{tenant_id}:` 前缀（见 §3.2 说明）
+**MongoDB 隔离** (后续版本启用时): 所有查询包含 `tenant_id` 条件
 
 ## 4. 关键决策
 
 | 决策 | 选择 | 理由 |
 |------|------|------|
-| 多租户隔离 | 行级隔离 + RLS | 共享数据库成本最低、运维简单、RLS保证安全 |
+| 多租户隔离 | 行级隔离 + RLS（**RLS 未实现**，当前纯应用层隔离，见 §3.5） | 共享数据库成本最低、运维简单 |
 | 历史行情存储 | PostgreSQL 近期 (初始版本) | 初始版本仅用PostgreSQL分区存储近期行情，历史数据归档策略后续优化；MongoDB时序存储为后续版本可选增强 |
 | 去重策略 | PostgreSQL UNIQUE + Redis Set | 双重保障：PG持久化去重、Redis快速去重 |
-| 是否分区 | finance_quotes 按月分区 | 行情数据量大，分区查询性能好 |
+| 是否分区 | finance_quotes 按月分区（**未实现**，当前为普通表，见 §3.1） | 行情数据量大，分区查询性能好 |
 | 连接池 | SQLAlchemy async session + pool | FastAPI async 需要异步连接池 |
 
 ## 5. 边界情况
@@ -466,7 +485,7 @@ class TenantMiddleware:
 - **数据库连接失败**: FastAPI lifespan 中检测连接，失败时返回 503
 - **Redis 不可用**: 降级为直接 PostgreSQL 查询，SSE 降级为 REST 拉取
 - **MongoDB 不可用**: 初始版本不启用MongoDB，原始内容存储使用PostgreSQL JSONB字段 (items.extra_data)；后续版本启用MongoDB时，MongoDB不可用降级为PostgreSQL JSONB字段
-- **迁移冲突**: 多 worker 同时启动时，使用 `alembic upgrade head` 的幂等性，只有一个成功执行
+- **迁移冲突**: 迁移体系尚未建立（见 §3.4），当前 `create_tables()` 依赖 IF NOT EXISTS 语义可重复执行；未来启用 Alembic 后，多 worker 同时启动依赖 `alembic upgrade head` 的幂等性，只有一个成功执行
 - **大表查询**: items 表可能百万级，依赖索引 + 分页，不使用全量查询
 
 ## 6. 与其他模块的依赖

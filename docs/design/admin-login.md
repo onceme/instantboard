@@ -206,7 +206,7 @@ nginx 检查结论：`docker/nginx/conf.d/http-server.conf.template` 与
 python scripts/gen_admin_password_hash.py 'MySecret'   # 参数传入
 python scripts/gen_admin_password_hash.py              # 交互式隐藏输入（getpass）
 # 或
-make gen-admin-hash pass='MySecret'
+make gen-admin-hash PASS='MySecret'
 ```
 
 输出 bcrypt 哈希（复用 `app.core.security.hash_password`），填入 `ADMIN_PASSWORD_HASH`。

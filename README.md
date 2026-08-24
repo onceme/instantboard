@@ -25,6 +25,7 @@
   - [科技模块 (Tech)](#科技模块-tech)
   - [监控仪表盘 (Dashboard)](#监控仪表盘-dashboard)
   - [SSO 认证](#sso-认证)
+  - [本地管理员登录 (/ibadmin)](#本地管理员登录-ibadmin)
   - [实时推送 (SSE)](#实时推送-sse)
 - [API 文档](#api-文档)
 - [常用命令](#常用命令)
@@ -77,7 +78,7 @@ InstantBoard 是一个**实时信息聚合消息板**服务，采用前后端分
 | **前端** | Vue 3.4 + TypeScript + Vite 5 | Composition API, Pinia 状态管理, Tailwind CSS |
 | **后端** | Python 3.11+ / FastAPI | Async 全链路, SQLAlchemy 2.0 ORM, APScheduler |
 | **实时推送** | SSE + Redis Pub/Sub | 单向服务端推送, 30s 心跳, 自动重连 |
-| **数据库** | PostgreSQL 15 | JSONB 支持, 行级安全 (RLS), 11 张核心表 |
+| **数据库** | PostgreSQL 17 | JSONB 支持, 行级安全 (RLS), 11 张核心表 |
 | **缓存** | Redis 7 | 行情缓存 / 会话 / Pub/Sub / 限流 |
 | **反向代理** | Nginx 1.25 | SSL, 限流, 静态资源, API 代理 |
 | **容器** | Docker Compose | 开发/生产统一编排 |
@@ -115,7 +116,7 @@ graph TB
     App -->|"SQLAlchemy 2.0<br/>JSONB · RLS"| PG
     App -->|"hiredis · aioredis<br/>缓存 · Pub/Sub · 限流"| Redis
 
-    PG[("🐘 PostgreSQL 15<br/>11 张核心表")]
+    PG[("🐘 PostgreSQL 17<br/>11 张核心表")]
     Redis[("🔴 Redis 7<br/>12 种 Key 模式")]
 
     style Browser fill:#e3f2fd,stroke:#1565c0,color:#000
@@ -139,7 +140,7 @@ graph TB
 | Docker Compose | V2+ | 服务编排 |
 | Git | 2.0+ | 代码拉取 |
 
-> 💡 如果不使用 Docker，需要：Python 3.11+、Node.js 18+、PostgreSQL 15、Redis 7
+> 💡 如果不使用 Docker，需要：Python 3.11+、Node.js 18+、PostgreSQL 17、Redis 7
 
 ### 一键启动（Docker）
 
@@ -172,7 +173,7 @@ bash scripts/setup-dev.sh
 
 | 服务 | 镜像 | 端口 | 说明 |
 |------|------|------|------|
-| `postgres` | postgres:15-alpine | 5432 | 主数据库 |
+| `postgres` | postgres:17 | 5432 | 主数据库 |
 | `redis` | redis:7-alpine | 6379 | 缓存 + Pub/Sub |
 | `api` | 自定义 Python 3.11-slim | 8000 | FastAPI (热重载) |
 | `frontend` | 自定义 Node 18-alpine | 3000 | Vite dev server (HMR) |
@@ -325,7 +326,7 @@ instantboard/
 │   │   ├── models/           # 11 个 SQLAlchemy 模型
 │   │   ├── schemas/          # Pydantic 请求/响应 schema
 │   │   ├── services/         # 7 个业务逻辑服务
-│   │   ├── collectors/       # 6 个数据采集器 (3财经 + 3科技)
+│   │   ├── collectors/       # 7 个数据采集器 (4财经 + 3科技)
 │   │   ├── processors/       # 4 个数据处理管道
 │   │   ├── scheduler/        # APScheduler 任务编排
 │   │   ├── core/             # 安全/Redis/中间件/SSE路由
@@ -363,10 +364,11 @@ instantboard/
 │   ├── postgres/             # 数据库初始化脚本
 │   └── redis/                # Redis 配置
 │
-├── docs/design/              # 11 份设计文档 (中文)
+├── docs/design/              # 13 份设计文档 (中文)
 │   ├── architecture.md       # 总体架构
 │   ├── api.md                # REST API 规范
 │   ├── database.md           # 数据库设计
+│   ├── admin-login.md        # 本地管理员登录 (/ibadmin)
 │   └── ...
 │
 ├── scripts/                  # 运维脚本
@@ -536,9 +538,17 @@ curl http://localhost:8000/api/v1/auth/sso/providers
 
 **认证架构**：
 - JWT 双 Token 方案：Access Token (1h) + Refresh Token (7d)
-- Access Token：存 localStorage，Bearer 方式传递
-- Refresh Token：存 HttpOnly Cookie，单次使用轮换
-- Redis Token 黑名单（登出时失效旧 Token）
+- 纯 Bearer Token 认证，后端**不设置任何 Cookie**（无 `Set-Cookie`）
+- Access Token：存前端 localStorage，通过 `Authorization: Bearer <token>` 请求头传递
+- Refresh Token：同样存前端 localStorage，调用 `POST /api/v1/auth/refresh` 时以 JSON body 提交
+- 单次使用轮换：每次刷新后旧 Refresh Token 立即进入 Redis 黑名单，返回新的 token 对
+- Redis Token 黑名单（按 jti 记录，TTL 为 token 剩余有效期；登出时 access + refresh 均失效）
+- SSE 连接复用 Access Token 作为 `token` query 参数（短时效，随 Access Token 过期）
+
+> ⚠️ 安全提示：两个 token 均存于 localStorage，页面一旦被 XSS 注入，token 可被脚本窃取。
+> 现有缓解：Vue 默认转义 + DOMPurify + CSP、Access Token 短时效、Refresh 轮换 + 黑名单、
+> 本地管理员入口 `/ibadmin` 会话隔离。完整风险评估见
+> [docs/design/security.md](docs/design/security.md) §3.2 / §3.6。
 
 **角色权限**：
 
@@ -547,6 +557,38 @@ curl http://localhost:8000/api/v1/auth/sso/providers
 | `admin` | 管理租户内用户/分类/数据源 + 所有功能 |
 | `member` | 使用功能 + 管理个人自选列表 |
 | `viewer` | 仅查看 |
+
+---
+
+### 本地管理员登录 (/ibadmin)
+
+当 SSO 提供商不可用或未配置时（例如私有化部署没有第三方 OAuth 凭据），可通过本地管理员入口 `/ibadmin` 登录，对应后端接口 `POST /api/v1/auth/admin/login`。
+
+**用途**：运维兜底的管理入口。登录成功后获得与 SSO 相同结构的 JWT 双 Token（`role=admin`，归属 system 租户），可访问监控仪表盘等管理功能。
+
+**配置方式**（`.env`）：
+
+| 变量 | 说明 |
+|------|------|
+| `ADMIN_EMAIL` | 允许登录的管理员邮箱 |
+| `ADMIN_PASSWORD_HASH` | 管理员密码的 bcrypt 哈希（**只存哈希，不存明文**） |
+
+两者都配置时本地管理员登录才会启用（`admin_login_enabled`）；未配置时接口返回 `503 ADMIN_LOGIN_DISABLED`。
+
+**生成密码哈希**：
+
+```bash
+make gen-admin-hash PASS='你的密码'
+# 或交互式（不留明文到 shell 历史）：
+make gen-admin-hash
+```
+
+**与普通用户的隔离语义**（详见 [docs/design/admin-login.md](docs/design/admin-login.md)）：
+
+- 本地管理员与 SSO 用户按**登录入口隔离**，是 `users` 表中互不关联的记录（`sso_provider='local'` vs 具体提供商；system 租户 vs default 租户），**即使邮箱相同也不合并**；
+- SSO 登录的邮箱回退匹配**仅限 default 租户且排除 `local` 记录**，任何 SSO 登录都无法接管管理员账号；
+- `users` 表**不含密码字段**，校验对象是环境变量中的哈希；
+- 撤销方式：从 `.env` 删除 `ADMIN_EMAIL` / `ADMIN_PASSWORD_HASH` 并重启，存量本地会话将无法续期（refresh kill-switch）。
 
 ---
 
@@ -712,7 +754,7 @@ make prod-up
 | `nginx` | 反向代理 + SSL + 限流 | 0.5 CPU / 256M |
 | `api` | FastAPI + Gunicorn | 1.0 CPU / 512M |
 | `worker` | 后台任务处理 | 0.5 CPU / 256M |
-| `postgres` | PostgreSQL 15 | 1.0 CPU / 768M |
+| `postgres` | PostgreSQL 17 | 1.0 CPU / 768M |
 | `redis` | Redis 7 (密码保护) | 0.5 CPU / 256M |
 | `frontend` | 静态资源 (build 产物) | 0.25 CPU / 128M |
 
@@ -785,6 +827,7 @@ CI 使用 QEMU + buildx 构建多架构 manifest list 并推送至 GHCR，部署
 | YFinanceCollector | Yahoo Finance (股票/指数/商品) |
 | AlphaVantageCollector | Alpha Vantage API |
 | EastMoneyCollector | 东方财富 (A 股/基金) |
+| FinnhubCollector | Finnhub API (指数/商品/行情, 多 Key 轮换) |
 | RSSCollector | 通用 RSS 源 |
 | HackerNewsCollector | HackerNews API/RSS |
 | ArxivCollector | ArXiv 论文 |
@@ -906,6 +949,7 @@ docker info | grep "Architecture"
 | `content-categories.md` | 内容分类体系 |
 | `data-sources.md` | 外部数据源目录 |
 | `security.md` | 安全架构设计 |
+| `admin-login.md` | 本地管理员登录 (/ibadmin) 设计 |
 | `infrastructure.md` | DevOps + Docker + CI/CD |
 
 ---

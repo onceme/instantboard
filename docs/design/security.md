@@ -3,7 +3,7 @@ version: 1.0
 author: designer
 date: 2026-06-23
 status: draft
-cross_refs: [architecture.md, api.md, database.md, infrastructure.md]
+cross_refs: [architecture.md, api.md, database.md, infrastructure.md, admin-login.md]
 ---
 
 # InstantBoard 安全设计
@@ -43,14 +43,13 @@ cross_refs: [architecture.md, api.md, database.md, infrastructure.md]
 | 输入过滤 | 用户输入 (搜索、备注) 存入数据库前不做HTML过滤，输出时转义 |
 | CSP Header | Nginx 配置 `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https:; connect-src 'self'` |
 | DOMPurify | 唯一使用 v-html 的场景 (新闻摘要)，前端用 DOMPurify 清洗 |
-| Cookie | `HttpOnly; Secure; SameSite=Strict` — JWT 不入 Cookie，纯Bearer |
+| Token 存储 | JWT 不入 Cookie，后端**不设置任何 Cookie**（全代码库无 `set_cookie`/`Set-Cookie`）；access/refresh 两个 token 存前端 `localStorage`，纯 Bearer/JSON body 传递，风险评估见 §3.6 |
 
-#### CSRF 阻护
+#### CSRF 防护
 
 | 方案 | 实现 |
 |------|------|
-| 不使用Cookie认证 | JWT Bearer Token → CSRF 自然免疫 (无自动发送的Cookie) |
-| SameSite Cookie | Refresh Token Cookie 设置 `SameSite=Strict` |
+| 纯 Bearer token 认证 | 认证不使用 Cookie（后端无 `Set-Cookie`，浏览器不会自动附带任何认证 Cookie）→ CSRF 自然免疫 |
 | SSO OAuth State | `state` 参数防 CSRF — state 存 Redis (`sso_state:{key}` TTL 10min) |
 | SSE Token | SSE 认证用 query param `token` — 不受 CSRF 影响 |
 | Origin验证 | FastAPI 中间件验证 `Origin` / `Referer` 头匹配 CORS 白名单 |
@@ -352,12 +351,12 @@ graph LR
 
   subgraph refreshToken["Refresh Token"]
     RTexp["有效期: 7d 可配置"]
-    RTstore["存储: 前端 Cookie HttpOnly, Secure, SameSite=Strict"]
-    RTuse["使用: POST /api/v1/auth/refresh"]
-    RTcontent["内容: user_id, tenant_id, refresh_version"]
+    RTstore["存储: 前端 localStorage (refresh_token 键)"]
+    RTuse["使用: POST /api/v1/auth/refresh<br/>JSON body 提交 (RefreshTokenRequest)"]
+    RTcontent["内容: user_id, tenant_id, role, provider, refresh_version"]
     RTsign["签名: HS256 JWT_SECRET"]
     RTrotation["单次使用: 使用后旧token失效 返回新pair Rotation"]
-    RTdetect["失效检测: Redis存储used refresh tokens TTL=7d"]
+    RTdetect["失效检测: Redis黑名单 token_blacklist:{jti}<br/>TTL=token剩余有效期 (refresh默认7d)"]
   end
 
   subgraph lifecycle["Token 生命周期"]
@@ -372,6 +371,25 @@ graph LR
   S2 --> refreshToken
   S2 --> accessToken
 ```
+
+**存储与风险现状（如实描述）**：
+
+- 两个 token 均存于前端 `localStorage`（键 `access_token` / `refresh_token`，见 `frontend/src/stores/auth.ts`）；后端**不设置任何 Cookie**（全代码库无 `set_cookie`/`Set-Cookie`），认证为纯 Bearer 方案。
+- Access Token 通过 `Authorization: Bearer <token>` 请求头传递；Refresh Token 通过 `POST /api/v1/auth/refresh` 的 JSON body 提交；登出时 `DELETE /api/v1/auth/logout` 同样以 JSON body 携带 refresh token 供后端拉黑。
+- SSE 连接复用 Access Token 作为 `token` query 参数（`frontend/src/utils/sse.ts` 每次（重）连接时重新读取 localStorage 中的最新 token）。
+
+**主要风险：XSS 下 token 可被窃取**。`localStorage` 对同源脚本完全可读，一旦页面存在 XSS 注入，攻击者可直接读取并外传两个 token，冒充用户直至其自然过期。这是"不用 Cookie 存储"方案权衡后接受的代价，现有缓解措施：
+
+| 缓解 | 说明 |
+|------|------|
+| Access Token 短时效 | 默认 60 分钟（`JWT_ACCESS_TOKEN_EXPIRE_MINUTES`）；SSE 凭证也是 access token，泄露后的暴露窗口受同一时效限制 |
+| Refresh 黑名单 + 单次轮换 | `POST /api/v1/auth/refresh` 使用后立即将旧 refresh token 加入 Redis 黑名单并签发新 token 对（`services/auth.py::refresh_token`）；被盗 refresh token 被任一方使用后即失效 |
+| 登出全量失效 | 登出时 access + refresh 均进黑名单（access TTL = 剩余有效期；refresh TTL = 配置有效期，默认 7d），前端清除 localStorage |
+| Admin 入口隔离 | `/ibadmin` 是独立会话入口（`session_entry=admin`），本地管理员与 SSO 用户按登录入口隔离、永不按 email 合并（见 [admin-login.md](admin-login.md) §2），SSO 侧被窃取的 token 无法接管管理员身份 |
+| /ibadmin 防爆破锁定 | 管理员登录有 email + IP 双维度失败锁定（5 次/15 分钟、20 次/1 小时）、dummy bcrypt 时序拉平与统一错误文案（见 [admin-login.md](admin-login.md) §7） |
+| XSS 预防基线 | Vue 默认转义 + DOMPurify + CSP（见 §3.2），降低 XSS 发生的概率 |
+
+> 残余风险：refresh token（7d）若被窃取，攻击者可在有效期内静默轮换续期；已泄露的 access token 在自然过期前无法即时作废（仅登出/黑名单可提前终止）。如需更强保护，可评估将 refresh token 改回 HttpOnly Cookie 存储（需另行设计，会重新引入 CSRF 考量），当前版本未实现。
 
 ### 3.7 HTTPS 配置
 
@@ -411,7 +429,7 @@ server {
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,  # .env 配置，生产仅允许实际域名
-    allow_credentials=True,                # Refresh token Cookie 需要
+    allow_credentials=True,                # 现状保留；认证为纯 Bearer，无 Cookie 凭据，此项实际不涉及 Cookie
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-Tenant-ID"],
     max_age=3600,                          # CORS preflight 缓存1h
@@ -441,7 +459,11 @@ app.add_middleware(
 - **JWT密钥泄露**: 管理API支持立即更换 `SECRET_KEY`，所有旧token自动失效
 - **Redis限流不可用**: 降级为 Nginx 层限流 (粗粒度但有效)
 - **Apple代理email**: 用户隐藏真实email时，使用代理email，不可变更
-- **多SSO同一email**: 同一email不同provider → 创建同一tenant下的同一user (合并逻辑)
+- **多SSO同一email（身份隔离）**: 按登录入口隔离，**不做跨 email 合并**（见 [admin-login.md](admin-login.md) §2、`app/services/auth.py::_get_or_create_user`）：
+  - 主路径：按 `(sso_provider, sso_provider_id)` 精确匹配，命中则刷新 profile 后返回；
+  - 邮箱回退：仅当**同一 email 已存在于 default 租户、且 `sso_provider != 'local'`** 时，才把该记录绑定到当前 provider（用于为同一人避免重复建档）；
+  - **`local` 记录永不被 SSO 合并/接管**——即使 email 与本地管理员相同，二者也是不同租户下的独立记录（管理员在 system 租户）；
+  - 不匹配时新建 default 租户的 `member` 用户；**不跨租户匹配**
 - **CORS配置错误**: 生产环境仅允许实际域名，不使用 `*`
 
 ## 6. 与其他模块的依赖

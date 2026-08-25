@@ -7,7 +7,7 @@ Usage:
     echo '<secret>' | python scripts/gen_admin_password_hash.py -  # reads piped stdin
 
 The output hash is meant to be pasted into ADMIN_PASSWORD_HASH in .env. See
-docs/design/admin-login.md for the local admin login flow.
+docs/dev-guide/design/admin-login.md for the local admin login flow.
 
 Comments are intentionally English-only, matching the project convention.
 """

@@ -3,7 +3,7 @@
 # 用途：供 docker build 的 wheel-fetcher 阶段在原生构建平台（amd64）上预下载
 # arm/v7 目标平台的 wheel（pip download --only-binary=:all: --platform ...），
 # 使 builder 阶段在 arm/v7（QEMU 模拟）下安装时免逐包网络下载。
-# 设计见 docs/design/cd-workflow-optimization.md §5.3。
+# 设计见 docs/dev-guide/design/cd-workflow-optimization.md §5.3。
 #
 # 生成/更新方法（requirements/base.txt 或 prod.txt 依赖变更时重新生成）：
 #   1. python3.11 -m venv /tmp/ib-probe

@@ -129,7 +129,7 @@ class AuthService:
         }
 
     async def admin_login(self, email: str, password: str, client_ip: str) -> dict:
-        """Local admin login (isolated identity model, see docs/design/admin-login.md).
+        """Local admin login (isolated identity model, see docs/dev-guide/design/admin-login.md).
 
         The admin user record lives in the system tenant with provider='local' and is
         never merged with SSO users, even when the email matches.
@@ -325,7 +325,7 @@ class AuthService:
             #   * local accounts are excluded — the local admin record (and any other
             #     provider='local' identity) can never be claimed or rewritten by SSO;
             #     identities are isolated by login entry and never merged by email
-            #     (docs/design/admin-login.md), so an SSO login with the admin email
+            #     (docs/dev-guide/design/admin-login.md), so an SSO login with the admin email
             #     simply provisions a fresh member user;
             #   * the match is scoped to the default tenant — the only tenant a new SSO
             #     user belongs to — never crossing tenant boundaries.

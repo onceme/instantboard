@@ -35,7 +35,7 @@ METRIC_THRESHOLDS = {
 # prod (SCHEDULER_ENABLED=false in the api process) the worker publishes
 # scheduler:worker:heartbeat to Redis every 15s with a 45s TTL. A heartbeat
 # younger than the TTL (= 3x the write interval) means the worker is alive.
-# Contract: docs/design/infrastructure.md §3.5 "Worker 心跳机制".
+# Contract: docs/dev-guide/design/infrastructure.md §3.5 "Worker 心跳机制".
 WORKER_HEARTBEAT_FRESH_SECONDS = RedisKeys.WORKER_HEARTBEAT_TTL
 
 

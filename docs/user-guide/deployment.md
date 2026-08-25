@@ -1,6 +1,53 @@
-# InstantBoard 部署指南
+# 生产部署
 
 > 最后修订：2026-08-24（文档与代码对照审计后修订）
+
+本页是部署信息的唯一归属：部署流程、SSL/HTTPS、多架构与生产环境 `.env` 模板。环境变量字段含义见[配置说明](configuration.md)；完整的 Docker 编排方案见 [基础设施设计](../dev-guide/design/infrastructure.md)。
+
+## 部署步骤（Docker Compose）
+
+```bash
+# 1. 准备生产环境配置
+cp .env.example .env
+# 编辑 .env，填写所有 PROD_* 变量
+
+# 2. 准备 SSL 证书
+mkdir -p docker/nginx/ssl
+# 放置 fullchain.pem 和 privkey.pem
+# 推荐使用 Let's Encrypt + certbot
+
+# 3. 构建并启动
+make build-prod
+make prod-up
+```
+
+开发环境启动（`make dev`）见[快速开始](getting-started.md)。
+
+Makefile 和所有 shell 脚本均自动检测 `docker compose`（V2 插件）与 `docker-compose`（V1 独立版），两者均可使用，无需手动配置。
+
+## 生产环境服务清单
+
+| 服务 | 说明 | 资源限制 |
+|------|------|---------|
+| `nginx` | 反向代理 + SSL | 0.5 CPU / 256M |
+| `api` | FastAPI + Gunicorn（`SCHEDULER_ENABLED=false`，调度器由 worker 独占） | 1.0 CPU / 512M |
+| `worker` | 后台采集任务（内嵌 APScheduler + 心跳） | 0.5 CPU / 256M |
+| `postgres` | PostgreSQL **15**-alpine（数据目录由 15 初始化，升级 17 需先 pg_dump/restore 停机迁移） | 1.0 CPU / 768M |
+| `redis` | Redis 7 (密码保护) | 0.5 CPU / 256M |
+| `frontend` | 静态资源 (build 产物) | 0.25 CPU / 128M |
+| `mongodb` | 可选，MongoDB 6（`--profile mongodb` 按需启用，默认不启动） | 0.5 CPU / 512M |
+
+## 开发 vs 生产差异
+
+| 项目 | 开发 | 生产 |
+|------|------|------|
+| API | 端口 8000 直接访问 | Nginx 代理 (80/443) |
+| 数据库 | 端口 5432 可直连 | 不对外暴露 |
+| 前端 | Vite dev server (HMR) | Nginx 托管构建产物 |
+| Worker | 集成在 API (APScheduler) | 独立 Worker 进程 |
+| HTTPS | 无 | TLS 1.3 + HSTS |
+| 重启策略 | 无 | always |
+| 密码 | 固定开发密码 | .env 强密码 |
 
 ## SSO 提供商配置
 
@@ -98,6 +145,8 @@ JWT_REFRESH_TOKEN_EXPIRE_DAYS=7
 ```
 
 ## 完整生产环境 .env 示例
+
+> 各变量的含义见[配置说明](configuration.md)，此处只给出生产模板。
 
 ```bash
 # --- 通用 ---
@@ -277,22 +326,7 @@ docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml \
   但仍应避免将该日志外发/长期留存。后续可将 SSE 的鉴权改为 `Authorization` 头
   或在 nginx 侧脱敏后再修。
 
-## Docker Compose 部署
-
-参考 [快速开始](../README.md#快速开始) 章节和 [infrastructure.md](design/infrastructure.md) 了解完整的 Docker 编排方案。
-
-```bash
-# 开发环境
-make dev
-
-# 生产环境
-make build-prod
-make prod-up
-```
-
-Makefile 和所有 shell 脚本均自动检测 `docker compose`（V2 插件）与 `docker-compose`（V1 独立版），两者均可使用，无需手动配置。
-
-### SSL 证书与 Nginx 端口配置
+## SSL 证书与 Nginx 端口配置
 
 Nginx 的 HTTPS 行为和监听端口完全由 `.env` 控制：
 
@@ -321,7 +355,7 @@ SSL_CERT_DIR=/etc/letsencrypt/live/ib.bithollow.org
 
 > **注意**：`.gitignore` 应忽略服务器本地的 `.env` 文件，生产 `.env` 不应提交到仓库。
 
-### 架构支持
+## 架构支持
 
 项目 CI 同时构建 `linux/amd64` 和 `linux/arm/v7` 镜像，支持部署到：
 

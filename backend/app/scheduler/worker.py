@@ -41,7 +41,7 @@ SOURCE_EVENT_NAMES = {"source_created", "source_enabled", "source_disabled", "so
 # Heartbeat cadence: the worker rewrites its heartbeat every 15s with a TTL of
 # 3x that interval (RedisKeys.WORKER_HEARTBEAT_TTL = 45s). The api side treats
 # a heartbeat younger than 45s as a live worker. Contract:
-# docs/design/infrastructure.md §3.5 "Worker 心跳机制".
+# docs/dev-guide/design/infrastructure.md §3.5 "Worker 心跳机制".
 HEARTBEAT_INTERVAL_SECONDS = 15
 
 # Mutable state shared with the source event listener: the heartbeat reports

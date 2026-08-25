@@ -119,7 +119,7 @@ services:
       # Validate the worker heartbeat freshness in Redis instead of a mere process
       # check: a hung worker keeps its process alive but stops refreshing the key.
       # The worker writes scheduler:worker:heartbeat every 15s with a 45s TTL
-      # (app/scheduler/worker.py; contract: docs/design/infrastructure.md §3.5
+      # (app/scheduler/worker.py; contract: docs/dev-guide/design/infrastructure.md §3.5
       # "Worker 心跳机制"). Key name must match app/core/redis.py RedisKeys.WORKER_HEARTBEAT.
       #
       # Probe = `redis-cli exists <key>`, NOT a Python script. TTL semantics make

@@ -29,7 +29,7 @@ EXPOSE 8000
 
 ENTRYPOINT ["./entrypoint.sh"]
 
-# Hybrid cross-build, part 1 (see docs/design/cd-workflow-optimization.md §5.3):
+# Hybrid cross-build, part 1 (see docs/dev-guide/design/cd-workflow-optimization.md §5.3):
 # pre-download the arm/v7 wheels for every package that has one
 # (requirements/prod-binary.txt) on the NATIVE build platform — this runs on
 # amd64 without QEMU, so it is fast. Only when targeting linux/arm/v7; for any

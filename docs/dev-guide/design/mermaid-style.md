@@ -10,7 +10,7 @@ cross_refs: [docs-wiki-architecture.md, architecture.md, data-flow.md, content-c
 
 ## 1. 背景与目标
 
-全仓共 **44 个 mermaid 图块、分布在 15 个文件**（`README.md` 2 个、`docs/design/` 下 12 个文件 42 个），全部使用默认主题、无任何 `%%{init}%%` 配置，存在四类系统性问题：
+全仓共 **44 个 mermaid 图块、分布在 15 个文件**（`README.md` 2 个、`docs/dev-guide/design/` 下 12 个文件 42 个），全部使用默认主题、无任何 `%%{init}%%` 配置，存在四类系统性问题：
 
 1. **彩色 style 语句**：共 18 行显式 `style X fill:...`（`README.md` L122-128 七行、`README.md` L870-877 八行、`security.md` L175-177 三行），与统一黑白风格冲突；
 2. **节点标签 emoji**：📈🔬📊⚡🐘🔴🟢🤖🧠🚀💰⚙️✅❌ 等，渲染不稳定且放大体积；
@@ -242,48 +242,48 @@ sequenceDiagram
 |---|------|-------|------|---------|------|
 | 1 | README.md | 89 | graph TB | ~12 处标签 emoji；7 行彩色 style (L122-128)；SSE 节点 2 行长标签 | 换模板：删 emoji/style，SSE 标签瘦 1 行（数量细节移图下） |
 | 2 | README.md | 860 | graph LR | 8 节点一字横排（≈1900px 超宽）；8 行彩色 style (L870-877)；emoji | **重构布局**：LR→TD 主链 5 + 末端分支 3；见 §3.4 示例 1 |
-| 3 | docs/design/data-flow.md | 42 | graph TD | 6 链节点各 3-5 行 × ~50 字，超 3 行上限 | **重构布局**：节点瘦至 1-2 行，采集器类型/四步细节移图下（§3.1.2 已有承接） |
-| 4 | docs/design/data-flow.md | 116 | graph LR | 5 节点横排，Router 标签 3 行 × 40+ 字，宽 >1000px | **重构布局**：LR→TD，拆"发布/分发/订阅"三层；映射表说明移图下 |
-| 5 | docs/design/data-flow.md | 198 | graph LR | 6 节点横排，各 4-6 行标签（最长行 ~70 字），严重超宽 | **重构布局**：LR→TD 骨架链（标签 ≤1 行）；两层去重键对比等细节移图下正文 |
-| 6 | docs/design/data-flow.md | 293 | graph TD | 4 subgraph 纵接，标签适中 | 换模板 |
-| 7 | docs/design/data-flow.md | 362 | sequenceDiagram | 5 参与者；个别消息行偏长 | 换模板（时序模板） |
-| 8 | docs/design/data-flow.md | 442 | graph TD | 3 节点单列，标签 4 行 × ~35 字 | 换模板（每节点微修剪至 ≤3 行） |
-| 9 | docs/design/data-flow.md | 474 | graph TD | 三分支并联，行宽 ≈800px 达标 | 换模板 |
-| 10 | docs/design/data-flow.md | 498 | graph TD | 小图 | 换模板 |
-| 11 | docs/design/data-flow.md | 513 | graph TD | 3 subgraph × 3 节点链，行宽 ≈700px 达标 | 换模板 |
-| 12 | docs/design/data-flow.md | 539 | graph TD | NotImpl 节点含 ⚠️ 图形符号 | 换模板（按 G1 删 ⚠️，改为文字"未实现"） |
-| 13 | docs/design/data-flow.md | 564 | sequenceDiagram | 7 参与者，宽度 ~1000px 临界；参与者名超长 | **重构布局**：合并/减名（Store→PG、SSEEventRouter→Router），消息文案压缩至 ≤28 字 |
-| 14 | docs/design/data-flow.md | 595 | sequenceDiagram | 6 参与者，达标 | 换模板（"并发拉取 13 个指数(…)"类长消息缩短） |
-| 15 | docs/design/content-categories.md | 40 | graph TD | finance/tech 节点各 5 行标签，超 3 行上限 | **重构布局**：瘦至 ≤3 行；图标/颜色/频道细节移到图下（§3.5.6 表已承接） |
-| 16 | docs/design/content-categories.md | 66 | graph LR | 4 节点横排 × 5-8 行标签，显著超宽 | **重构布局**：LR→TD；字段清单移图下表（对应 categories/sources/items 表） |
-| 17 | docs/design/content-categories.md | 218 | graph TD | 6 步链各 6-9 行 × ~55 字，超长 | **重构布局**：节点瘦为"步骤名 + 1 行动作"；各步明细移图下编号列表 |
-| 18 | docs/design/content-categories.md | 300 | graph TD | emoji 🏃🎮🏥📚；sys_feature 节点 6 行（临界） | 换模板：删 emoji；sys_feature 微修剪 |
-| 19 | docs/design/content-categories.md | 479 | graph TD | ~36 节点、二级层 5 个 subgraph 并排，宽 >1000px 且超高 | **重构布局**：简化为三级骨架图（二级以"×6"标注）；24 个二级 slug 由 §3.5 各表承载，不进图 |
-| 20 | docs/design/content-categories.md | 688 | graph LR | 4 层嵌套 subgraph、~30 节点横排，严重超宽 | **拆图**：① TopicFilter 三级标签层级（改 TD）② FinanceSubNav / NewsCard 改图下列表 |
-| 21 | docs/design/finance-tab.md | 24 | sequenceDiagram | 4 参与者，消息短 | 换模板（时序模板） |
-| 22 | docs/design/finance-tab.md | 84 | graph TD | 小图 | 换模板 |
-| 23 | docs/design/finance-tab.md | 163 | graph TD | 小图 | 换模板 |
-| 24 | docs/design/finance-tab.md | 213 | graph TD | 小图 | 换模板 |
-| 25 | docs/design/finance-tab.md | 255 | graph LR | SubNav 5 节点横排 + 内容节点长标签，≈1200px 超宽 | **重构布局**：LR→TD，SubNav 与右侧面板作上下两子图 |
-| 26 | docs/design/finance-tab.md | 308 | graph TD | 4 subgraph 纵叠，标签短 | 换模板 |
-| 27 | docs/design/security.md | 167 | graph LR | 3 行彩色 style (L175-177) | 换模板：删 3 行 style |
-| 28 | docs/design/security.md | 188 | sequenceDiagram | 3 参与者；Note 内 `<br/>` 两行 | 换模板（Note 并 1 行，见 §3.4 示例 3） |
-| 29 | docs/design/security.md | 365 | graph LR | 3 subgraph 并排 ~900px 临界；RTdetect 标签偏长 | 换模板（RTdetect 微修剪） |
-| 30 | docs/design/tech-tab.md | 166 | graph TD | 7 叶节点同层，DC 标签 ~30 字，总宽 >1200px | **重构布局**：叶标签瘦身（配色图例移图下表）或分层/改 LR 树 |
-| 31 | docs/design/tech-tab.md | 184 | graph TD | 短标签两层 | 换模板 |
-| 32 | docs/design/tech-tab.md | 220 | graph TD | 小图 | 换模板 |
-| 33 | docs/design/dashboard-tab.md | 68 | graph TD | StatusColors 含 🟢🟡🔴 | 换模板：删 emoji，改文字 "healthy / degraded / down" |
-| 34 | docs/design/dashboard-tab.md | 130 | graph TD | 小图 | 换模板 |
-| 35 | docs/design/dashboard-tab.md | 185 | graph LR | 嵌套 subgraph 双列，达标 | 换模板 |
-| 36 | docs/design/architecture.md | 23 | graph TD | APILayer 9 个路由节点单排（≈1350px 超宽） | **重构布局**：APILayer 合并为单节点，9 路由清单移图下正文（引用 api.md） |
-| 37 | docs/design/architecture.md | 84 | graph LR | 前后端两大 subgraph 并排、20+ 节点，宽 >2000px | **拆图**：前端结构 / 后端结构两张 TD 图（亦可改目录树代码块风格，见 frontend.md §3.1） |
-| 38 | docs/design/architecture.md | 152 | graph TD | 7 节点小图 | 换模板 |
-| 39 | docs/design/data-sources.md | 387 | graph TD | ✅/❌ 符号 | 换模板：改文字"成功/失败" |
-| 40 | docs/design/data-sources.md | 422 | graph TD | env 节点 5 行（临界） | 换模板（env 节点并行至 ≤3 行） |
-| 41 | docs/design/frontend.md | 90 | graph TD | 9 叶同层 + 长标签（AdminNav ~50 字），显著超宽 | **拆图**：Sidebar 子树 / Header 子树两图（或与 §3.1 目录树合并） |
-| 42 | docs/design/frontend.md | 154 | graph LR | emoji 💰🔬📊⚙️🌙👤；双列达标 | 换模板：删 emoji，改文字 |
-| 43 | docs/design/admin-login.md | 50 | sequenceDiagram | 5 参与者 + alt 块，达标 | 换模板（时序模板） |
-| 44 | docs/design/infrastructure.md | 160 | graph TD | 小图 | 换模板 |
+| 3 | docs/dev-guide/design/data-flow.md | 42 | graph TD | 6 链节点各 3-5 行 × ~50 字，超 3 行上限 | **重构布局**：节点瘦至 1-2 行，采集器类型/四步细节移图下（§3.1.2 已有承接） |
+| 4 | docs/dev-guide/design/data-flow.md | 116 | graph LR | 5 节点横排，Router 标签 3 行 × 40+ 字，宽 >1000px | **重构布局**：LR→TD，拆"发布/分发/订阅"三层；映射表说明移图下 |
+| 5 | docs/dev-guide/design/data-flow.md | 198 | graph LR | 6 节点横排，各 4-6 行标签（最长行 ~70 字），严重超宽 | **重构布局**：LR→TD 骨架链（标签 ≤1 行）；两层去重键对比等细节移图下正文 |
+| 6 | docs/dev-guide/design/data-flow.md | 293 | graph TD | 4 subgraph 纵接，标签适中 | 换模板 |
+| 7 | docs/dev-guide/design/data-flow.md | 362 | sequenceDiagram | 5 参与者；个别消息行偏长 | 换模板（时序模板） |
+| 8 | docs/dev-guide/design/data-flow.md | 442 | graph TD | 3 节点单列，标签 4 行 × ~35 字 | 换模板（每节点微修剪至 ≤3 行） |
+| 9 | docs/dev-guide/design/data-flow.md | 474 | graph TD | 三分支并联，行宽 ≈800px 达标 | 换模板 |
+| 10 | docs/dev-guide/design/data-flow.md | 498 | graph TD | 小图 | 换模板 |
+| 11 | docs/dev-guide/design/data-flow.md | 513 | graph TD | 3 subgraph × 3 节点链，行宽 ≈700px 达标 | 换模板 |
+| 12 | docs/dev-guide/design/data-flow.md | 539 | graph TD | NotImpl 节点含 ⚠️ 图形符号 | 换模板（按 G1 删 ⚠️，改为文字"未实现"） |
+| 13 | docs/dev-guide/design/data-flow.md | 564 | sequenceDiagram | 7 参与者，宽度 ~1000px 临界；参与者名超长 | **重构布局**：合并/减名（Store→PG、SSEEventRouter→Router），消息文案压缩至 ≤28 字 |
+| 14 | docs/dev-guide/design/data-flow.md | 595 | sequenceDiagram | 6 参与者，达标 | 换模板（"并发拉取 13 个指数(…)"类长消息缩短） |
+| 15 | docs/dev-guide/design/content-categories.md | 40 | graph TD | finance/tech 节点各 5 行标签，超 3 行上限 | **重构布局**：瘦至 ≤3 行；图标/颜色/频道细节移到图下（§3.5.6 表已承接） |
+| 16 | docs/dev-guide/design/content-categories.md | 66 | graph LR | 4 节点横排 × 5-8 行标签，显著超宽 | **重构布局**：LR→TD；字段清单移图下表（对应 categories/sources/items 表） |
+| 17 | docs/dev-guide/design/content-categories.md | 218 | graph TD | 6 步链各 6-9 行 × ~55 字，超长 | **重构布局**：节点瘦为"步骤名 + 1 行动作"；各步明细移图下编号列表 |
+| 18 | docs/dev-guide/design/content-categories.md | 300 | graph TD | emoji 🏃🎮🏥📚；sys_feature 节点 6 行（临界） | 换模板：删 emoji；sys_feature 微修剪 |
+| 19 | docs/dev-guide/design/content-categories.md | 479 | graph TD | ~36 节点、二级层 5 个 subgraph 并排，宽 >1000px 且超高 | **重构布局**：简化为三级骨架图（二级以"×6"标注）；24 个二级 slug 由 §3.5 各表承载，不进图 |
+| 20 | docs/dev-guide/design/content-categories.md | 688 | graph LR | 4 层嵌套 subgraph、~30 节点横排，严重超宽 | **拆图**：① TopicFilter 三级标签层级（改 TD）② FinanceSubNav / NewsCard 改图下列表 |
+| 21 | docs/dev-guide/design/finance-tab.md | 24 | sequenceDiagram | 4 参与者，消息短 | 换模板（时序模板） |
+| 22 | docs/dev-guide/design/finance-tab.md | 84 | graph TD | 小图 | 换模板 |
+| 23 | docs/dev-guide/design/finance-tab.md | 163 | graph TD | 小图 | 换模板 |
+| 24 | docs/dev-guide/design/finance-tab.md | 213 | graph TD | 小图 | 换模板 |
+| 25 | docs/dev-guide/design/finance-tab.md | 255 | graph LR | SubNav 5 节点横排 + 内容节点长标签，≈1200px 超宽 | **重构布局**：LR→TD，SubNav 与右侧面板作上下两子图 |
+| 26 | docs/dev-guide/design/finance-tab.md | 308 | graph TD | 4 subgraph 纵叠，标签短 | 换模板 |
+| 27 | docs/dev-guide/design/security.md | 167 | graph LR | 3 行彩色 style (L175-177) | 换模板：删 3 行 style |
+| 28 | docs/dev-guide/design/security.md | 188 | sequenceDiagram | 3 参与者；Note 内 `<br/>` 两行 | 换模板（Note 并 1 行，见 §3.4 示例 3） |
+| 29 | docs/dev-guide/design/security.md | 365 | graph LR | 3 subgraph 并排 ~900px 临界；RTdetect 标签偏长 | 换模板（RTdetect 微修剪） |
+| 30 | docs/dev-guide/design/tech-tab.md | 166 | graph TD | 7 叶节点同层，DC 标签 ~30 字，总宽 >1200px | **重构布局**：叶标签瘦身（配色图例移图下表）或分层/改 LR 树 |
+| 31 | docs/dev-guide/design/tech-tab.md | 184 | graph TD | 短标签两层 | 换模板 |
+| 32 | docs/dev-guide/design/tech-tab.md | 220 | graph TD | 小图 | 换模板 |
+| 33 | docs/dev-guide/design/dashboard-tab.md | 68 | graph TD | StatusColors 含 🟢🟡🔴 | 换模板：删 emoji，改文字 "healthy / degraded / down" |
+| 34 | docs/dev-guide/design/dashboard-tab.md | 130 | graph TD | 小图 | 换模板 |
+| 35 | docs/dev-guide/design/dashboard-tab.md | 185 | graph LR | 嵌套 subgraph 双列，达标 | 换模板 |
+| 36 | docs/dev-guide/design/architecture.md | 23 | graph TD | APILayer 9 个路由节点单排（≈1350px 超宽） | **重构布局**：APILayer 合并为单节点，9 路由清单移图下正文（引用 api.md） |
+| 37 | docs/dev-guide/design/architecture.md | 84 | graph LR | 前后端两大 subgraph 并排、20+ 节点，宽 >2000px | **拆图**：前端结构 / 后端结构两张 TD 图（亦可改目录树代码块风格，见 frontend.md §3.1） |
+| 38 | docs/dev-guide/design/architecture.md | 152 | graph TD | 7 节点小图 | 换模板 |
+| 39 | docs/dev-guide/design/data-sources.md | 387 | graph TD | ✅/❌ 符号 | 换模板：改文字"成功/失败" |
+| 40 | docs/dev-guide/design/data-sources.md | 422 | graph TD | env 节点 5 行（临界） | 换模板（env 节点并行至 ≤3 行） |
+| 41 | docs/dev-guide/design/frontend.md | 90 | graph TD | 9 叶同层 + 长标签（AdminNav ~50 字），显著超宽 | **拆图**：Sidebar 子树 / Header 子树两图（或与 §3.1 目录树合并） |
+| 42 | docs/dev-guide/design/frontend.md | 154 | graph LR | emoji 💰🔬📊⚙️🌙👤；双列达标 | 换模板：删 emoji，改文字 |
+| 43 | docs/dev-guide/design/admin-login.md | 50 | sequenceDiagram | 5 参与者 + alt 块，达标 | 换模板（时序模板） |
+| 44 | docs/dev-guide/design/infrastructure.md | 160 | graph TD | 小图 | 换模板 |
 
 **施工批次建议**：
 
@@ -302,6 +302,6 @@ sequenceDiagram
 
 ## 7. 与其他模块的依赖
 
-- **约束范围**：15 个文件 44 图（`README.md`；`docs/design/` 下 architecture / api?（无图）/ data-flow / content-categories / finance-tab / security / tech-tab / dashboard-tab / data-sources / frontend / admin-login / infrastructure）；后续新增图一律按本规范评审。
+- **约束范围**：15 个文件 44 图（`README.md`；`docs/dev-guide/design/` 下 architecture / api?（无图）/ data-flow / content-categories / finance-tab / security / tech-tab / dashboard-tab / data-sources / frontend / admin-login / infrastructure）；后续新增图一律按本规范评审。
 - **→ docs-wiki-architecture.md**：图改造只动图块不动文件名，不影响 wiki 页名与链接；但 Wiki 侧同样渲染 mermaid，PR1 需顺带验证 Wiki 渲染。
 - **→ infrastructure.md**：CI 可增加"mermaid 块语法 lint"（可选增强，非本次范围）。

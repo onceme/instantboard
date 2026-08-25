@@ -46,7 +46,7 @@ jobs:
           # production (registry-side manifest rewrite only — no layers are copied, takes
           # seconds). Otherwise (hotfix/squash/re-cut release, or images cleaned up) fall
           # back to a full multi-arch build exactly as before.
-          # See docs/design/cd-workflow-optimization.md §4.2.
+          # See docs/dev-guide/design/cd-workflow-optimization.md §4.2.
           set -euo pipefail
           STAGING_SHA="$(git rev-parse --verify --quiet HEAD^2 || true)"
           if [ -z "$STAGING_SHA" ]; then

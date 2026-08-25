@@ -1,5 +1,5 @@
 /**
- * Dashboard store source-health SSE regression (docs/design/data-flow.md
+ * Dashboard store source-health SSE regression (docs/dev-guide/design/data-flow.md
  * §3.5.4 source_health_update contract). The backend publishes the full
  * source_health row keyed by source_id; updateSourceHealthFromSSE must merge
  * the mutable health fields into the matching row (never overwriting

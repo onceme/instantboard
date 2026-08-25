@@ -363,7 +363,7 @@ class TestSSEEventRouter:
 
 
 class TestSourceHealthTenantRouting:
-    """Tenant forwarding for source_health_update (docs/design/data-flow.md).
+    """Tenant forwarding for source_health_update (docs/dev-guide/design/data-flow.md).
 
     The scheduler publishes health events with tenant_id=str(source.tenant_id);
     admin sessions belong to the system tenant, so their SSE connections

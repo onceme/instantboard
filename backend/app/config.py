@@ -72,7 +72,7 @@ class Settings(BaseSettings):
     jwt_access_token_expire_minutes: int = Field(default=60, alias="JWT_ACCESS_TOKEN_EXPIRE_MINUTES")
     jwt_refresh_token_expire_days: int = Field(default=7, alias="JWT_REFRESH_TOKEN_EXPIRE_DAYS")
 
-    # Local Admin Login (isolated admin identity, see docs/design/admin-login.md)
+    # Local Admin Login (isolated admin identity, see docs/dev-guide/design/admin-login.md)
     admin_email: str | None = Field(default=None, alias="ADMIN_EMAIL")
     admin_password_hash: str | None = Field(default=None, alias="ADMIN_PASSWORD_HASH")
     admin_password: str | None = Field(default=None, alias="ADMIN_PASSWORD")

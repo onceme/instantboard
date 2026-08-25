@@ -1216,7 +1216,7 @@ class TestSseHealthStatus:
 # ---------------------------------------------------------------------------
 # Prod mode (SCHEDULER_ENABLED=false): scheduler health comes from the worker
 # heartbeat stored in Redis, not from the in-process scheduler singleton.
-# Contract: docs/design/infrastructure.md §3.5 "Worker 心跳机制".
+# Contract: docs/dev-guide/design/infrastructure.md §3.5 "Worker 心跳机制".
 # ---------------------------------------------------------------------------
 
 HEARTBEAT_KEY = RedisKeys.worker_heartbeat_key()

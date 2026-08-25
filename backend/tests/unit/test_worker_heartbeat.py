@@ -5,7 +5,7 @@ the api process — whose embedded scheduler is disabled in prod — can report
 worker health instead of always showing the scheduler as down. Covers the
 payload contract, the SET with EX=TTL, error swallowing (a heartbeat failure
 must never kill the worker) and the best-effort key cleanup on shutdown.
-Contract: docs/design/infrastructure.md §3.5 "Worker 心跳机制".
+Contract: docs/dev-guide/design/infrastructure.md §3.5 "Worker 心跳机制".
 """
 
 import asyncio

@@ -290,7 +290,7 @@ export interface DataSourceHealthSummary {
 }
 
 // SSE payload of "source_health_update" (dashboard channel).
-// Contract: docs/design/data-flow.md §3.5.4; built by backend
+// Contract: docs/dev-guide/design/data-flow.md §3.5.4; built by backend
 // app/services/sse.py build_source_health_update_payload(). The health table
 // row is matched by source_id === DataSourceHealthDetail.id.
 export interface SourceHealthUpdateEvent {

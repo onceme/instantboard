@@ -1,5 +1,5 @@
 """Integration tests for the generic sort_by/sort_order params (GET /categories,
-GET /sources, GET /admin/tenants — see docs/design/api.md §3.1).
+GET /sources, GET /admin/tenants — see docs/dev-guide/design/api.md §3.1).
 
 Rows are seeded directly through the ORM so names/created_at/priority values are
 deterministic. Assertions always filter the responses down to the seeded IDs

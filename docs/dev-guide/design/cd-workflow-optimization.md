@@ -452,4 +452,4 @@ CPU 型号调整通常收益 <10%，还可能引入指令集兼容问题；实�
 
 - → [infrastructure.md](infrastructure.md)：本文细化其 §3.3 “GitHub Actions CI/CD 流程”与“多架构构建策略”小节的构建/缓存/发布流水线；分支模型与编排结构不变。
 - → [architecture.md](architecture.md)：api（单 gunicorn worker + SSE）/ worker（APScheduler 独立进程）的运行形态是 §5.1 移除 uvloop 影响评估的依据。
-- → [deployment.md](../deployment.md)：生产主机同时含 armv7 与 amd64，是平台集合维持 `linux/amd64,linux/arm/v7` 的依据。
+- → [deployment.md](../../user-guide/deployment.md)：生产主机同时含 armv7 与 amd64，是平台集合维持 `linux/amd64,linux/arm/v7` 的依据。

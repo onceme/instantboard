@@ -430,8 +430,8 @@ class TestCreateSource:
 
     # ── collector pre-flight on create ───────────────────────────
     async def test_create_active_without_collector_rejected(self):
-        """web_scrape sources have no collector of their own and no config.library
-        fallback here → creating them active must fail loudly instead of
+        """api sources have no collector of their own and no config.library
+        override here → creating them active must fail loudly instead of
         silently scheduling a job that can never collect."""
         db, mock_result = _mock_db()
         redis = _mock_redis()
@@ -461,16 +461,16 @@ class TestCreateSource:
         from app.schemas.source import SourceCreate
 
         data = SourceCreate(
-            name="Bare scraper",
+            name="Bare api source",
             category_id=str(uuid.uuid4()),
-            source_type="web_scrape",
+            source_type="api",
             url="https://example.com",
-            config={"url": "https://example.com", "selector": ".item"},
+            config={"url": "https://example.com", "method": "GET"},
             is_active=True,
         )
 
         service = SourceService(db, redis)
-        with pytest.raises(NoCollectorAvailable, match="web_scrape"):
+        with pytest.raises(NoCollectorAvailable, match="api"):
             await service.create_source(data, "tenant-1")
         db.add.assert_not_called()
 
@@ -535,7 +535,7 @@ class TestCreateSource:
         category = MagicMock()
         category.tenant_id = "tenant-1"
         category.refresh_interval_seconds = 300
-        created_source = _make_source(tenant_id="tenant-1", source_type="web_scrape", is_active=False)
+        created_source = _make_source(tenant_id="tenant-1", source_type="api", is_active=False)
 
         call_count = 0
 
@@ -558,11 +558,11 @@ class TestCreateSource:
         from app.schemas.source import SourceCreate
 
         data = SourceCreate(
-            name="Draft scraper",
+            name="Draft api source",
             category_id=str(uuid.uuid4()),
-            source_type="web_scrape",
+            source_type="api",
             url="https://example.com",
-            config={"url": "https://example.com", "selector": ".item"},
+            config={"url": "https://example.com", "method": "GET"},
             is_active=False,
         )
 
@@ -713,8 +713,8 @@ class TestUpdateSource:
 
         src = _make_source(
             tenant_id="tenant-1",
-            source_type="web_scrape",
-            config={"url": "https://example.com", "selector": ".item"},
+            source_type="api",
+            config={"url": "https://example.com", "method": "GET"},
             is_active=False,
         )
         mock_result.scalar_one_or_none.return_value = src
@@ -724,13 +724,13 @@ class TestUpdateSource:
         data = SourceUpdate(is_active=True)
 
         service = SourceService(db, redis)
-        with pytest.raises(NoCollectorAvailable, match="web_scrape"):
+        with pytest.raises(NoCollectorAvailable, match="api"):
             await service.update_source(str(src.id), data, "tenant-1")
         mock_publish.assert_not_called()
 
     @patch("app.services.source.redis_publish", new_callable=AsyncMock)
     async def test_enable_checks_effective_type_after_same_request_change(self, mock_publish):
-        """is_active=True combined with source_type=web_scrape in the same request must
+        """is_active=True combined with source_type=api in the same request must
         be validated against the effective (new) type, not the current one."""
         db, mock_result = _mock_db()
         redis = _mock_redis()
@@ -742,12 +742,12 @@ class TestUpdateSource:
 
         data = SourceUpdate(
             is_active=True,
-            source_type="web_scrape",
-            config={"url": "https://example.com", "selector": ".item"},
+            source_type="api",
+            config={"url": "https://example.com", "method": "GET"},
         )
 
         service = SourceService(db, redis)
-        with pytest.raises(NoCollectorAvailable, match="web_scrape"):
+        with pytest.raises(NoCollectorAvailable, match="api"):
             await service.update_source(str(src.id), data, "tenant-1")
         mock_publish.assert_not_called()
 
@@ -809,8 +809,8 @@ class TestUpdateSource:
 
         data = SourceUpdate(
             is_active=False,
-            source_type="web_scrape",
-            config={"url": "https://example.com", "selector": ".item"},
+            source_type="api",
+            config={"url": "https://example.com", "method": "GET"},
         )
 
         service = SourceService(db, redis)

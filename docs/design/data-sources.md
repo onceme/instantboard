@@ -42,31 +42,31 @@ cross_refs: [architecture.md, api.md, database.md, data-flow.md, finance-tab.md,
 | 3 | 东方财富 | 公开数据接口 | push2.eastmoney.com | 15s + failover按需 | JSON | 免费 | 财经 | ✅ 活跃种子 + 指数failover第一顺位 |
 | 4 | Finnhub | REST API | finnhub.io | 按需 (failover链内) | JSON | 免费(限量)/付费 | 财经 | ✅ 采集器已实现; 无定时种子源 |
 | 5 | IEX Cloud | REST API | iexcloud.io | - | JSON | 免费(限量)/付费 | 财经 | ✅ 采集器已实现; 种子为未激活可选模板 |
-| 6 | 天天基金 | Web抓取 | fund.eastmoney.com | 每日 | HTML→JSON | 免费 | 财经 | ⚠️ 未激活种子 (无web_scrape采集器) |
+| 6 | 天天基金 | Web抓取 | fund.eastmoney.com | 每日 | HTML→JSON | 免费 | 财经 | ⚠️ 未激活模板 (web_scrape采集器已实现; 基金NAV消费链路为后续特性) |
 | 7 | MIT Tech Review | RSS | technologyreview.com/feed | 5min | RSS XML | 免费 | 科技-AI | ✅ 活跃 |
 | 8 | HackerNews | RSS | hnrss.org | 2min | RSS/JSON | 免费 | 科技-全领域 | ✅ 活跃 |
 | 9 | Arxiv CS.AI | RSS/API | arxiv.org/rss/cs.AI | 30min | RSS XML | 免费 | 科技-AI | ✅ 活跃 |
-| 10 | OpenAI Blog | Web抓取 | openai.com/blog | 30min | HTML→JSON | 免费 | 科技-AI | ⚠️ 未激活种子 (无web_scrape采集器) |
+| 10 | OpenAI Blog | Web抓取 | openai.com/blog | 30min | HTML→JSON | 免费 | 科技-AI | ✅ 活跃 (web_scrape通用采集器) |
 | 11 | The Robot Report (经Google News) | RSS | news.google.com/rss/search?q=robotics+... | 5min | RSS XML | 免费 | 科技-机器人 | ✅ 活跃 |
 | 12 | IEEE Robotics | RSS | ieee.org/publications | 每日 | RSS XML | 免费 | 科技-机器人 | ✅ 活跃 |
 | 13 | Hackaday | RSS | hackaday.com/blog/feed | 5min | RSS XML | 免费 | 科技-嵌入式 | ✅ 活跃 |
 | 14 | Embedded.com | RSS | embedded.com/feed | 5min | RSS XML | 免费 | 科技-嵌入式 | ✅ 活跃 |
-| 15 | RISC-V International | Web抓取 | riscv.org/blog | 30min | HTML→JSON | 免费 | 科技-嵌入式 | ⚠️ 未激活种子 (无web_scrape采集器) |
+| 15 | RISC-V International | Web抓取 | riscv.org/blog | 30min | HTML→JSON | 免费 | 科技-嵌入式 | ✅ 活跃 (web_scrape通用采集器) |
 | 16 | SpaceNews | RSS | spacenews.com/feed | 5min | RSS XML | 免费 | 科技-太空 | ✅ 活跃 |
 | 17 | NASA News | RSS | nasa.gov/rss | 30min | RSS XML | 免费 | 科技-太空 | ✅ 活跃 |
-| 18 | SpaceX Updates | Web抓取 | spacex.com/updates | 30min | HTML→JSON | 免费 | 科技-太空 | ⚠️ 未激活种子 (无web_scrape采集器) |
+| 18 | SpaceX Updates | Web抓取 | spacex.com/updates | 30min | HTML→JSON | 免费 | 科技-太空 | ✅ 活跃 (web_scrape通用采集器) |
 | 19 | Ars Technica Space | RSS | arstechnica.com/science/feed | 5min | RSS XML | 免费 | 科技-太空 | ✅ 活跃 |
 | 20 | Reddit | API (公开JSON, httpx直连) | reddit.com/r/{sub} | 10min | JSON | 免费(限流) | 科技-全领域 | ✅ 采集器已实现 (公开JSON, 无需凭据); 种子未激活 |
 | 21 | Google News Tech | RSS | news.google.com/rss/search?q=technology | 5min | RSS XML | 免费 | 科技-通用 | ✅ 活跃 |
 | 22 | ESA News | RSS | esa.int/RSS | 30min | RSS XML | 免费 | 科技-太空 | ✅ 活跃 |
 
 > ⚠️ **种子与采集器现状**（以 `app/db/init_db.py` 与 `app/collectors/__init__.py` 为准）：
-> - 已注册采集器共 9 个：`yfinance` / `alpha_vantage` / `eastmoney` / `finnhub` / `iex_cloud` / `rss` / `hackernews` / `arxiv` / `reddit`（`COLLECTOR_REGISTRY`）。
-> - **无 `web_scrape` 采集器**：此类种子源（#6/#10/#15/#18，另含机器人领域 Automotive News）一律 `is_active=False`，仅作为未来开发模板保留；`beautifulsoup4`/`lxml` 依赖已声明但无任何 HTML 抓取代码。
-> - **Reddit（social）采集器已实现**：`RedditCollector`（`app/collectors/tech/reddit_collector.py`，注册名 `reddit`，公开 JSON 接口、无需凭据），经 `source_type=social` + `config.library=reddit` 回退解析（见 §3.5.1）；#20 种子仍 `is_active=False`（种子激活与 `subreddits` 配置为后续特性）。**Twitter/X** 完全缺失。
+> - 已注册采集器共 10 个：`yfinance` / `alpha_vantage` / `eastmoney` / `finnhub` / `iex_cloud` / `rss` / `hackernews` / `arxiv` / `reddit` / `web_scrape`（`COLLECTOR_REGISTRY`）。
+> - **`web_scrape` 通用采集器已实现**：`WebScrapeCollector`（`app/collectors/tech/web_scrape_collector.py`，注册名 `web_scrape`，source_type 直接命中）。httpx 拉取（自定义 `User-Agent`—源级 `config.user_agent`，默认 `instantboard-collector/1.0`、10s 超时、跟随重定向），`BeautifulSoup(html, "lxml")` 解析（lxml 失败回退 `html.parser`）。解析规则全部来自 `config.parse_rules`（CSS 选择器驱动）：`item_selector`（条目容器，缺省时以 `title_selector` 命中元素自身为条目）、`title_selector`（缺省回退条目内首个 h1-h4）、`link_selector`（取 href，缺省回退容器自身 href 或首个 `<a href>`；相对链接用 `urljoin(source.url)` 补全；`javascript:`/`mailto:`/`tel:`/`#` 链接丢弃）、`summary_selector`（可选，截断 300 字符）、`date_selector`（可选，优先 `<time datetime>` 属性，dateutil 解析失败用当前时间兜底）、`limit`（默认 20，上限 100）。缺 title 或 url 的条目跳过；429/403 → 记日志并返回空结果（本轮视为空成功），其他异常走 `BaseCollector` 重试/失败路径。种子 #10/#15/#18 及机器人领域 Automotive News 已 `is_active=True`；**#6 天天基金保持未激活模板**——采集器已可用，但基金 NAV 消费链路（`get_fund_nav` 展示管道）属后续特性。
+> - **Reddit（social）采集器已实现**：`RedditCollector`（`app/collectors/tech/reddit_collector.py`，注册名 `reddit`，公开 JSON 接口、无需凭据），经 `source_type=social` + `config.library=reddit` 解析（见 §3.5.1）；#20 种子仍 `is_active=False`（种子激活与 `subreddits` 配置为后续特性）。**Twitter/X** 完全缺失。
 > - **IEX Cloud** 采集器已实现（可选启用），种子为未激活模板。
 > - Finnhub 无定时采集种子源（种子财经源共 7 条，不含 Finnhub），仅在财经 failover 链内按需调用（见 §3.5）。
-> - source_type 为 api/web_scrape/social 的源通过 `config.library` 回退解析采集器（见 §3.5.1）；解析失败时 `collector_available=false`，且激活会被拒绝。
+> - source_type 为 api/social 的源（以及显式指名采集器的源，如东方财富 `web_scrape`+`library=eastmoney`）通过 `config.library` 解析采集器，且 `config.library` 优先于 source_type（见 §3.5.1）；解析失败时 `collector_available=false`，且激活会被拒绝。
 
 ### 3.2 财经数据源详细列表
 
@@ -133,7 +133,7 @@ cross_refs: [architecture.md, api.md, database.md, data-flow.md, finance-tab.md,
 
 > **实际地位**（由原"补充"提级）：
 > 1. `market_indices` failover 链第一顺位：`_get_failover_chain` 返回 eastmoney→yfinance（`services/finance.py:719-727`）；
-> 2. 独立活跃种子源："东方财富-A股实时"，`config={"library":"eastmoney","data_type":"cn_indices"}`，刷新 15s（`init_db.py:38-48`）；其 source_type 为 `web_scrape`，靠 `config.library` 回退解析到 `EastMoneyCollector`（见 §3.5.1）。
+> 2. 独立活跃种子源："东方财富-A股实时"，`config={"library":"eastmoney","data_type":"cn_indices"}`，刷新 15s（`init_db.py:38-50`）；其 source_type 为 `web_scrape`，靠显式 `config.library` 解析到 `EastMoneyCollector`——`config.library` 优先于 source_type，否则会被通用 `WebScrapeCollector` 抢占（见 §3.5.1）。
 
 #### 3.2.4 Finnhub
 
@@ -196,7 +196,7 @@ cross_refs: [architecture.md, api.md, database.md, data-flow.md, finance-tab.md,
 | **缺点** | 仅中国基金、非官方接口 |
 | **优先级** | **中国基金NAV必备** |
 
-> ⚠️ **未实现**：目前仅保留为未激活种子模板（"天天基金-官方NAV"，`is_active=False`，`init_db.py:103-111`）。系统**无任何 web_scrape 采集器**，官方 NAV 抓取整体缺失；`get_fund_nav` 只读取库中已有的 NAV 估算数据，不做在线采集（见 §3.5.1）。
+> ⚠️ **未激活模板**：种子"天天基金-官方NAV"（`is_active=False`，`init_db.py:116-127`）。通用 `web_scrape` 采集器（`WebScrapeCollector`）已实现、该源也可被解析，但官方 NAV 抓取与消费链路（`get_fund_nav` 只读取库中已有的 NAV 估算数据，不做在线采集）属后续特性，故保持模板状态（见 §3.5.1）。
 
 #### 3.2.6 IEX Cloud (可选)
 
@@ -235,9 +235,9 @@ cross_refs: [architecture.md, api.md, database.md, data-flow.md, finance-tab.md,
 | 2 | **The Robot Report** | RSS | `https://www.robotreport.com/feed` | 5min | 免费 | `{parse_rules: {summary: "excerpt"}}` |
 | 3 | **IEEE Robotics** | RSS | `https://www.ieee.org/publications/rss_feed.xml` | 每日 | 免费 | `{parse_rules: {summary: "abstract"}}` |
 | 4 | **ROS Blog** | RSS | `https://ros.org/blog/rss.xml` | 每周 | 免费 | `{parse_rules: {}}` |
-| 5 | **Automotive News** | Web | `https://www.autonews.com` | 每日 | 免费(有限) | `{parse_rules: {title: "h2.article-title", summary: "p.excerpt"}}` |
+| 5 | **Automotive News** | Web | `https://www.autonews.com` | 每日 | 免费(有限) | `{parse_rules: {item_selector: "article", title_selector: "h2,h3", link_selector: "a[href]", summary_selector: "p.excerpt,p"}}` |
 
-> ⚠️ Automotive News 为 `web_scrape` 源，种子 `is_active=False`（系统无 web_scrape 采集器）。
+> ✅ Automotive News 为 `web_scrape` 源，种子 `is_active=True`，经 `WebScrapeCollector` 采集（`config.parse_rules` CSS 选择器驱动，见 §3.1 注）。
 
 #### 3.3.2 AI领域 (5个数据源)
 
@@ -246,10 +246,10 @@ cross_refs: [architecture.md, api.md, database.md, data-flow.md, finance-tab.md,
 | 1 | **MIT Tech Review** | RSS | `https://www.technologyreview.com/feed/` | 5min | 免费 | `{parse_rules: {summary: "excerpt"}}` |
 | 2 | **HackerNews (AI)** | RSS | `https://hnrss.org/new?q=AI+machine+learning` | 2min | 免费 | `{parse_rules: {summary: "comments_text", extra: {hn_votes: "score"}}}` |
 | 3 | **Arxiv CS.AI** | RSS | `https://arxiv.org/rss/cs.AI` | 30min | 免费 | `{parse_rules: {summary: "abstract", extra: {arxiv_id: "id"}}}` |
-| 4 | **OpenAI Blog** | Web | `https://openai.com/blog` | 30min | 免费 | `{parse_rules: {title: "h2", summary: "p.excerpt"}}` |
+| 4 | **OpenAI Blog** | Web | `https://openai.com/blog` | 30min | 免费 | `{parse_rules: {item_selector: "article,ul li", title_selector: "h2,h3,h4", link_selector: "a[href]", summary_selector: "p"}}` |
 | 5 | **The Batch (deeplearning.ai)** | RSS/Web | `https://deeplearning.ai/the-batch/` | 每周 | 免费 | `{parse_rules: {}}` |
 
-> ⚠️ OpenAI Blog 为 `web_scrape` 源，种子 `is_active=False`（系统无 web_scrape 采集器）。
+> ✅ OpenAI Blog 为 `web_scrape` 源，种子 `is_active=True`，经 `WebScrapeCollector` 采集（`config.parse_rules` CSS 选择器驱动，见 §3.1 注）。
 
 #### 3.3.3 大规模嵌入式领域 (5个数据源)
 
@@ -257,11 +257,11 @@ cross_refs: [architecture.md, api.md, database.md, data-flow.md, finance-tab.md,
 |---|------|------|-----|------|------|-----------|
 | 1 | **Hackaday** | RSS | `https://hackaday.com/blog/feed/` | 5min | 免费 | `{parse_rules: {summary: "excerpt"}}` |
 | 2 | **Embedded.com** | RSS | `https://www.embedded.com/rss/` | 5min | 免费 | `{parse_rules: {}}` |
-| 3 | **RISC-V International** | RSS/Web | `https://riscv.org/blog/` | 30min | 免费 | `{parse_rules: {title: "h2.post-title", summary: "p"}}` |
+| 3 | **RISC-V International** | RSS/Web | `https://riscv.org/blog/` | 30min | 免费 | `{parse_rules: {item_selector: "article,.post,.entry", title_selector: "h2.entry-title,h2", link_selector: "h2 a,a[href]", date_selector: "time,.posted-on"}}` |
 | 4 | **EE Times** | RSS/Web | `https://www.eetimes.com/rss/` | 每日 | 免费(有限) | `{parse_rules: {}}` |
 | 5 | **Zephyr Project Blog** | RSS | `https://zephyrproject.org/blog/rss` | 每月 | 免费 | `{parse_rules: {}}` |
 
-> ⚠️ RISC-V International 种子类型为 `web_scrape` 且 `is_active=False`（系统无 web_scrape 采集器）；启用需改用 RSS 替代或实现抓取采集器。
+> ✅ RISC-V International 种子类型为 `web_scrape` 且 `is_active=True`，经 `WebScrapeCollector` 采集（见 §3.1 注）。
 
 #### 3.3.4 太空科技领域 (5个数据源)
 
@@ -269,11 +269,11 @@ cross_refs: [architecture.md, api.md, database.md, data-flow.md, finance-tab.md,
 |---|------|------|-----|------|------|-----------|
 | 1 | **SpaceNews** | RSS | `https://spacenews.com/feed/` | 5min | 免费 | `{parse_rules: {summary: "excerpt"}}` |
 | 2 | **NASA News** | RSS | `https://www.nasa.gov/rss/dyn/breaking_news.rss` | 30min | 免费 | `{parse_rules: {summary: "description"}}` |
-| 3 | **SpaceX Updates** | Web | `https://www.spacex.com/updates/` | 30min | 免费 | `{parse_rules: {title: "h3.update-title", summary: "p"}}` |
+| 3 | **SpaceX Updates** | Web | `https://www.spacex.com/updates/` | 30min | 免费 | `{parse_rules: {item_selector: "article,section[class*=update]", title_selector: "h2,h3,[class*=title]", link_selector: "a[href]", date_selector: "time,[class*=date]"}}` |
 | 4 | **ESA News** | RSS | `https://www.esa.int/RSS` | 30min | 免费 | `{parse_rules: {}}` |
 | 5 | **Ars Technica Space** | RSS | `https://arstechnica.com/science/feed/` | 5min | 免费 | `{parse_rules: {summary: "excerpt"}}` |
 
-> ⚠️ SpaceX Updates 为 `web_scrape` 源，种子 `is_active=False`（系统无 web_scrape 采集器）。
+> ✅ SpaceX Updates 为 `web_scrape` 源，种子 `is_active=True`，经 `WebScrapeCollector` 采集（见 §3.1 注）；该页为 JS 渲染时间线，服务端 HTML 无内容时本轮返回空结果（不视为故障）。
 
 #### 3.3.5 跨领域通用数据源
 
@@ -394,23 +394,24 @@ commodities:
 
 **采集器解析机制**（`app/collectors/__init__.py::resolve_collector`）：
 
-1. 先按 `source_type` 查 `COLLECTOR_REGISTRY`（rss / hackernews / arxiv）；
-2. source_type 无对应采集器时（api / web_scrape / social），按 `config.library` 回退解析：yfinance / alpha_vantage / eastmoney / finnhub / iex_cloud / rss / hackernews / arxiv / reddit（如 `source_type=social` + `library=reddit` → `RedditCollector`）；
-3. 仍无法解析返回 `None` → 该源尚不可采集：响应字段 `collector_available` 向前端暴露此状态；创建/更新激活前经 `_check_collector_available` 前置校验（`services/source.py:118-131`）抛出 `NoCollectorAvailable`（`exceptions.py:31-41`），防止源处于"永久激活却从不采集"的状态。
+1. 先看 `config.library`：显式指名已注册采集器时**优先于 source_type**（如 `source_type=social` + `library=reddit` → `RedditCollector`；`source_type=web_scrape` + `library=eastmoney` → `EastMoneyCollector`，避免被通用 `WebScrapeCollector` 抢占）；
+2. 否则按 `source_type` 查 `COLLECTOR_REGISTRY`：rss / hackernews / arxiv / web_scrape（`web_scrape` → 通用 `WebScrapeCollector`，`config.parse_rules` CSS 选择器驱动，见 §3.1 注）；
+3. `config.library` 未指名（或名字未注册）且 source_type 无对应采集器时（api / social）返回 `None` → 该源尚不可采集：响应字段 `collector_available` 向前端暴露此状态；创建/更新激活前经 `_check_collector_available` 前置校验（`services/source.py:122-137`）抛出 `NoCollectorAvailable`（`exceptions.py:31-41`），防止源处于"永久激活却从不采集"的状态。
 
 #### 3.5.2 自动Failover流程
 
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
 graph TD
     start["尝试 yfinance 采集"]
-    yf_ok["✅ 成功 → 返回数据, 更新source_health"]
-    yf_fail["❌ 失败 → 记录错误"]
+    yf_ok["成功 → 返回数据, 更新source_health"]
+    yf_fail["失败 → 记录错误"]
     av_start["尝试 Alpha Vantage"]
-    av_ok["✅ 成功 → 返回数据, 记录yfinance失败"]
-    av_fail["❌ 失败 → 记录错误"]
+    av_ok["成功 → 返回数据, 记录yfinance失败"]
+    av_fail["失败 → 记录错误"]
     fh_start["尝试 Finnhub"]
-    fh_ok["✅ 成功 → 返回数据"]
-    fh_fail["❌ 所有源失败 → 标记down, 下次周期再试"]
+    fh_ok["成功 → 返回数据"]
+    fh_fail["所有源失败 → 标记down, 下次周期再试"]
     start --> yf_ok
     start -->|"失败"| yf_fail
     yf_fail --> av_start
@@ -436,8 +437,9 @@ graph TD
 #### 3.6.1 存储方式
 
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
 graph TD
-    env["1. 环境变量 (.env) — 开发环境<br/>ALPHA_VANTAGE_API_KEY=xxx<br/>FINNHUB_API_KEY=xxx<br/>FINNHUB_API_KEYS=k1,k2 (逗号分隔多Key)<br/>YAHOO_FINANCE_API_KEY=xxx (死配置⚠️)"]
+    env["1. 环境变量 (.env) — 开发环境<br/>ALPHA_VANTAGE_API_KEY / FINNHUB_API_KEY / YAHOO_FINANCE_API_KEY<br/>FINNHUB_API_KEYS=k1,k2 (逗号分隔多Key); YAHOO 项为死配置"]
     secrets["2. Docker secrets / .env.production — 生产环境<br/>通过GitHub Secrets注入 → 服务器.env.production"]
     no_code["3. 不入代码 — .gitignore包含.env*"]
     no_db["4. 不入数据库 — Key不在PG/MongoDB中存储"]

@@ -123,14 +123,14 @@ class SourceService:
     def _check_collector_available(source_type: str, config: dict) -> None:
         # Pre-flight check before activating a source: without a resolvable collector
         # the source would sit in is_active=True forever without collecting anything
-        # (e.g. a bare web_scrape/social source with no config.library fallback).
+        # (e.g. an api/social source with no config.library override).
         if resolve_collector(source_type, config) is None:
             raise NoCollectorAvailable(
                 message=(
                     f"No collector available for source_type '{source_type}'. "
                     "Set config.library to a supported collector "
-                    "(yfinance, alpha_vantage, eastmoney, finnhub, rss, hackernews, arxiv) "
-                    "or keep the source inactive."
+                    "(yfinance, alpha_vantage, eastmoney, finnhub, iex_cloud, rss, "
+                    "hackernews, arxiv, reddit) or keep the source inactive."
                 )
             )
 

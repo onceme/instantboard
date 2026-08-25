@@ -88,7 +88,7 @@ class TestCategorySourceManagement:
         assert resp.status_code == 201
         category_id = resp.json()["data"]["id"]
 
-        # web_scrape has no collector of its own and config.library names none ->
+        # api has no collector of its own and config.library names none ->
         # the pre-flight check must reject the active source up front.
         resp = await aclient.post(
             "/api/v1/sources",
@@ -96,9 +96,9 @@ class TestCategorySourceManagement:
             json={
                 "name": "E2E Unreachable Source",
                 "category_id": category_id,
-                "source_type": "web_scrape",
+                "source_type": "api",
                 "url": "https://e2e.example/page",
-                "config": {"url": "https://e2e.example/page", "selector": ".news"},
+                "config": {"url": "https://e2e.example/page", "method": "GET"},
             },
         )
         assert resp.status_code == 400

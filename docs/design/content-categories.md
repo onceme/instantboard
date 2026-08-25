@@ -38,19 +38,20 @@ cross_refs: [architecture.md, api.md, database.md, data-flow.md, finance-tab.md,
 #### 3.1.1 层级定义
 
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
 graph TD
-    subgraph level1["一级分类 Category — 顶层功能区，对应侧边导航项和SSE频道"]
-        finance["财经<br/>slug: finance<br/>图标/颜色: chart-line (lucide)/#FF6B6B<br/>刷新频率: 30s<br/>SSE频道: channel:finance"]
-        tech["科技<br/>slug: tech<br/>图标/颜色: cpu (lucide)/#3B82F6<br/>刷新频率: 5min<br/>SSE频道: channel:tech"]
+    subgraph level1["一级分类 — 顶层功能区"]
+        finance["财经<br/>slug: finance<br/>刷新频率: 30s"]
+        tech["科技<br/>slug: tech<br/>刷新频率: 5min"]
     end
-    subgraph level2["二级子分类 SubCategory — 分类内的功能区域，对应前端面板"]
-        cn_stock["A股行情<br/>slug: china-stock<br/>刷新: 继承一级或自定义<br/>数据源列表: Source[]"]
-        ai["AI资讯<br/>slug: ai<br/>刷新: 继承一级或自定义<br/>数据源列表: Source[]"]
+    subgraph level2["二级子分类 — 前端面板"]
+        cn_stock["A股行情<br/>slug: china-stock"]
+        ai["AI资讯<br/>slug: ai"]
     end
-    subgraph level3["三级话题标签 TopicTag — 动态标签，用于过滤和排序"]
+    subgraph level3["三级话题标签 — 动态过滤"]
         gpt4["GPT-4 — 从新闻内容自动提取"]
         starlink["Starlink — 从新闻内容自动提取"]
-        custom["用户可手动添加<br/>(⚠️API/UI未实现)"]
+        custom["手动标注 (API/UI未实现)"]
     end
     finance --> cn_stock
     tech --> ai
@@ -59,20 +60,32 @@ graph TD
     ai --> custom
 ```
 
+一级分类 (Category) 对应侧边导航项和 SSE 频道，图标/颜色/频道等属性见 §3.5.6 预定义一级分类总览表；二级子分类 (SubCategory) 对应前端面板，刷新频率继承一级或自定义，各挂数据源列表 Source[]；三级话题标签 (TopicTag) 用于过滤和排序，从新闻内容自动提取，手动标注未实现。
+
 > ⚠️ **未实现**：三级标签用户手动标注——无打标/取消打标 API，亦无 UI。
 
 #### 3.1.2 数据模型映射
 
 ```mermaid
-graph LR
-    cat["一级分类<br/>→ categories 表<br/>id, name, slug, icon, color,<br/>type, refresh_interval_seconds,<br/>keywords_filter, priority_sort, is_active"]
-    subcat["二级子分类<br/>→ 虚拟子分类,<br/>通过 items.topic_tags 实现<br/>不独立建表<br/>二级标签作为 topic_tags 数组中<br/>的固定前缀标签存在<br/>如: topic_tags: [finance, china-stock, GPT-4]<br/>前端按二级标签分组展示<br/>查询时 GIN索引过滤"]
-    tag["三级标签<br/>→ items.topic_tags<br/>JSONB数组 + GIN索引<br/>动态生成, 无上限<br/>从内容自动提取或手动标注"]
-    src["数据源<br/>→ sources 表<br/>绑定到一级分类<br/>source.category_id → 一级分类的 categories.id<br/>数据源不直接绑定二级子分类<br/>采集后自动打标签归入子分类"]
-    cat --> subcat
-    subcat --> tag
-    cat --> src
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
+graph TD
+    cat["一级分类<br/>categories 表"]
+    subcat["二级子分类 (虚拟)<br/>items.topic_tags 前缀标签"]
+    tag["三级标签<br/>items.topic_tags (JSONB + GIN)"]
+    src["数据源<br/>sources 表"]
+    cat -->|"虚拟分组"| subcat
+    subcat -->|"同数组延伸"| tag
+    cat -->|"category_id"| src
 ```
+
+字段清单（对应 categories / sources / items 三表）：
+
+| 图中节点 | 存储位置 | 字段清单 / 实现方式 |
+|---------|---------|------------------|
+| 一级分类 | categories 表 | id, name, slug, icon, color, type, refresh_interval_seconds, keywords_filter, priority_sort, is_active |
+| 二级子分类 | 不独立建表（虚拟子分类） | 通过 items.topic_tags 实现：二级标签作为数组中的固定前缀标签存在，如 topic_tags: [finance, china-stock, GPT-4]；前端按二级标签分组展示，查询时 GIN 索引过滤 |
+| 三级标签 | items.topic_tags | JSONB 数组 + GIN 索引；动态生成，无上限；从内容自动提取或手动标注 |
+| 数据源 | sources 表 | 绑定到一级分类：source.category_id → categories.id；数据源不直接绑定二级子分类，采集后自动打标签归入子分类 |
 
 ### 3.2 分类与数据源映射关系表格
 
@@ -93,7 +106,7 @@ graph LR
 | 财经 | finance | 自选行情 | watchlist | Finnhub(failover) | api | 30s |
 | 财经 | finance | 财经新闻 | finance-news | Google News Finance RSS | rss | 5min |
 
-> ⚠️ **种子现状提示**（另见 data-sources.md §3.1）：当前财经种子源共 6 条——东方财富-A股实时（15s，活跃，兼市场指数 failover 链第一顺位）、yfinance×3（沪深300/世界指数/大宗商品，活跃）、Alpha Vantage failover 模板与天天基金 NAV 模板均 `is_active=False`；Finnhub 无定时种子源（仅作 failover 按需调用）；Google News Finance RSS 未播种。
+> ⚠️ **种子现状提示**（另见 data-sources.md §3.1）：当前财经种子源共 7 条——东方财富-A股实时（15s，活跃，兼市场指数 failover 链第一顺位）、yfinance×3（沪深300/世界指数/大宗商品，活跃）、Alpha Vantage failover 模板、IEX Cloud 可选模板与天天基金 NAV 模板均 `is_active=False`（天天基金：通用 web_scrape 采集器已实现，但基金 NAV 消费链路属后续特性）；Finnhub 无定时种子源（仅作 failover 按需调用）；Google News Finance RSS 未播种。
 
 #### 3.2.2 科技分类映射 — 机器人领域
 
@@ -112,7 +125,7 @@ graph LR
 | 科技 | tech | 机器人-机器人OS/软件 | robot-software | HackerNews(robotics tag) | rss | 2min |
 | 科技 | tech | 机器人-机器人OS/软件 | robot-software | ROS Blog | rss | 每周 |
 
-> ⚠️ Automotive News（web_scrape）种子 `is_active=False`：系统无 web_scrape 采集器。
+> ✅ Automotive News（web_scrape）种子 `is_active=True`：由通用 `WebScrapeCollector` 采集（`config.parse_rules` CSS 选择器驱动，见 data-sources.md §3.1 注）。
 
 #### 3.2.3 科技分类映射 — AI领域
 
@@ -132,7 +145,7 @@ graph LR
 | 科技 | tech | AI-AI Agent/应用 | ai-agent | HackerNews(AI/ML tag) | rss | 2min |
 | 科技 | tech | AI-AI Agent/应用 | ai-agent | The Batch (Andrew Ng) | rss | 每周 |
 
-> ⚠️ OpenAI Blog（web_scrape）种子 `is_active=False`：系统无 web_scrape 采集器。
+> ✅ OpenAI Blog（web_scrape）种子 `is_active=True`：由通用 `WebScrapeCollector` 采集（见 data-sources.md §3.1 注）。
 
 #### 3.2.4 科技分类映射 — 大规模嵌入式领域
 
@@ -141,7 +154,7 @@ graph LR
 | 科技 | tech | 嵌入式-IoT与边缘计算 | iot-edge | Hackaday | rss | 5min |
 | 科技 | tech | 嵌入式-IoT与边缘计算 | iot-edge | Embedded.com | rss | 5min |
 | 科技 | tech | 嵌入式-RISC-V与处理器 | risc-v | Hackaday | rss | 5min |
-| 科技 | tech | 嵌入式-RISC-V与处理器 | risc-v | RISC-V International Blog | rss | 30min |
+| 科技 | tech | 嵌入式-RISC-V与处理器 | risc-v | RISC-V International Blog | web_scrape | 30min |
 | 科技 | tech | 嵌入式-实时操作系统 | rtos | Embedded.com | rss | 5min |
 | 科技 | tech | 嵌入式-实时操作系统 | rtos | Zephyr Project Blog | rss | 每月 |
 | 科技 | tech | 嵌入式-FPGA与硬件加速 | fpga | Hackaday | rss | 5min |
@@ -168,7 +181,7 @@ graph LR
 | 科技 | tech | 太空-太空制造与资源 | space-manufacturing | NASA News | rss | 30min |
 | 科技 | tech | 太空-太空制造与资源 | space-manufacturing | SpaceNews | rss | 5min |
 
-> ⚠️ SpaceX Updates（web_scrape）种子 `is_active=False`：系统无 web_scrape 采集器。
+> ✅ SpaceX Updates（web_scrape）种子 `is_active=True`：由通用 `WebScrapeCollector` 采集（见 data-sources.md §3.1 注）；页面为 JS 渲染时间线，服务端 HTML 无内容时返回空结果。
 
 #### 3.2.6 跨领域通用数据源映射
 
@@ -216,15 +229,25 @@ graph LR
 #### 3.3.1 添加新分类的完整流程
 
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
 graph TD
-    step1["Step 1: 前端操作 — CategoryEditor 弹窗 (SettingsView)<br/>实际现状: 仅输入 名称(必填) + 描述(可选),<br/>type 固定提交 custom<br/>→ POST /api/v1/categories<br/>(后端 CategoryCreate 另支持 slug/icon/color/<br/>refresh_interval_seconds/keywords_filter/is_active,<br/>前端目前无对应控件⚠️)"]
-    step2["Step 2: API 层 — categories.py<br/>POST /api/v1/categories<br/>→ Pydantic CategoryCreate 校验<br/>→ 注入 tenant_id (从 JWT)<br/>→ 检查租户分类数量上限 (tenants.max_categories)<br/>→ 检查 slug 唯一性 (UNIQUE tenant_id + slug)<br/>→ INSERT INTO categories<br/>→ 返回 CategoryResponse"]
-    step3["Step 3: 数据库 — categories 表<br/>INSERT categories:<br/>id = gen_random_uuid()<br/>tenant_id = {current_tenant}<br/>name = 体育, slug = sports<br/>icon = folder (默认), color = #3B82F6 (默认)<br/>type = custom<br/>refresh_interval_seconds = 300 (默认)<br/>is_active = true"]
-    step4["Step 4: 添加数据源 — 数据源管理面板<br/>POST /api/v1/sources:<br/>name / category_id / source_type / url /<br/>refresh_interval_seconds / config.library<br/>→ collector_available 校验 (resolve_collector)<br/>→ INSERT INTO sources + source_health<br/>→ 发布 source_created 事件 (channel:dashboard⚠️)"]
-    step5["Step 5: 采集器启动 — worker 事件消费 (现状说明)<br/>worker 仅消费 SOURCE_EVENT_NAMES =<br/>{source_enabled, source_disabled, source_deleted}<br/>source_created 被 worker 忽略⚠️<br/>→ 新源需 worker 重启或后续启用操作<br/>(source_enabled → add_job)才开始采集<br/>→ 启动后: Collector采集→Processor处理→Store存储→SSE推送"]
-    step6["Step 6: SSE 推送生效 — 后端通用, 前端待接线 (说明)<br/>后端 /api/v1/stream/{category} 频道通用,<br/>可 EventSource(/api/v1/stream/sports) 订阅<br/>⚠️ 前端侧边栏目前固定4项: 财经/科技/仪表盘/设置 (Sidebar.vue)<br/>→ 自定义分类不会自动生成导航条目与视图<br/>→ stream/{category} 目前仅被前端订阅 finance/tech/dashboard"]
+    step1["Step 1 前端操作<br/>仅提交名称+描述"]
+    step2["Step 2 API 层<br/>校验与注入租户后写库"]
+    step3["Step 3 数据库<br/>写入 categories 行 (默认值补齐)"]
+    step4["Step 4 添加数据源<br/>写入 sources / source_health"]
+    step5["Step 5 采集器启动<br/>worker 仅消费启用/删除事件"]
+    step6["Step 6 SSE 推送生效<br/>频道通用, 前端待接线"]
     step1 --> step2 --> step3 --> step4 --> step5 --> step6
 ```
+
+各步明细：
+
+1. **Step 1 前端操作 — CategoryEditor 弹窗 (SettingsView)**：实际现状是仅输入名称(必填) + 描述(可选)，type 固定提交 custom → POST /api/v1/categories；后端 CategoryCreate 另支持 slug/icon/color/refresh_interval_seconds/keywords_filter/is_active，前端目前无对应控件 ⚠️。
+2. **Step 2 API 层 — categories.py**：POST /api/v1/categories → Pydantic CategoryCreate 校验 → 注入 tenant_id (从 JWT) → 检查租户分类数量上限 (tenants.max_categories) → 检查 slug 唯一性 (UNIQUE tenant_id + slug) → INSERT INTO categories → 返回 CategoryResponse。
+3. **Step 3 数据库 — categories 表**：INSERT categories：id = gen_random_uuid()，tenant_id = {current_tenant}，示例 name = 体育、slug = sports，icon = folder (默认)，color = #3B82F6 (默认)，type = custom，refresh_interval_seconds = 300 (默认)，is_active = true。
+4. **Step 4 添加数据源 — 数据源管理面板**：POST /api/v1/sources：name / category_id / source_type / url / refresh_interval_seconds / config.library → collector_available 校验 (resolve_collector) → INSERT INTO sources + source_health → 发布 source_created 事件 (channel:dashboard⚠️)。
+5. **Step 5 采集器启动 — worker 事件消费 (现状说明)**：worker 仅消费 SOURCE_EVENT_NAMES = {source_enabled, source_disabled, source_deleted}；source_created 被 worker 忽略 ⚠️ → 新源需 worker 重启或后续启用操作 (source_enabled → add_job) 才开始采集；启动后：Collector采集 → Processor处理 → Store存储 → SSE推送。
+6. **Step 6 SSE 推送生效 — 后端通用, 前端待接线 (说明)**：后端 /api/v1/stream/{category} 频道通用，可 EventSource(/api/v1/stream/sports) 订阅 ⚠️；前端侧边栏目前固定 4 项：财经/科技/仪表盘/设置 (Sidebar.vue) → 自定义分类不会自动生成导航条目与视图；stream/{category} 目前仅被前端订阅 finance/tech/dashboard。
 
 > ⚠️ **三处未实现（潜在体验问题）**：
 > 1. **前端表单不完整**：`CategoryEditor.vue:63-78` 只提交 name+description（type 固定为 custom），后端支持的 slug/icon/color/刷新频率/关键词过滤均无 UI 控件；
@@ -298,19 +321,20 @@ graph TD
 #### 3.4.1 多租户分类架构
 
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
 graph TD
     subgraph system["预定义分类 — 系统级, 所有租户共享"]
         sys_finance["chart-line 财经 finance<br/>type=finance<br/>tenant_id=system"]
         sys_tech["cpu 科技 tech<br/>type=tech<br/>tenant_id=system"]
-        sys_feature["特性:<br/>tenant_id=system 系统内置 UUID固定<br/>任何更新/删除一律返回 Forbidden<br/>(刷新/关键词的租户级覆盖未实现)<br/>预配置数据源: 财经6个 + 科技22个<br/>(AI 5+机器人 5+嵌入式 5+太空 5+跨领域 2)<br/>预配置二级子分类: 财经6个 + 科技24个"]
+        sys_feature["tenant_id=system 系统内置, UUID固定<br/>任何更新/删除一律返回 Forbidden (刷新/关键词的租户级覆盖未实现)<br/>预配置数据源: 财经6个 + 科技22个 (AI 5+机器人 5+嵌入式 5+太空 5+跨领域 2)<br/>预配置二级子分类: 财经6个 + 科技24个"]
     end
     subgraph tenant_a["租户自定义分类 — Tenant A (company-a)"]
-        ta_sports["🏃体育 sports<br/>type=custom<br/>tenant_id=tenant_a"]
-        ta_gaming["🎮游戏 gaming<br/>type=custom<br/>tenant_id=tenant_a"]
+        ta_sports["体育 sports<br/>type=custom<br/>tenant_id=tenant_a"]
+        ta_gaming["游戏 gaming<br/>type=custom<br/>tenant_id=tenant_a"]
     end
     subgraph tenant_b["租户自定义分类 — Tenant B (company-b)"]
-        tb_medical["🏥医疗 medical<br/>type=custom<br/>tenant_id=tenant_b"]
-        tb_edu["📚教育 education<br/>type=custom<br/>tenant_id=tenant_b"]
+        tb_medical["医疗 medical<br/>type=custom<br/>tenant_id=tenant_b"]
+        tb_edu["教育 education<br/>type=custom<br/>tenant_id=tenant_b"]
     end
     subgraph custom_feature["自定义分类特性"]
         cf["type=custom<br/>完全 CRUD: 创建/修改/删除<br/>数据源由租户admin自行添加<br/>二级子分类由租户自行定义 (topic_tags)<br/>受 tenants.max_categories 限制 (默认10个)<br/>受 tenants.max_sources 限制 (默认50个)"]
@@ -477,71 +501,33 @@ SQL查询逻辑:
 #### 3.6.1 三级标签层级定义
 
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
 graph TD
     subgraph level1_tags["一级标签 — 领域级, 固定, 6个"]
-        t_finance["finance — 财经领域"]
-        t_tech["tech — 科技领域"]
-        subgraph tech_level1["科技领域内部 (科技的一级同时也是二级)"]
-            t_robotics["robotics — 机器人"]
-            t_ai["ai — 人工智能"]
-            t_embedded["embedded — 大规模嵌入式"]
-            t_space["space — 太空科技"]
+        t_finance["finance 财经"] ~~~ t_tech["tech 科技"]
+        subgraph tech_level1["科技领域 (一级即二级)"]
+            direction LR
+            t_robotics["robotics 机器人"] ~~~ t_ai["ai 人工智能"] ~~~ t_embedded["embedded 嵌入式"] ~~~ t_space["space 太空"]
         end
     end
     subgraph level2_tags["二级标签 — 子分类级, 固定, 30个"]
-        subgraph fin_l2["财经"]
-            l2_cs["china-stock"]
-            l2_wl["watchlist"]
-            l2_s["search"]
-            l2_mi["market-indices"]
-            l2_com["commodities"]
-            l2_fn["fund-nav"]
-        end
-        subgraph rob_l2["机器人"]
-            l2_h["humanoid"]
-            l2_ind["industrial"]
-            l2_cob["cobot"]
-            l2_ad["autonomous-driving"]
-            l2_dr["drone"]
-            l2_rs["robot-software"]
-        end
-        subgraph ai_l2["AI"]
-            l2_llm["llm"]
-            l2_gen["generative-ai"]
-            l2_ahw["ai-hardware"]
-            l2_eth["ai-ethics"]
-            l2_mm["multimodal"]
-            l2_agt["ai-agent"]
-        end
-        subgraph emb_l2["嵌入式"]
-            l2_iot["iot-edge"]
-            l2_rv["risc-v"]
-            l2_rt["rtos"]
-            l2_fpga["fpga"]
-            l2_cd["chip-design"]
-            l2_eai["embedded-ai"]
-        end
-        subgraph sp_l2["太空"]
-            l2_cs2["commercial-space"]
-            l2_sat["satellite-internet"]
-            l2_ds["deep-space"]
-            l2_orb["orbital"]
-            l2_rkt["rocket-tech"]
-            l2_smf["space-manufacturing"]
-        end
+        direction LR
+        l2_fin["finance ×6"] ~~~ l2_rob["robotics ×6"] ~~~ l2_ai["ai ×6"] ~~~ l2_emb["embedded ×6"] ~~~ l2_sp["space ×6"]
     end
     subgraph level3_tags["三级标签 — 话题级, 动态, 无上限"]
-        auto["从新闻内容自动提取<br/>gpt-4, llama-3, optimus,<br/>starlink, risc-v-v, groq, ..."]
-        manual["用户手动标注<br/>(⚠️未实现: 无API/UI)"]
+        direction LR
+        l3_auto["自动提取 (关键词匹配)<br/>gpt-4 / starlink / optimus ..."] ~~~ l3_manual["手动标注 (未实现)"]
     end
-    t_finance --> fin_l2
-    t_ai --> ai_l2
-    t_robotics --> rob_l2
-    t_embedded --> emb_l2
-    t_space --> sp_l2
-    ai_l2 --> auto
-    ai_l2 --> manual
+    t_finance --> l2_fin
+    t_robotics --> l2_rob
+    t_ai --> l2_ai
+    t_embedded --> l2_emb
+    t_space --> l2_sp
+    level2_tags --> l3_auto
+    level2_tags --> l3_manual
 ```
+
+二级标签完整清单（财经 6 + 科技四领域 ×6 = 30 个 slug）由 §3.5.1-3.5.5 各表承载，不再进图；robotics / ai / embedded / space 在科技域兼具一级标签与二级分组依据的双重身份；三级标签目前均来自采集时的关键词匹配（§3.6.3），手动标注未实现。
 
 > ⚠️ **未实现**：三级标签用户手动标注——无打标/取消打标 API；NewsCard 无标签编辑 UI；三级标签目前仅来自采集时的关键词匹配。
 
@@ -686,74 +672,44 @@ class TechTopicExtractor:
 #### 3.6.4 标签与前端组件映射
 
 ```mermaid
-graph LR
-    subgraph topic_filter["TopicFilter 组件 — TechView 顶部"]
-        subgraph tf_l1["固定一级标签"]
-            tf_all["全部"]
-            tf_rob["🤖机器人"]
-            tf_ai["🧠AI"]
-            tf_emb["⚡嵌入式"]
-            tf_sp["🚀太空"]
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
+graph TD
+    subgraph tf_l1["一级标签 — 固定"]
+        direction LR
+        tf_all["全部"] ~~~ tf_rob["机器人"] ~~~ tf_ai["AI"] ~~~ tf_emb["嵌入式"] ~~~ tf_sp["太空"]
+    end
+    subgraph tf_l2["二级标签 — 按领域分组, 每域6个"]
+        subgraph ai_sub["AI"]
+            direction LR
+            ai_llm["LLM"] ~~~ ai_gen["生成式AI"] ~~~ ai_hw["AI芯片"] ~~~ ai_eth["AI伦理"] ~~~ ai_mm["多模态"] ~~~ ai_agt["AI Agent"]
         end
-        subgraph tf_l2["展开二级标签 (按领域分组)"]
-            subgraph ai_sub["AI"]
-                ai_llm["LLM"]
-                ai_gen["生成式AI"]
-                ai_hw["AI芯片"]
-                ai_eth["AI伦理"]
-                ai_mm["多模态"]
-                ai_agt["AI Agent"]
-            end
-            subgraph rob_sub["机器人"]
-                rob_hum["人形"]
-                rob_ind["工业"]
-                rob_cob["协作"]
-                rob_ad["自动驾驶"]
-                rob_dr["无人机"]
-                rob_ros["ROS"]
-            end
-            subgraph emb_sub["嵌入式"]
-                emb_iot["IoT"]
-                emb_rv["RISC-V"]
-                emb_rt["RTOS"]
-                emb_fpga["FPGA"]
-                emb_cd["芯片"]
-                emb_eai["嵌入式AI"]
-            end
-            subgraph sp_sub["太空"]
-                sp_cs["商业航天"]
-                sp_sat["卫星"]
-                sp_ds["深空"]
-                sp_orb["轨道"]
-                sp_rkt["火箭"]
-                sp_mf["太空制造"]
-            end
+        subgraph rob_sub["机器人"]
+            direction LR
+            rob_hum["人形"] ~~~ rob_ind["工业"] ~~~ rob_cob["协作"] ~~~ rob_ad["自动驾驶"] ~~~ rob_dr["无人机"] ~~~ rob_ros["ROS"]
         end
-        subgraph tf_l3["热门三级标签 (动态)"]
-            l3_gpt4["GPT-4"]
-            l3_llama["Llama-3"]
-            l3_opt["Optimus"]
-            l3_sl["Starlink"]
+        subgraph emb_sub["嵌入式"]
+            direction LR
+            emb_iot["IoT"] ~~~ emb_rv["RISC-V"] ~~~ emb_rt["RTOS"] ~~~ emb_fpga["FPGA"] ~~~ emb_cd["芯片"] ~~~ emb_eai["嵌入式AI"]
+        end
+        subgraph sp_sub["太空"]
+            direction LR
+            sp_cs["商业航天"] ~~~ sp_sat["卫星"] ~~~ sp_ds["深空"] ~~~ sp_orb["轨道"] ~~~ sp_rkt["火箭"] ~~~ sp_mf["太空制造"]
         end
     end
-    subgraph fin_nav["FinanceSubNav 组件 — FinanceView 顶部"]
-        fn_ov["Overview"]
-        fn_wl["Watchlist"]
-        fn_s["Search"]
-        fn_idx["Indices"]
-        fn_com["Commodities"]
+    subgraph tf_l3["三级标签 — 热门话题, 动态"]
+        direction LR
+        l3_gpt4["GPT-4"] ~~~ l3_llama["Llama-3"] ~~~ l3_opt["Optimus"] ~~~ l3_sl["Starlink"]
     end
-    subgraph news_card["NewsCard 组件 — 卡片上的标签"]
-        nc_color["领域色块标识<br/>(左边缘4px色条)"]
-        nc_tags["TopicTag ×2-3<br/>(如 AI, 大语言模型)"]
-        nc_mobile["移动端: TopicTag ×1<br/>(最多显示1个)"]
-    end
-    tf_l1 --> tf_l2
-    tf_l2 --> tf_l3
-    fin_nav -->|"财经二级标签对应子面板切换"| fin_nav
-    news_card --> nc_color
-    news_card --> nc_tags
+    tf_l1 -->|"展开二级"| tf_l2
+    tf_l2 -->|"三级再筛"| tf_l3
 ```
+
+**图 (a) TopicFilter 组件（TechView 顶部）**：一级为固定领域标签（含"全部"），选中一级后展开对应领域的二级标签组，三级动态展示热门话题标签（热度统计见 §3.6.5）。
+
+**图 (b) FinanceSubNav / NewsCard 要点**：
+
+- **FinanceSubNav 组件（FinanceView 顶部）**：Overview / Watchlist / Search / Indices / Commodities 共 5 个入口；财经二级标签对应子面板切换（不走 topic_tags 过滤）。
+- **NewsCard 组件（卡片上的标签）**：领域色块标识（左边缘 4px 色条）；TopicTag ×2-3（如 AI、大语言模型）；移动端最多显示 TopicTag ×1。
 
 #### 3.6.5 标签统计与热度
 

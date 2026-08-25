@@ -19,6 +19,37 @@ from tests.conftest import test_engine, test_session_factory
 _redis_mock_instance = None
 
 
+class MockPipeline:
+    def __init__(self, redis):
+        self._redis = redis
+        self._commands = []
+
+    def lpush(self, key, *values):
+        self._commands.append(("lpush", key, values))
+        return self
+
+    def ltrim(self, key, start, end):
+        self._commands.append(("ltrim", key, start, end))
+        return self
+
+    def expire(self, key, seconds):
+        self._commands.append(("expire", key, seconds))
+        return self
+
+    async def execute(self):
+        results = []
+        for command in self._commands:
+            name = command[0]
+            if name == "lpush":
+                results.append(await self._redis.lpush(command[1], *command[2]))
+            elif name == "ltrim":
+                results.append(await self._redis.ltrim(command[1], command[2], command[3]))
+            elif name == "expire":
+                results.append(await self._redis.expire(command[1], command[2]))
+        self._commands = []
+        return results
+
+
 class MockRedis:
     def __init__(self):
         self._data = {}
@@ -57,6 +88,23 @@ class MockRedis:
 
     async def hgetall(self, key):
         return self._data.get(key, {})
+
+    async def lpush(self, key, *values):
+        lst = self._data.setdefault(key, [])
+        lst[0:0] = list(values)
+        return len(lst)
+
+    async def ltrim(self, key, start, end):
+        lst = self._data.get(key, [])
+        self._data[key] = lst[start : end + 1] if end >= 0 else lst[start:]
+        return True
+
+    async def lrange(self, key, start, end):
+        lst = self._data.get(key, [])
+        return lst[start : end + 1] if end >= 0 else lst[start:]
+
+    def pipeline(self, transaction=True):
+        return MockPipeline(self)
 
     async def close(self):
         pass
@@ -123,6 +171,8 @@ def app_with_overrides():
     original_redis_hgetall = redis_mod.redis_hgetall
     original_redis_sadd = redis_mod.redis_sadd
     original_redis_sismember = redis_mod.redis_sismember
+    original_redis_push_history = redis_mod.redis_push_history
+    original_redis_lrange = redis_mod.redis_lrange
     original_get_redis_client = redis_mod.get_redis_client
 
     async def mock_redis_get(key):
@@ -153,6 +203,21 @@ def app_with_overrides():
     async def mock_redis_sismember(key, member):
         return False
 
+    async def mock_redis_push_history(key, value, max_len, ttl=None):
+        import json
+
+        if isinstance(value, (dict, list)):
+            value = json.dumps(value)
+        lst = mock_redis._data.setdefault(key, [])
+        lst.insert(0, value)
+        del lst[max_len:]
+
+    async def mock_redis_lrange(key, start=0, end=-1):
+        lst = mock_redis._data.get(key, [])
+        if end == -1:
+            end = len(lst) - 1
+        return lst[start : end + 1] if end >= start else []
+
     async def mock_get_redis_client():
         return mock_redis
 
@@ -164,6 +229,8 @@ def app_with_overrides():
     redis_mod.redis_hgetall = mock_redis_hgetall
     redis_mod.redis_sadd = mock_redis_sadd
     redis_mod.redis_sismember = mock_redis_sismember
+    redis_mod.redis_push_history = mock_redis_push_history
+    redis_mod.redis_lrange = mock_redis_lrange
     redis_mod.get_redis_client = mock_get_redis_client
 
     sec_original_get = getattr(security_mod, "redis_get", None)
@@ -183,6 +250,8 @@ def app_with_overrides():
     redis_mod.redis_hgetall = original_redis_hgetall
     redis_mod.redis_sadd = original_redis_sadd
     redis_mod.redis_sismember = original_redis_sismember
+    redis_mod.redis_push_history = original_redis_push_history
+    redis_mod.redis_lrange = original_redis_lrange
     redis_mod.get_redis_client = original_get_redis_client
 
     if sec_original_get is not None:

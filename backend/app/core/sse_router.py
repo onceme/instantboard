@@ -6,7 +6,12 @@ import time
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from app.core.redis import RedisKeys, redis_publish
+from app.core.redis import (
+    RedisKeys,
+    redis_lrange,
+    redis_publish,
+    redis_push_history,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -113,11 +118,69 @@ class SSEEventRouter:
         }
         channel_key = RedisKeys.channel_key(category)
         try:
+            # Persist the full message (including event_id) before publishing so a
+            # reconnecting client can replay what it missed via Last-Event-ID.
+            # The degraded (Redis-down) fallback path below deliberately skips the
+            # history write: an in-process direct push cannot be replayed.
+            await redis_push_history(
+                RedisKeys.stream_history_key(category),
+                message,
+                RedisKeys.STREAM_HISTORY_LIMIT,
+                RedisKeys.STREAM_HISTORY_TTL,
+            )
             await redis_publish(channel_key, message)
         except Exception as e:
             logger.warning(f"Redis Pub/Sub publish failed for {channel_key}: {e}, falling back to direct push")
 
         await self._on_redis_message(channel_key, message)
+
+    async def get_missed_events(
+        self,
+        category: str,
+        last_event_id: str,
+        tenant_id: str | None = None,
+    ) -> list[dict]:
+        """Return the events published on `category` after `last_event_id`.
+
+        Reads the per-channel history list (newest first), reverses it back to
+        chronological order, locates the anchor event and returns everything
+        after it, filtered to the requesting tenant. A missing anchor (history
+        expired/rotated) or any Redis error yields an empty list so the caller
+        can silently skip the replay.
+        """
+        try:
+            raw_events = await redis_lrange(RedisKeys.stream_history_key(category), start=0, end=-1)
+        except Exception as e:
+            logger.debug(f"Failed to read SSE history for {category}: {e}")
+            return []
+
+        if not raw_events:
+            return []
+
+        events: list[dict] = []
+        for raw in reversed(raw_events):
+            try:
+                events.append(json.loads(raw))
+            except (TypeError, json.JSONDecodeError):
+                continue
+
+        anchor_index = None
+        for idx, event in enumerate(events):
+            if event.get("event_id") == last_event_id:
+                anchor_index = idx
+                break
+
+        if anchor_index is None:
+            logger.debug(f"SSE replay anchor {last_event_id} not found in history for {category}")
+            return []
+
+        missed = []
+        for event in events[anchor_index + 1 :]:
+            event_tenant = event.get("tenant_id")
+            if tenant_id and event_tenant and event_tenant != tenant_id:
+                continue
+            missed.append(event)
+        return missed
 
     async def push_to_client(self, client_id: str, event_type: SSEEventType, data: dict):
         conn = self._connections.get(client_id)

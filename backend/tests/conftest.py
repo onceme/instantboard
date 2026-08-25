@@ -119,6 +119,36 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
 def redis_mock():
     """Mock Redis client for tests."""
 
+    class MockPipeline:
+        def __init__(self, redis):
+            self._redis = redis
+            self._commands = []
+
+        def lpush(self, key, *values):
+            self._commands.append(("lpush", key, values))
+            return self
+
+        def ltrim(self, key, start, end):
+            self._commands.append(("ltrim", key, start, end))
+            return self
+
+        def expire(self, key, seconds):
+            self._commands.append(("expire", key, seconds))
+            return self
+
+        async def execute(self):
+            results = []
+            for command in self._commands:
+                name = command[0]
+                if name == "lpush":
+                    results.append(await self._redis.lpush(command[1], *command[2]))
+                elif name == "ltrim":
+                    results.append(await self._redis.ltrim(command[1], command[2], command[3]))
+                elif name == "expire":
+                    results.append(await self._redis.expire(command[1], command[2]))
+            self._commands = []
+            return results
+
     class MockRedis:
         def __init__(self):
             self._data = {}
@@ -157,6 +187,23 @@ def redis_mock():
 
         async def hgetall(self, key):
             return self._data.get(key, {})
+
+        async def lpush(self, key, *values):
+            lst = self._data.setdefault(key, [])
+            lst[0:0] = list(values)
+            return len(lst)
+
+        async def ltrim(self, key, start, end):
+            lst = self._data.get(key, [])
+            self._data[key] = lst[start : end + 1] if end >= 0 else lst[start:]
+            return True
+
+        async def lrange(self, key, start, end):
+            lst = self._data.get(key, [])
+            return lst[start : end + 1] if end >= 0 else lst[start:]
+
+        def pipeline(self, transaction=True):
+            return MockPipeline(self)
 
         async def close(self):
             pass

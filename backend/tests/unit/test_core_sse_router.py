@@ -148,14 +148,20 @@ class TestSSEEventRouter:
     async def test_push_event(self):
         self.router.register("client1", ["finance"], "tenant1")
 
-        with patch("app.core.sse_router.redis_publish", new_callable=AsyncMock) as mock_publish:
+        with (
+            patch("app.core.sse_router.redis_push_history", new_callable=AsyncMock),
+            patch("app.core.sse_router.redis_publish", new_callable=AsyncMock) as mock_publish,
+        ):
             await self.router.push_event("finance", SSEEventType.ITEM_UPDATE, {"msg": "test"}, "tenant1")
             mock_publish.assert_called_once()
 
     async def test_push_event_redis_failure(self):
         self.router.register("client1", ["finance"], "tenant1")
 
-        with patch("app.core.sse_router.redis_publish", new_callable=AsyncMock) as mock_publish:
+        with (
+            patch("app.core.sse_router.redis_push_history", new_callable=AsyncMock),
+            patch("app.core.sse_router.redis_publish", new_callable=AsyncMock) as mock_publish,
+        ):
             mock_publish.side_effect = Exception("Redis down")
             with patch("app.core.sse_router.logger") as mock_logger:
                 await self.router.push_event("finance", SSEEventType.ITEM_UPDATE, {"msg": "test"}, "tenant1")

@@ -3,7 +3,7 @@ import json
 import uuid
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Header, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,6 +18,28 @@ from app.services.sse import SSEService
 
 router = APIRouter()
 sse_service = SSEService()
+
+# Channels aggregated by the literal "all" stream; mirrors the Redis listener's
+# subscription set (sse_router.start_redis_listener) minus the pseudo-channel itself.
+ALL_CHANNELS = ("finance", "tech", "dashboard", "admin")
+
+
+async def collect_replay_events(category: str, last_event_id: str, tenant_id: str) -> list[dict]:
+    """Gather the events the client missed while disconnected.
+
+    For a single channel this is the per-channel history after the anchor; for
+    the "all" aggregate the histories of the four channels are merged and
+    re-ordered by published_at. Errors resolve to an empty list upstream
+    (SSEEventRouter.get_missed_events), so a missing buffer or anchor simply
+    yields no replay frames.
+    """
+    if category == "all":
+        missed: list[dict] = []
+        for channel in ALL_CHANNELS:
+            missed.extend(await event_router.get_missed_events(channel, last_event_id, tenant_id))
+        missed.sort(key=lambda event: event.get("published_at") or "")
+        return missed
+    return await event_router.get_missed_events(category, last_event_id, tenant_id)
 
 
 @router.get("/status")
@@ -67,6 +89,7 @@ async def sse_stats():
 async def sse_stream(
     category: str,
     token: str = Query(..., description="JWT token for SSE authentication"),
+    last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
     db: AsyncSession = Depends(get_db),
 ):
     user_info = extract_user_from_token(token)
@@ -99,6 +122,17 @@ async def sse_stream(
             },
         }
         yield f"event: connected\ndata: {json.dumps(connected_event['data'])}\nid: init\n\n"
+
+        # Replay events missed during the disconnect (EventSource auto-reconnect
+        # sends the Last-Event-ID header). Runs before entering the live loop so
+        # no live event can overtake a replayed one.
+        if last_event_id:
+            for event in await collect_replay_events(category, last_event_id, tenant_id):
+                yield (
+                    f"event: {event.get('event_type')}\n"
+                    f"data: {json.dumps(event.get('data', {}))}\n"
+                    f"id: {event.get('event_id', '')}\n\n"
+                )
 
         try:
             while True:

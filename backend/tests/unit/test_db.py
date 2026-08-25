@@ -49,6 +49,24 @@ class TestInitDBModule:
         assert "config" in first
         assert "refresh_interval_seconds" in first
 
+    def test_commodity_seed_symbols_match_display_config(self):
+        """Consistency guard: the seeded commodity symbols must equal COMMODITIES_CONFIG,
+        otherwise some displayed commodities never receive data (and seed symbols are wasted).
+        Regression for the ZC=F (corn) seed vs Brent (BZ=F) display mismatch."""
+        from app.db.init_db import FINANCE_SOURCES
+        from app.services.finance import COMMODITIES_CONFIG
+
+        commodity_sources = [
+            src
+            for src in FINANCE_SOURCES
+            if src.get("config", {}).get("library") == "yfinance"
+            and any("=F" in sym for sym in src.get("config", {}).get("symbols", []))
+        ]
+        assert len(commodity_sources) == 1
+        seed_symbols = set(commodity_sources[0]["config"]["symbols"])
+        config_symbols = {item["symbol"] for item in COMMODITIES_CONFIG}
+        assert seed_symbols == config_symbols
+
     def test_tech_sources_constants(self):
         from app.db.init_db import TECH_AI_SOURCES, TECH_EMBEDDED_SOURCES, TECH_ROBOTICS_SOURCES, TECH_SPACE_SOURCES
 

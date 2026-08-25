@@ -92,7 +92,7 @@ FINANCE_SOURCES = [
         "url": "https://query1.finance.yahoo.com/v7/finance/chart/GC=F",
         "config": {
             "library": "yfinance",
-            "symbols": ["GC=F", "SI=F", "CL=F", "NG=F", "HG=F", "ZS=F", "ZC=F"],
+            "symbols": ["GC=F", "SI=F", "CL=F", "BZ=F", "NG=F", "HG=F", "ZS=F"],
             "history_period": "5d",
         },
         "refresh_interval_seconds": 60,

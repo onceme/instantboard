@@ -60,6 +60,53 @@ def worker_heartbeat_is_fresh(payload: dict | None) -> bool:
 _metrics_collection_task: asyncio.Task | None = None
 _last_metrics: dict = {}
 
+# Previous net_io_counters() sample (cumulative bytes + monotonic timestamp) used to
+# compute network transfer rates. The frontend contract expects rates
+# (network_in_kbps / network_out_kbps, KB/s), not the cumulative byte counters that
+# psutil exposes, so every sample diffs against this state. Module-level because both
+# get_system_info() and collect_and_push_metrics() need the same series.
+_last_net_sample: dict | None = None
+
+
+def sample_network_rates() -> dict:
+    """Sample net_io_counters() and compute transfer rates (KB/s) vs the previous sample.
+
+    Returns both the rate fields the frontend renders (network_in_kbps /
+    network_out_kbps) and the cumulative counters (kept for backward compatibility).
+    The first sample has no previous data and reports 0 rates; counter resets
+    (reboot/overflow) clamp negative deltas to 0.
+    """
+    global _last_net_sample
+
+    net = psutil.net_io_counters()
+    now = time.monotonic()
+
+    data = {
+        "network_in_kbps": 0.0,
+        "network_out_kbps": 0.0,
+        "network_bytes_recv": net.bytes_recv if net else 0,
+        "network_bytes_sent": net.bytes_sent if net else 0,
+    }
+
+    if net and _last_net_sample:
+        elapsed = now - _last_net_sample["timestamp"]
+        if elapsed > 0:
+            data["network_in_kbps"] = round(
+                max(net.bytes_recv - _last_net_sample["bytes_recv"], 0) / elapsed / 1024, 2
+            )
+            data["network_out_kbps"] = round(
+                max(net.bytes_sent - _last_net_sample["bytes_sent"], 0) / elapsed / 1024, 2
+            )
+
+    if net:
+        _last_net_sample = {
+            "bytes_recv": net.bytes_recv,
+            "bytes_sent": net.bytes_sent,
+            "timestamp": now,
+        }
+
+    return data
+
 
 class DashboardService:
     def __init__(self, db: AsyncSession, redis: Redis | None):
@@ -100,7 +147,7 @@ class DashboardService:
         cpu_count = psutil.cpu_count()
         mem = await asyncio.to_thread(psutil.virtual_memory)
         disk = await asyncio.to_thread(psutil.disk_usage, "/")
-        await asyncio.to_thread(psutil.net_io_counters)
+        net_data = await asyncio.to_thread(sample_network_rates)
 
         pg_connections = None
         pg_active_queries = None
@@ -139,6 +186,16 @@ class DashboardService:
             "memory_used_mb": int(mem.used / (1024 * 1024)),
             "disk_total_gb": round(disk.total / (1024**3), 1),
             "disk_used_gb": round(disk.used / (1024**3), 1),
+            # Frontend renders the flat rate fields (KB/s); the nested group keeps the
+            # cumulative counters for backward compatibility.
+            "network_in_kbps": net_data["network_in_kbps"],
+            "network_out_kbps": net_data["network_out_kbps"],
+            "network": {
+                "network_in_kbps": net_data["network_in_kbps"],
+                "network_out_kbps": net_data["network_out_kbps"],
+                "bytes_sent": net_data["network_bytes_sent"],
+                "bytes_recv": net_data["network_bytes_recv"],
+            },
             "database": {
                 "postgres_connections": pg_connections,
                 "postgres_active_queries": pg_active_queries,
@@ -647,14 +704,16 @@ class DashboardService:
         cpu_usage = await asyncio.to_thread(psutil.cpu_percent, 0.5)
         mem = await asyncio.to_thread(psutil.virtual_memory)
         disk = await asyncio.to_thread(psutil.disk_usage, "/")
-        net = await asyncio.to_thread(psutil.net_io_counters)
+        net_data = await asyncio.to_thread(sample_network_rates)
 
         current_metrics = {
             "cpu_usage_percent": cpu_usage,
             "memory_usage_percent": mem.percent,
             "disk_usage_percent": disk.percent,
-            "network_bytes_sent": net.bytes_sent if net else 0,
-            "network_bytes_recv": net.bytes_recv if net else 0,
+            "network_in_kbps": net_data["network_in_kbps"],
+            "network_out_kbps": net_data["network_out_kbps"],
+            "network_bytes_sent": net_data["network_bytes_sent"],
+            "network_bytes_recv": net_data["network_bytes_recv"],
             "timestamp": datetime.now(UTC).isoformat(),
         }
 
@@ -673,13 +732,16 @@ class DashboardService:
                 should_push = True
                 incremental_data["memory_usage_percent"] = current_metrics["memory_usage_percent"]
 
-            if current_metrics["network_bytes_sent"] != _last_metrics.get("network_bytes_sent", 0):
+            # The frontend merges the SSE payload into its system-info state and renders
+            # rates (network_in_kbps / network_out_kbps), so push rate fields, not the
+            # cumulative byte counters it cannot display.
+            if current_metrics["network_in_kbps"] != _last_metrics.get("network_in_kbps"):
                 should_push = True
-                incremental_data["network_bytes_sent"] = current_metrics["network_bytes_sent"]
+                incremental_data["network_in_kbps"] = current_metrics["network_in_kbps"]
 
-            if current_metrics["network_bytes_recv"] != _last_metrics.get("network_bytes_recv", 0):
+            if current_metrics["network_out_kbps"] != _last_metrics.get("network_out_kbps"):
                 should_push = True
-                incremental_data["network_bytes_recv"] = current_metrics["network_bytes_recv"]
+                incremental_data["network_out_kbps"] = current_metrics["network_out_kbps"]
         else:
             should_push = True
             incremental_data = current_metrics

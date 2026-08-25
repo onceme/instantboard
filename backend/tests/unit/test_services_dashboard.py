@@ -95,6 +95,37 @@ class TestGetSystemInfo:
 
         assert result is not None
 
+    @patch("app.services.dashboard.psutil")
+    async def test_get_system_info_network_rates(self, mock_psutil):
+        from app.services import dashboard as dash_mod
+
+        mock_psutil.cpu_percent.return_value = 10.0
+        mock_psutil.cpu_count.return_value = 2
+        mock_psutil.virtual_memory.return_value = MagicMock(total=4 * 1024**3, used=2 * 1024**3)
+        mock_psutil.disk_usage.return_value = MagicMock(total=100 * 1024**3, used=50 * 1024**3)
+        mock_psutil.net_io_counters.return_value = MagicMock(bytes_sent=1000, bytes_recv=2000)
+
+        saved = dash_mod._last_net_sample
+        dash_mod._last_net_sample = None
+        try:
+            db, mock_result = _mock_db()
+            mock_result.scalar.return_value = 0
+            service = DashboardService(db, None)
+            result = await service.get_system_info(datetime.now(UTC))
+        finally:
+            dash_mod._last_net_sample = saved
+
+        # First sample: rates are 0 but present (frontend renders "--" only when missing).
+        assert result["network_in_kbps"] == 0.0
+        assert result["network_out_kbps"] == 0.0
+        # Group keeps both rate and cumulative fields for compatibility.
+        assert result["network"] == {
+            "network_in_kbps": 0.0,
+            "network_out_kbps": 0.0,
+            "bytes_sent": 1000,
+            "bytes_recv": 2000,
+        }
+
 
 class TestGetServicesHealth:
     @patch("app.services.dashboard.settings")
@@ -612,12 +643,20 @@ class TestCollectAndPushMetrics:
         dash_mod._last_metrics = {
             "cpu_usage_percent": 35.0,
             "memory_usage_percent": 55.0,
+            "network_in_kbps": 0.0,
+            "network_out_kbps": 0.0,
             "network_bytes_sent": 1000,
             "network_bytes_recv": 2000,
         }
+        dash_mod._last_net_sample = {
+            "bytes_recv": 2000,
+            "bytes_sent": 1000,
+            "timestamp": 100.0,
+        }
 
         service = DashboardService(db, redis)
-        await service.collect_and_push_metrics(datetime.now(UTC))
+        with patch("app.services.dashboard.time.monotonic", return_value=110.0):
+            await service.collect_and_push_metrics(datetime.now(UTC))
         mock_router.push_event.assert_called_once()
 
     @patch("app.services.dashboard.event_router")
@@ -627,6 +666,7 @@ class TestCollectAndPushMetrics:
         mock_psutil.cpu_percent.return_value = 30.0
         mock_psutil.virtual_memory.return_value = MagicMock(percent=50.0)
         mock_psutil.disk_usage.return_value = MagicMock(percent=60.0)
+        # Counters unchanged from the previous sample -> rate 0.0 (matches _last_metrics).
         mock_psutil.net_io_counters.return_value = MagicMock(bytes_sent=1000, bytes_recv=2000)
 
         mock_router.push_event = AsyncMock()
@@ -639,12 +679,22 @@ class TestCollectAndPushMetrics:
         dash_mod._last_metrics = {
             "cpu_usage_percent": 30.0,
             "memory_usage_percent": 50.0,
+            "network_in_kbps": 0.0,
+            "network_out_kbps": 0.0,
             "network_bytes_sent": 1000,
             "network_bytes_recv": 2000,
         }
+        # Seed the previous net sample with identical counters so the computed
+        # rate is 0.0 and nothing changes.
+        dash_mod._last_net_sample = {
+            "bytes_recv": 2000,
+            "bytes_sent": 1000,
+            "timestamp": 100.0,
+        }
 
         service = DashboardService(db, redis)
-        await service.collect_and_push_metrics(datetime.now(UTC))
+        with patch("app.services.dashboard.time.monotonic", return_value=110.0):
+            await service.collect_and_push_metrics(datetime.now(UTC))
         mock_router.push_event.assert_not_called()
 
     @patch("app.services.dashboard.event_router")
@@ -666,6 +716,90 @@ class TestCollectAndPushMetrics:
 
         service = DashboardService(db, _mock_redis())
         await service.collect_and_push_metrics(datetime.now(UTC))
+
+
+class TestSampleNetworkRates:
+    """KB/s rates computed from consecutive net_io_counters() samples.
+
+    Module-level ``_last_net_sample`` carries state between samples, so every
+    test resets it before and after running.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset_net_sample(self):
+        from app.services import dashboard as dash_mod
+
+        saved = dash_mod._last_net_sample
+        dash_mod._last_net_sample = None
+        yield
+        dash_mod._last_net_sample = saved
+
+    @patch("app.services.dashboard.psutil")
+    def test_first_sample_returns_zero(self, mock_psutil):
+        from app.services.dashboard import sample_network_rates
+
+        mock_psutil.net_io_counters.return_value = MagicMock(bytes_sent=1000, bytes_recv=2000)
+
+        with patch("app.services.dashboard.time.monotonic", return_value=100.0):
+            data = sample_network_rates()
+
+        assert data["network_in_kbps"] == 0.0
+        assert data["network_out_kbps"] == 0.0
+        # Cumulative counters stay available for backward compatibility.
+        assert data["network_bytes_sent"] == 1000
+        assert data["network_bytes_recv"] == 2000
+
+    @patch("app.services.dashboard.psutil")
+    def test_second_sample_computes_kbps(self, mock_psutil):
+        from app.services import dashboard as dash_mod
+        from app.services.dashboard import sample_network_rates
+
+        mock_psutil.net_io_counters.return_value = MagicMock(bytes_sent=1000, bytes_recv=2000)
+        with patch("app.services.dashboard.time.monotonic", return_value=100.0):
+            sample_network_rates()
+
+        # +20480 bytes recv and +10240 bytes sent over 10s -> 2.0 / 1.0 KB/s.
+        mock_psutil.net_io_counters.return_value = MagicMock(bytes_sent=11240, bytes_recv=22480)
+        with patch("app.services.dashboard.time.monotonic", return_value=110.0):
+            data = sample_network_rates()
+
+        assert data["network_in_kbps"] == 2.0
+        assert data["network_out_kbps"] == 1.0
+        assert data["network_bytes_sent"] == 11240
+        assert data["network_bytes_recv"] == 22480
+        assert dash_mod._last_net_sample["timestamp"] == 110.0
+
+    @patch("app.services.dashboard.psutil")
+    def test_counter_reset_clamped_to_zero(self, mock_psutil):
+        from app.services.dashboard import sample_network_rates
+
+        mock_psutil.net_io_counters.return_value = MagicMock(bytes_sent=5000, bytes_recv=9000)
+        with patch("app.services.dashboard.time.monotonic", return_value=100.0):
+            sample_network_rates()
+
+        # Reboot/wrap: counters drop below the previous sample -> clamp to 0, never negative.
+        mock_psutil.net_io_counters.return_value = MagicMock(bytes_sent=100, bytes_recv=100)
+        with patch("app.services.dashboard.time.monotonic", return_value=110.0):
+            data = sample_network_rates()
+
+        assert data["network_in_kbps"] == 0.0
+        assert data["network_out_kbps"] == 0.0
+
+    @patch("app.services.dashboard.psutil")
+    def test_none_counters_keeps_state(self, mock_psutil):
+        from app.services import dashboard as dash_mod
+        from app.services.dashboard import sample_network_rates
+
+        mock_psutil.net_io_counters.return_value = None
+
+        with patch("app.services.dashboard.time.monotonic", return_value=100.0):
+            data = sample_network_rates()
+
+        assert data["network_in_kbps"] == 0.0
+        assert data["network_out_kbps"] == 0.0
+        assert data["network_bytes_sent"] == 0
+        assert data["network_bytes_recv"] == 0
+        assert dash_mod._last_net_sample is None
 
 
 class TestArchiveSnapshot:

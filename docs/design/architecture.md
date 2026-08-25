@@ -75,7 +75,7 @@ graph TD
 
 > ⚠️ **未实现**：限流中间件。`RedisKeys.RATE_LIMIT` 有定义但 `RateLimitMiddleware`（`app/core/middleware.py:129-132`）是空壳直通，`RATE_LIMIT_PER_MINUTE`/`RATE_LIMIT_BURST` 配置项无任何消费者。
 
-> ⚠️ **未实现**：外部源 NewsAPI / Twitter(X) / 通用 Web Scraping。`COLLECTOR_REGISTRY`（`app/collectors/__init__.py:9-17`）当前仅注册 7 个采集器。
+> ⚠️ **未实现**：外部源 NewsAPI / Twitter(X) / 通用 Web Scraping。`COLLECTOR_REGISTRY`（`app/collectors/__init__.py`）当前注册 9 个采集器（`yfinance` / `alpha_vantage` / `eastmoney` / `finnhub` / `iex_cloud` / `rss` / `hackernews` / `arxiv` / `reddit`）。
 
 > 说明：`config.mongodb_url` 有定义但**无任何代码实现**（无连接层、无使用方），与"初始版本不启用"决策一致，仅保留 compose 中 `profiles: [mongodb]` 服务定义。
 

@@ -54,18 +54,20 @@ graph TD
 #### 3.1.2 各采集器类型实现
 
 ```text
-# 实际结构：按数据域分子包，注册表见 app/collectors/__init__.py COLLECTOR_REGISTRY（7 个）
+# 实际结构：按数据域分子包，注册表见 app/collectors/__init__.py COLLECTOR_REGISTRY（9 个）
 collectors/
 ├── base.py                       # BaseCollector 抽象基类
 ├── finance/
 │   ├── yfinance_collector.py     # yfinance 行情/指数/商品
 │   ├── alpha_vantage_collector.py
 │   ├── eastmoney_collector.py    # 东方财富（国内行情/指数, failover 链首）
-│   └── finnhub_collector.py
+│   ├── finnhub_collector.py
+│   └── iex_cloud_collector.py    # IEX Cloud（可选, 统一APIKeyManager）
 └── tech/
     ├── rss_collector.py          # feedparser 解析 RSS
     ├── hackernews_collector.py   # HackerNews API
-    └── arxiv_collector.py        # arXiv API
+    ├── arxiv_collector.py        # arXiv API
+    └── reddit_collector.py       # Reddit 公开JSON（social, 无需凭据）
 ```
 
 ```python

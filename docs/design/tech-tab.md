@@ -94,7 +94,7 @@ cross_refs: [frontend.md, api.md, data-sources.md, database.md, data-flow.md, co
 
 ### 3.2 各领域数据源选型
 
-> 注：下表频率列为种子配置的 `refresh_interval_seconds`；`web_scrape`/social 类型源均 `is_active=False`（无对应采集器），仅作模板保留。
+> 注：下表频率列为种子配置的 `refresh_interval_seconds`；`web_scrape` 类型源均 `is_active=False`（无 web_scrape 采集器），仅作模板保留；Reddit（social）采集器已实现（公开 JSON、无需凭据），但种子仍未激活。
 
 #### 3.2.1 机器人领域数据源
 
@@ -140,7 +140,7 @@ cross_refs: [frontend.md, api.md, data-sources.md, database.md, data-flow.md, co
 
 | 数据源名称 | 类型 | 覆盖领域 | 状态 |
 |-----------|------|---------|------|
-| **Reddit (r/artificial+robotics+embedded+space)** | Social | 全领域 | ⛔ inactive，且后端**无 social 采集器** |
+| **Reddit (r/artificial+robotics+embedded+space)** | Social | 全领域 | ⛔ inactive（reddit 采集器已实现：公开 JSON、无需凭据；种子激活为后续特性） |
 | **Google News Tech** | RSS | 全领域 | ✅ active |
 | **Twitter/X Lists** | Social | 全领域 | ⛔ 种子与代码中完全缺失 |
 
@@ -306,7 +306,7 @@ if hn_score:
 | 排序策略 | 三种可切换（默认 hot） | 时间衰减公式为 τ=12h 指数衰减（半衰期≈8.3h） |
 | 标签体系 | 一级4个 + 二级24个；三级未实现 | 结构化且可扩展 |
 | 标签提取 | 纯关键词匹配（~192条） | 简单可控；TF-IDF 为待实现项 |
-| 主数据源类型 | RSS 为主；web_scrape/social 源暂不可用（无采集器） | RSS 最稳定 |
+| 主数据源类型 | RSS 为主；web_scrape 源暂不可用（无采集器），reddit（social）采集器已实现但种子未激活 | RSS 最稳定 |
 | NewsCard设计 | 领域色条+标题+摘要+标签；不渲染图片 | 信息密度适中 |
 
 ## 5. 边界情况

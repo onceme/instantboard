@@ -56,16 +56,17 @@ cross_refs: [architecture.md, api.md, database.md, data-flow.md, finance-tab.md,
 | 17 | NASA News | RSS | nasa.gov/rss | 30min | RSS XML | 免费 | 科技-太空 | ✅ 活跃 |
 | 18 | SpaceX Updates | Web抓取 | spacex.com/updates | 30min | HTML→JSON | 免费 | 科技-太空 | ⚠️ 未激活种子 (无web_scrape采集器) |
 | 19 | Ars Technica Space | RSS | arstechnica.com/science/feed | 5min | RSS XML | 免费 | 科技-太空 | ✅ 活跃 |
-| 20 | Reddit | API | reddit.com/r/{sub} | 10min | JSON | 免费(限流) | 科技-全领域 | ⚠️ 未激活种子 (无social采集器) |
+| 20 | Reddit | API (公开JSON, httpx直连) | reddit.com/r/{sub} | 10min | JSON | 免费(限流) | 科技-全领域 | ✅ 采集器已实现 (公开JSON, 无需凭据); 种子未激活 |
 | 21 | Google News Tech | RSS | news.google.com/rss/search?q=technology | 5min | RSS XML | 免费 | 科技-通用 | ✅ 活跃 |
 | 22 | ESA News | RSS | esa.int/RSS | 30min | RSS XML | 免费 | 科技-太空 | ✅ 活跃 |
 
 > ⚠️ **种子与采集器现状**（以 `app/db/init_db.py` 与 `app/collectors/__init__.py` 为准）：
-> - 已注册采集器共 8 个：`yfinance` / `alpha_vantage` / `eastmoney` / `finnhub` / `iex_cloud` / `rss` / `hackernews` / `arxiv`（`COLLECTOR_REGISTRY`）。
-> - **无 `web_scrape` / `social` 采集器**：此类种子源（#6/#10/#15/#18，另含机器人领域 Automotive News 与 #20 Reddit）一律 `is_active=False`，仅作为未来开发模板保留；`beautifulsoup4`/`lxml` 依赖已声明但无任何 HTML 抓取代码。
-> - **IEX Cloud** 采集器已实现（可选启用），种子为未激活模板；**Twitter/X** 完全缺失。
+> - 已注册采集器共 9 个：`yfinance` / `alpha_vantage` / `eastmoney` / `finnhub` / `iex_cloud` / `rss` / `hackernews` / `arxiv` / `reddit`（`COLLECTOR_REGISTRY`）。
+> - **无 `web_scrape` 采集器**：此类种子源（#6/#10/#15/#18，另含机器人领域 Automotive News）一律 `is_active=False`，仅作为未来开发模板保留；`beautifulsoup4`/`lxml` 依赖已声明但无任何 HTML 抓取代码。
+> - **Reddit（social）采集器已实现**：`RedditCollector`（`app/collectors/tech/reddit_collector.py`，注册名 `reddit`，公开 JSON 接口、无需凭据），经 `source_type=social` + `config.library=reddit` 回退解析（见 §3.5.1）；#20 种子仍 `is_active=False`（种子激活与 `subreddits` 配置为后续特性）。**Twitter/X** 完全缺失。
+> - **IEX Cloud** 采集器已实现（可选启用），种子为未激活模板。
 > - Finnhub 无定时采集种子源（种子财经源共 7 条，不含 Finnhub），仅在财经 failover 链内按需调用（见 §3.5）。
-> - source_type 为 api/web_scrape 的源通过 `config.library` 回退解析采集器（见 §3.5.1）；解析失败时 `collector_available=false`，且激活会被拒绝。
+> - source_type 为 api/web_scrape/social 的源通过 `config.library` 回退解析采集器（见 §3.5.1）；解析失败时 `collector_available=false`，且激活会被拒绝。
 
 ### 3.2 财经数据源详细列表
 
@@ -282,7 +283,7 @@ cross_refs: [architecture.md, api.md, database.md, data-flow.md, finance-tab.md,
 | 2 | **Google News Tech** | RSS | `https://news.google.com/rss/search?q=technology+AI+robotics` | 5min | 免费 | 通用科技新闻 |
 | 3 | **Twitter/X** | Social | Twitter API v2 (Lists) | 10min | 付费($100/月) | 高成本, 仅付费租户可选启用 |
 
-> ⚠️ **未实现**：Reddit 种子存在但 `is_active=False`（`init_db.py:291-299`），系统无 social 采集器、无 `REDDIT_CLIENT_ID` 配置；Twitter/X 完全缺失。
+> ⚠️ **Reddit 采集器已实现、种子未激活**：`RedditCollector`（注册名 `reddit`，`app/collectors/tech/reddit_collector.py`）使用公开 JSON 接口 `https://www.reddit.com/r/{subreddit}/new.json?limit={n}`，无需 OAuth/凭据，但必须携带自定义 `User-Agent`（源级 `config.user_agent`，默认 `instantboard-collector/1.0`）。源级配置键：`subreddits`（子版列表，逐个拉取并按 post id 聚合去重）、`limit`（默认 25，上限 100）、`user_agent`；条目 `extra_data` 含 `reddit_score`/`num_comments`/`subreddit`/`author`；429 限流时返回空并记日志。种子仍存在但 `is_active=False`（`init_db.py` `TECH_CROSS_DOMAIN_SOURCES`），种子激活及 `library`/`subreddits` 配置为后续特性。Twitter/X 完全缺失。
 
 ### 3.4 数据源健康监控设计
 
@@ -394,7 +395,7 @@ commodities:
 **采集器解析机制**（`app/collectors/__init__.py::resolve_collector`）：
 
 1. 先按 `source_type` 查 `COLLECTOR_REGISTRY`（rss / hackernews / arxiv）；
-2. source_type 无对应采集器时（api / web_scrape），按 `config.library` 回退解析：yfinance / alpha_vantage / eastmoney / finnhub / iex_cloud / rss / hackernews / arxiv；
+2. source_type 无对应采集器时（api / web_scrape / social），按 `config.library` 回退解析：yfinance / alpha_vantage / eastmoney / finnhub / iex_cloud / rss / hackernews / arxiv / reddit（如 `source_type=social` + `library=reddit` → `RedditCollector`）；
 3. 仍无法解析返回 `None` → 该源尚不可采集：响应字段 `collector_available` 向前端暴露此状态；创建/更新激活前经 `_check_collector_available` 前置校验（`services/source.py:118-131`）抛出 `NoCollectorAvailable`（`exceptions.py:31-41`），防止源处于"永久激活却从不采集"的状态。
 
 #### 3.5.2 自动Failover流程
@@ -482,7 +483,7 @@ class APIKeyManager:
 | Finnhub | `FINNHUB_API_KEY` / `FINNHUB_API_KEYS` | 可选 | 60/min | $29/月 | 支持多Key列表（统一APIKeyManager轮换/限流标记/失效检测，见§3.6.2） |
 | IEX Cloud | `IEX_CLOUD_API_KEY` | 可选 | 限量 | $9/月起 | 采集器已实现（可选启用，统一APIKeyManager轮换/限流标记/失效检测，见§3.6.2）；`IEX_CLOUD_BASE_URL` 可覆盖base URL（如指向sandbox） |
 | 东方财富 | 无 | 否 | - | - | 无需Key, 控制频率即可 |
-| Reddit | ⚠️ 未实现 | 可选 | 限量 | - | 无 `REDDIT_CLIENT_ID` 配置、无 social 采集器 |
+| Reddit | 无需 (公开JSON, 需自定义 `User-Agent`，源级 `config.user_agent` 提供，默认 `instantboard-collector/1.0`) | 否 | 限量 | - | `RedditCollector` 已实现（注册名 `reddit`；429 时返回空并记日志）；种子未激活，无 OAuth/`REDDIT_CLIENT_ID` 凭据体系 |
 
 ## 4. 关键决策
 
@@ -501,7 +502,7 @@ class APIKeyManager:
 - **yfinance被Yahoo封禁**: 非官方API可能被封 → Alpha Vantage failover自动切换；长期封禁需评估替代方案
 - **Alpha Vantage免费Key限流严重**: 5 calls/min → 使用多Key池轮换；仍不够则升级付费Key
 - **东方财富接口变更**: 公开接口可能变更 → Web抓取需要维护parse_rules；变更后需更新config
-- **Reddit API限流**: 公开JSON接口限流 → 降低频率(10min)；OAuth2 API更稳定但需Client ID
+- **Reddit API限流**: 公开JSON接口限流 → 降低频率(10min)；采集器收到 429 时本次返回空结果并记日志（不重试不标记故障）；OAuth2 API更稳定但需Client ID
 - **RSS源停止更新**: 源7天无新内容 → source_health标记degraded，前端提示
 - **所有财经源不可用**: ⚠️ 方案的"Redis旧数据兜底 + SSE不可用提示"**未实现**——当前全链失败直接抛出 `ServiceUnavailable`（"Market indices data temporarily unavailable" / "Commodity data temporarily unavailable"，`services/finance.py:216-217, 264-265`），无旧数据兜底、无提示推送
 - **API Key泄露**: .env文件泄露 → 立即更换Key；生产使用Docker secrets更安全

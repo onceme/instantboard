@@ -29,8 +29,8 @@ async def create_tables():
 
 
 # Sources with is_active=False are disabled because no collector can run for them yet
-# (missing web_scrape/social collector, or — for api sources — no config.library wiring
-# and/or required API keys). They are kept as templates for future development.
+# (missing web_scrape collector, or — for api/social sources — no config.library wiring
+# and/or no collectable config yet). They are kept as templates for future development.
 # Sources whose collector resolves via app.collectors.resolve_collector (source_type
 # match or config.library fallback) are active by default.
 
@@ -310,7 +310,7 @@ TECH_CROSS_DOMAIN_SOURCES = [
         "config": {"platform": "reddit", "query": "r/artificial+robotics+embedded+space", "parse_rules": {}},
         "refresh_interval_seconds": 600,
         "priority": 4,
-        "is_active": False,  # No social collector
+        "is_active": False,  # RedditCollector exists (library=reddit); seed subreddits config is a follow-up
     },
     {
         "name": "Google News Tech",

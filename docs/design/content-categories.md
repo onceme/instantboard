@@ -178,7 +178,7 @@ graph LR
 | 科技 | 全部子分类 | Google News Tech | rss | 全领域 |
 | 科技 | 全部子分类 | Twitter/X Lists | social | 全领域(付费租户可选) |
 
-> ⚠️ **未实现**：Reddit 种子存在但 `is_active=False`，系统无 social 采集器、无 `REDDIT_CLIENT_ID` 配置；Twitter/X 完全缺失（无采集器/配置/种子）。
+> ⚠️ Reddit 采集器已实现（公开 JSON 接口、无需凭据；注册名 `reddit`，经 `source_type=social` + `config.library=reddit` 解析），但种子仍 `is_active=False`（种子激活与 `subreddits` 配置为后续特性）；Twitter/X 完全缺失（无采集器/配置/种子）。
 
 #### 3.2.7 映射关系设计要点
 

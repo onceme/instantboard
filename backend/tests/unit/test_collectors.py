@@ -32,7 +32,7 @@ def _make_source(**kwargs):
 # ── COLLECTOR_REGISTRY ────────────────────────────────────────────
 class TestCollectorRegistry:
     def test_all_collectors_registered(self):
-        assert len(COLLECTOR_REGISTRY) == 8
+        assert len(COLLECTOR_REGISTRY) == 9
         assert "yfinance" in COLLECTOR_REGISTRY
         assert "alpha_vantage" in COLLECTOR_REGISTRY
         assert "eastmoney" in COLLECTOR_REGISTRY
@@ -41,6 +41,7 @@ class TestCollectorRegistry:
         assert "rss" in COLLECTOR_REGISTRY
         assert "hackernews" in COLLECTOR_REGISTRY
         assert "arxiv" in COLLECTOR_REGISTRY
+        assert "reddit" in COLLECTOR_REGISTRY
 
     def test_get_collector_known_type(self):
         assert get_collector("yfinance") is YFinanceCollector

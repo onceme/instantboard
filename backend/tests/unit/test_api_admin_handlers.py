@@ -18,6 +18,7 @@ from app.api.v1.admin import (
 )
 from app.core.exceptions import Forbidden, ValidationError
 from app.schemas.admin import TenantCreate, TenantUpdate
+from app.schemas.base import PaginationParams
 
 
 def _make_tenant(**overrides):
@@ -153,7 +154,7 @@ class TestListTenants:
 
         db.execute = execute_side_effect
 
-        resp = await list_tenants(page=1, page_size=20, db=db, user={"role": "admin"})
+        resp = await list_tenants(pagination=PaginationParams(page=1, page_size=20), db=db, user={"role": "admin"})
         assert resp.success is True
         assert len(resp.data) == 2
         assert resp.meta.total == 2
@@ -178,7 +179,7 @@ class TestListTenants:
 
         db.execute = execute_side_effect
 
-        resp = await list_tenants(page=1, page_size=20, db=db, user={"role": "admin"})
+        resp = await list_tenants(pagination=PaginationParams(page=1, page_size=20), db=db, user={"role": "admin"})
         assert resp.meta.total == 0
         assert len(resp.data) == 0
 

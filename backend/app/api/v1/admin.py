@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import Forbidden, ValidationError
+from app.core.pagination import apply_sort
 from app.dependencies import get_current_user, get_db
 from app.models.category import Category
 from app.models.item import Item
@@ -18,11 +19,14 @@ from app.schemas.admin import (
     TenantStatsResponse,
     TenantUpdate,
 )
-from app.schemas.base import PaginatedMeta, PaginatedResponse, SuccessResponse
+from app.schemas.base import PaginatedMeta, PaginatedResponse, PaginationParams, SuccessResponse
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Whitelist of columns GET /admin/tenants may order by (see apply_sort).
+TENANT_SORT_FIELDS = {"name", "created_at"}
 
 
 def require_admin(user: dict):
@@ -80,17 +84,23 @@ async def create_tenant(
 
 @router.get("/tenants", response_model=PaginatedResponse[TenantResponse])
 async def list_tenants(
-    page: int = 1,
-    page_size: int = 20,
+    pagination: PaginationParams = Depends(),
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
     require_admin(user)
 
+    page, page_size = pagination.page, pagination.page_size
+
     count_stmt = select(func.count()).select_from(Tenant)
     total = (await db.execute(count_stmt)).scalar() or 0
 
-    stmt = select(Tenant).order_by(Tenant.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
+    stmt = select(Tenant)
+    if pagination.sort_by is not None:
+        stmt = apply_sort(stmt, pagination.sort_by, TENANT_SORT_FIELDS, Tenant, pagination.sort_order)
+    else:
+        stmt = stmt.order_by(Tenant.created_at.desc())
+    stmt = stmt.offset((page - 1) * page_size).limit(page_size)
     rows = (await db.execute(stmt)).scalars().all()
 
     tenants = [_tenant_to_response(t) for t in rows]

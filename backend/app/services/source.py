@@ -17,6 +17,7 @@ from app.core.exceptions import (
     SourceNotFound,
     ValidationError,
 )
+from app.core.pagination import apply_sort
 from app.core.redis import RedisKeys, redis_delete, redis_publish, redis_set
 from app.models.category import Category
 from app.models.source import Source, SourceHealth
@@ -37,6 +38,9 @@ SOURCE_TYPE_CONFIG_RULES = {
     "web_scrape": {"required_fields": ["url", "selector"]},
     "social": {"required_fields": ["platform", "query"]},
 }
+
+# Whitelist of columns GET /sources may order by (see apply_sort).
+SOURCE_SORT_FIELDS = {"name", "created_at", "priority"}
 
 
 def _source_to_response(source: Source) -> SourceResponse:
@@ -139,6 +143,8 @@ class SourceService:
         is_active: bool | None = None,
         page: int = 1,
         page_size: int = 20,
+        sort_by: str | None = None,
+        sort_order: str = "desc",
     ) -> PaginatedResponse[SourceResponse]:
         conditions = [
             or_(
@@ -168,7 +174,11 @@ class SourceService:
         stmt = select(Source).options(selectinload(Source.health), selectinload(Source.category))
         if health_join:
             stmt = stmt.join(SourceHealth, Source.id == SourceHealth.source_id)
-        stmt = stmt.where(and_(*conditions)).order_by(Source.priority.asc(), Source.name.asc())
+        stmt = stmt.where(and_(*conditions))
+        if sort_by is not None:
+            stmt = apply_sort(stmt, sort_by, SOURCE_SORT_FIELDS, Source, sort_order)
+        else:
+            stmt = stmt.order_by(Source.priority.asc(), Source.name.asc())
         stmt = stmt.offset((page - 1) * page_size).limit(page_size)
 
         sources = (await self.db.execute(stmt)).scalars().all()

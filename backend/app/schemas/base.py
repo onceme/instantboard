@@ -1,7 +1,8 @@
+import re
 from enum import StrEnum
-from typing import Generic, TypeVar
+from typing import Generic, Literal, TypeVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 T = TypeVar("T")
 
@@ -58,7 +59,26 @@ class PaginatedResponse(BaseModel, Generic[T]):
 
 
 class PaginationParams(BaseModel):
+    """Common pagination + sorting query params for list endpoints.
+
+    Consume as a FastAPI dependency (`pagination: PaginationParams = Depends()`);
+    every field becomes a query parameter. `sort_by` defaults to None so each
+    endpoint keeps its own default ordering; when provided it is validated against
+    the endpoint's column whitelist by `app.core.pagination.apply_sort` (unknown
+    columns raise 400 VALIDATION_ERROR — only whitelisted ORM attributes may be
+    ordered by).
+    """
+
     page: int = Field(default=1, ge=1)
     page_size: int = Field(default=20, ge=1, le=100)
-    sort_by: str = Field(default="created_at")
-    sort_order: str = Field(default="desc", pattern="^(asc|desc)$")
+    sort_by: str | None = Field(default=None, description="Column to sort by (endpoint-specific whitelist)")
+    sort_order: Literal["asc", "desc"] = Field(default="desc")
+
+    @field_validator("sort_by")
+    @classmethod
+    def _validate_sort_by(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
+            raise ValueError("sort_by must be a valid column identifier")
+        return value

@@ -3,7 +3,7 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_current_tenant, get_db, get_redis
-from app.schemas.base import PaginatedResponse, SuccessResponse
+from app.schemas.base import PaginatedResponse, PaginationParams, SuccessResponse
 from app.schemas.category import (
     CategoryCreate,
     CategoryResponse,
@@ -23,8 +23,7 @@ def _get_category_service(db: AsyncSession, redis: Redis) -> CategoryService:
 @router.get("", response_model=PaginatedResponse[CategoryResponse])
 async def list_categories(
     type: str | None = Query(default=None, description="Filter by category type"),  # noqa: A002
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=1, le=100),
+    pagination: PaginationParams = Depends(),
     db: AsyncSession = Depends(get_db),
     redis: Redis = Depends(get_redis),
     tenant_id: str = Depends(get_current_tenant),
@@ -33,8 +32,10 @@ async def list_categories(
     result = await service.list_categories(
         tenant_id=tenant_id,
         type_filter=type,
-        page=page,
-        page_size=page_size,
+        page=pagination.page,
+        page_size=pagination.page_size,
+        sort_by=pagination.sort_by,
+        sort_order=pagination.sort_order,
     )
     return result
 

@@ -166,9 +166,14 @@ async def redis_hgetall(key: str) -> dict:
     return await client.hgetall(key)
 
 
-async def redis_sadd(key: str, *members: str) -> int:
+async def redis_sadd(key: str, *members: str, ttl: int | None = None) -> int:
     client = await get_redis_client()
-    return await client.sadd(key, *members)
+    added = await client.sadd(key, *members)
+    if ttl is not None:
+        # Refresh on every write so an active set never expires mid-stream while
+        # an abandoned one is reclaimed automatically.
+        await client.expire(key, ttl)
+    return added
 
 
 async def redis_sismember(key: str, member: str) -> bool:

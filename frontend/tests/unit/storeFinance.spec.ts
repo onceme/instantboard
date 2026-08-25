@@ -131,3 +131,202 @@ describe("fetchWatchlist error state", () => {
     expect(store.watchlistError).toBe("加载自选股失败，请稍后重试。");
   });
 });
+
+describe("updateMarketIndexFromSSE", () => {
+  it("replaces the whole list when the payload is an array", () => {
+    const store = useFinanceStore();
+    // Stale entry from an earlier round, not present in the new payload
+    store.updateMarketIndexFromSSE({
+      symbol: "^GSPC",
+      name: "S&P 500",
+      value: 4900,
+      change: -5,
+      change_percent: -0.1,
+      market_status: "closed",
+      region: "US",
+      timestamp: "2026-01-01T00:00:00Z",
+    });
+
+    store.updateMarketIndexFromSSE([
+      {
+        symbol: "^GSPC",
+        name: "S&P 500",
+        value: 5000,
+        change: 10,
+        change_percent: 0.2,
+        market_status: "open",
+        region: "US",
+        timestamp: "2026-01-02T00:00:00Z",
+      },
+      {
+        symbol: "000001.SS",
+        name: "上证综合指数",
+        value: 3100,
+        change: -8,
+        change_percent: -0.26,
+        market_status: "closed",
+        region: "CN",
+        timestamp: "2026-01-02T00:00:00Z",
+      },
+    ]);
+
+    expect(store.marketIndices).toEqual([
+      {
+        symbol: "^GSPC",
+        name: "S&P 500",
+        value: 5000,
+        change: 10,
+        change_percent: 0.2,
+        market_status: "open",
+        region: "US",
+        timestamp: "2026-01-02T00:00:00Z",
+      },
+      {
+        symbol: "000001.SS",
+        name: "上证综合指数",
+        value: 3100,
+        change: -8,
+        change_percent: -0.26,
+        market_status: "closed",
+        region: "CN",
+        timestamp: "2026-01-02T00:00:00Z",
+      },
+    ]);
+  });
+
+  it("updates the matching entry in place when the payload is a single object", () => {
+    const store = useFinanceStore();
+    store.updateMarketIndexFromSSE([
+      {
+        symbol: "^GSPC",
+        name: "S&P 500",
+        value: 5000,
+        change: 10,
+        change_percent: 0.2,
+        market_status: "open",
+        region: "US",
+        timestamp: "t1",
+      },
+      {
+        symbol: "^HSI",
+        name: "恒生指数",
+        value: 17000,
+        change: 100,
+        change_percent: 0.59,
+        market_status: "open",
+        region: "HK",
+        timestamp: "t1",
+      },
+    ]);
+
+    store.updateMarketIndexFromSSE({
+      symbol: "^GSPC",
+      name: "S&P 500",
+      value: 5010,
+      change: 20,
+      change_percent: 0.4,
+      market_status: "open",
+      region: "US",
+      timestamp: "t2",
+    });
+
+    expect(store.marketIndices).toHaveLength(2);
+    expect(store.marketIndices[0].value).toBe(5010);
+    expect(store.marketIndices[0].timestamp).toBe("t2");
+    expect(store.marketIndices[1].value).toBe(17000);
+  });
+});
+
+describe("updateCommodityFromSSE", () => {
+  it("replaces the whole list when the payload is an array", () => {
+    const store = useFinanceStore();
+    // Stale entry absent from the new payload must not survive a full-array push
+    store.updateCommodityFromSSE({
+      symbol: "ZC=F",
+      name: "玉米期货",
+      value: 450,
+      change: 0,
+      change_percent: 0,
+      unit: "USD/bushel",
+      category: "agriculture",
+      timestamp: "2026-01-01T00:00:00Z",
+    });
+
+    store.updateCommodityFromSSE([
+      {
+        symbol: "GC=F",
+        name: "黄金期货",
+        value: 2400,
+        change: 12,
+        change_percent: 0.5,
+        unit: "USD/oz",
+        category: "precious_metal",
+        timestamp: "2026-01-02T00:00:00Z",
+      },
+      {
+        symbol: "BZ=F",
+        name: "Brent原油期货",
+        value: 85,
+        change: -1,
+        change_percent: -1.16,
+        unit: "USD/bbl",
+        category: "energy",
+        timestamp: "2026-01-02T00:00:00Z",
+      },
+    ]);
+
+    expect(store.commodities.map((c) => c.symbol)).toEqual(["GC=F", "BZ=F"]);
+    expect(store.commodities[0]).toEqual({
+      symbol: "GC=F",
+      name: "黄金期货",
+      value: 2400,
+      change: 12,
+      change_percent: 0.5,
+      unit: "USD/oz",
+      category: "precious_metal",
+      timestamp: "2026-01-02T00:00:00Z",
+    });
+  });
+
+  it("updates the matching entry in place when the payload is a single object", () => {
+    const store = useFinanceStore();
+    store.updateCommodityFromSSE([
+      {
+        symbol: "GC=F",
+        name: "黄金期货",
+        value: 2400,
+        change: 12,
+        change_percent: 0.5,
+        unit: "USD/oz",
+        category: "precious_metal",
+        timestamp: "t1",
+      },
+      {
+        symbol: "CL=F",
+        name: "WTI原油期货",
+        value: 80,
+        change: 0.3,
+        change_percent: 0.38,
+        unit: "USD/bbl",
+        category: "energy",
+        timestamp: "t1",
+      },
+    ]);
+
+    store.updateCommodityFromSSE({
+      symbol: "GC=F",
+      name: "黄金期货",
+      value: 2410,
+      change: 22,
+      change_percent: 0.92,
+      unit: "USD/oz",
+      category: "precious_metal",
+      timestamp: "t2",
+    });
+
+    expect(store.commodities).toHaveLength(2);
+    expect(store.commodities[0].value).toBe(2410);
+    expect(store.commodities[0].timestamp).toBe("t2");
+    expect(store.commodities[1].value).toBe(80);
+  });
+});

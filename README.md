@@ -87,46 +87,35 @@ InstantBoard 是一个**实时信息聚合消息板**服务，采用前后端分
 ### 架构图
 
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
 graph TB
-    subgraph Browser["🖥️ 浏览器 (Vue 3 SPA)"]
+    subgraph Browser["浏览器 (Vue 3 SPA)"]
         direction LR
-        Finance["📈 Finance"] ~~~ Tech["🔬 Tech"] ~~~ Dashboard["📊 Dashboard"]
+        Finance["Finance"] ~~~ Tech["Tech"] ~~~ Dashboard["Dashboard"]
     end
-
-    Browser -->|"REST API 请求"| Nginx
+    Browser -->|"REST API"| Nginx
     Browser -.->|"SSE 实时流"| Nginx
-
-    subgraph Nginx["🔒 Nginx 反向代理 / SSL"]
+    subgraph Nginx["Nginx 反向代理 / SSL"]
     end
-
     Nginx --> App
-
-    subgraph App["⚡ FastAPI Application (Python 3.11+)"]
+    subgraph App["FastAPI Application (Python 3.11+)"]
         direction TB
         subgraph Modules["核心模块"]
             direction LR
-            API["🔌 API Routes<br/>9 个端点模块"]
-            Service["🧠 Service Layer<br/>7 个业务服务"]
-            Collector["📡 Collector Engine<br/>7 个采集器"]
-            Scheduler["⏰ Scheduler<br/>APScheduler"]
+            API["API Routes"]
+            Service["Service Layer"]
+            Collector["Collector Engine"]
+            Scheduler["Scheduler"]
         end
-        SSE["📡 SSE EventRouter + Redis Pub/Sub<br/>7 种业务事件 (+heartbeat) · 5 个频道 · 30s 心跳"]
+        SSE["SSE EventRouter + Redis Pub/Sub"]
     end
-
-    App -->|"SQLAlchemy 2.0<br/>JSONB · tenant_id 隔离"| PG
-    App -->|"redis-py (redis.asyncio)<br/>缓存 · Pub/Sub · 限流"| Redis
-
-    PG[("🐘 PostgreSQL 17(开发) / 15(生产)<br/>12 张核心表")]
-    Redis[("🔴 Redis 7<br/>12 种 Key 模式")]
-
-    style Browser fill:#e3f2fd,stroke:#1565c0,color:#000
-    style Nginx fill:#f3e5f5,stroke:#7b1fa2,color:#000
-    style App fill:#e8f5e9,stroke:#2e7d32,color:#000
-    style Modules fill:#fff8e1,stroke:#f9a825,color:#000
-    style SSE fill:#fce4ec,stroke:#c62828,color:#000
-    style PG fill:#e8eaf6,stroke:#283593,color:#000
-    style Redis fill:#ffebee,stroke:#b71c1c,color:#000
+    App -->|"SQLAlchemy 2.0 / tenant_id"| PG
+    App -->|"redis.asyncio"| Redis
+    PG[("PostgreSQL 17(开发) / 15(生产)")]
+    Redis[("Redis 7")]
 ```
+
+API Routes 9 个端点模块、Service Layer 7 个业务服务、Collector Engine 7 个采集器；SSE 侧 7 种业务事件（+heartbeat）、5 个频道、30s 心跳。
 
 ---
 
@@ -858,24 +847,18 @@ CI 使用 QEMU + buildx 构建多架构 manifest list 并推送至 GHCR，部署
 ### 数据管道
 
 ```mermaid
-graph LR
-    A["📡 数据采集器<br/>7 个 Collector"] -->|"原始数据"| B["🔍 去重处理器<br/>DedupProcessor<br/>Redis Set + MD5"]
-    B -->|"唯一数据"| C["🚫 内容过滤器<br/>FilterProcessor<br/>黑名单 + 质量阈值"]
-    C -->|"合格数据"| D["🏷️ 自动分类器<br/>CategorizerProcessor<br/>200+ 关键词映射<br/>TechTopicExtractor"]
-    D -->|"分类 + 标签"| E["🔄 格式转换器<br/>TransformerProcessor<br/>HTML 清理 · UTC 标准化"]
-    E -->|"标准化数据"| F[("🐘 PostgreSQL<br/>items / finance_quotes")]
-    E -->|"缓存写入"| G[("🔴 Redis<br/>行情 · 指数 · 商品")]
-    E -->|"实时推送"| H["📡 SSE EventRouter<br/>Pub/Sub 分发"]
-
-    style A fill:#e3f2fd,stroke:#1565c0,color:#000
-    style B fill:#fff3e0,stroke:#ef6c00,color:#000
-    style C fill:#fce4ec,stroke:#c62828,color:#000
-    style D fill:#e8f5e9,stroke:#2e7d32,color:#000
-    style E fill:#f3e5f5,stroke:#7b1fa2,color:#000
-    style F fill:#e8eaf6,stroke:#283593,color:#000
-    style G fill:#ffebee,stroke:#b71c1c,color:#000
-    style H fill:#e0f7fa,stroke:#00838f,color:#000
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
+graph TD
+    A["数据采集器 (7 个 Collector)"] -->|"原始数据"| B["去重处理器 (Redis Set + MD5)"]
+    B -->|"唯一数据"| C["内容过滤器 (黑名单 + 阈值)"]
+    C -->|"合格数据"| D["自动分类器 (关键词映射)"]
+    D -->|"分类 + 标签"| E["格式转换器 (HTML 清理 / UTC)"]
+    E -->|"标准化数据"| F[("PostgreSQL<br/>items / finance_quotes")]
+    E -->|"缓存写入"| G[("Redis<br/>行情 / 指数 / 商品")]
+    E -->|"实时推送"| H["SSE EventRouter<br/>(Pub/Sub 分发)"]
 ```
+
+全链路细节见 `dev-guide/design/data-flow.md` §3.3（处理管道各阶段的两层去重键、过滤规则等）。
 
 ---
 

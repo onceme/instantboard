@@ -164,16 +164,32 @@ cross_refs: [frontend.md, api.md, data-sources.md, database.md, data-flow.md, co
 #### 3.3.3 NewsCard 组件设计（现状）
 
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
 graph TD
     NC["NewsCard<br/>科技新闻卡片"]
-    NC --> DC["领域色块标识 (左边缘色条: 紫=机器人 蓝=AI 橙=嵌入式 绿=太空)"]
-    NC --> NT["标题 (可点击 → 原文链接)"]
-    NC --> NS["摘要 (2行截断)"]
-    NC --> NR["来源名称"]
-    NC --> NP["发布时间 (相对时间)"]
-    NC --> NTag["TopicTag × N"]
-    NC --> NH["热度指示 (hn_score, 如有)"]
+    subgraph Main["主要展示元素"]
+        NT["标题 (可点击 → 原文链接)"]
+        NS["摘要 (2行截断)"]
+        DC["领域色条 (左边缘色块)"]
+    end
+    subgraph Meta["辅助信息元素"]
+        NR["来源名称"]
+        NP["发布时间 (相对时间)"]
+        NTag["TopicTag × N"]
+        NH["热度指示 (hn_score, 如有)"]
+    end
+    NC --> Main
+    Main ~~~ Meta
 ```
+
+领域色条配色图例（自图内移出）：
+
+| 颜色 | 领域 |
+|------|------|
+| 紫 | 机器人 (robotics) |
+| 蓝 | AI (ai) |
+| 橙 | 嵌入式 (embedded) |
+| 绿 | 太空 (space) |
 
 > ⚠️ **未实现**：图片缩略图 — `/tech/news` 响应包含 `image_url`，但 `NewsCard.vue` 不渲染（桌面/移动端均无图）。
 
@@ -182,6 +198,7 @@ graph TD
 #### 3.4.1 标签层级设计（现状：一级 + 二级）
 
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
 graph TD
     Root["话题标签层级"]
 
@@ -218,6 +235,7 @@ graph TD
 #### 3.4.3 TopicFilter UI 组件（现状）
 
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
 graph TD
     TSN["TechSubNav (TechView顶部)<br/>一级领域切换: 全部 / 机器人 / AI / 嵌入式 / 太空"]
     TFC["TopicFilter<br/>平铺 24 个二级子分类标签"]

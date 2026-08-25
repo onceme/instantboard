@@ -87,15 +87,26 @@ frontend/src/
 
 ### 3.2 组件层级设计（现状要点）
 
-```mermaid
-graph TD
-  AppVue["App.vue → AppLayout (slot 承载路由视图)"]
+组件层级按子树拆为两图：图 (a) 为 Sidebar 子树，图 (b) 为 Header 子树；两者均由 App.vue → AppLayout（slot 承载路由视图）包裹，完整组件清单见 §3.1 目录树。admin-entry 机制（ADMIN_ENTRY_ROUTES + requiresAdmin 守卫）详见 §3.11。
 
+**图 (a) Sidebar 子树**
+
+```mermaid
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
+graph TD
+  AppVue["App.vue → AppLayout"]
   AppVue --> SideVue["Sidebar.vue — 侧边导航"]
   SideVue --> NavItems["导航项: Finance / Tech / Dashboard / Settings"]
-  SideVue --> AdminNav["admin-entry: /ibadmin 管理员登录后切换第二套导航 (ADMIN_ENTRY_ROUTES + requiresAdmin 守卫)"]
+  SideVue --> AdminNav["admin-entry: /ibadmin<br/>管理员登录后切换第二套导航"]
   SideVue --> ThemeSide["ThemeToggle"]
+```
 
+**图 (b) Header 子树**
+
+```mermaid
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
+graph TD
+  AppVue["App.vue → AppLayout"]
   AppVue --> HeaderVue["Header.vue — 顶部栏"]
   HeaderVue --> HB["汉堡按钮 (移动端抽屉)"]
   HeaderVue --> PageTitle["当前页面标题"]
@@ -152,16 +163,17 @@ graph TD
 **侧边导航设计**:
 
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
 graph LR
   subgraph fullpage["全页面布局"]
     subgraph sidebar["Sidebar 侧边导航"]
       Logo["IB Logo"]
-      NavFin["💰 Finance"]
-      NavTech["🔬 Tech"]
-      NavDash["📊 Dashboard"]
-      NavSet["⚙️ Settings"]
-      ThemeBtn["🌙 ThemeToggle"]
-      UserBtn["👤 UserAvatar + Logout"]
+      NavFin["Finance"]
+      NavTech["Tech"]
+      NavDash["Dashboard"]
+      NavSet["Settings"]
+      ThemeBtn["ThemeToggle"]
+      UserBtn["UserAvatar + Logout"]
     end
 
     subgraph mainarea["主区域"]

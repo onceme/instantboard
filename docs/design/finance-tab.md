@@ -22,6 +22,7 @@ cross_refs: [frontend.md, api.md, data-sources.md, database.md, data-flow.md]
 
 **交互流程（现状）**:
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "actorBkg": "#ffffff", "actorBorder": "#000000", "actorTextColor": "#000000", "actorLineColor": "#000000", "noteBkgColor": "#ffffff", "noteTextColor": "#000000", "noteBorderColor": "#000000", "activationBkgColor": "#ffffff", "activationBorderColor": "#000000", "signalColor": "#000000", "signalTextColor": "#000000", "labelBoxBkgColor": "#ffffff", "labelBoxBorderColor": "#000000", "labelTextColor": "#000000", "loopTextColor": "#000000", "altSectionBkgColor": "#ffffff", "sequenceNumberColor": "#000000", "fontSize": "14px"}, "sequence": {"mirrorActors": true, "actorMargin": 50, "width": 160, "height": 50, "messageMargin": 40, "noteMargin": 10, "boxMargin": 8, "wrap": true}}}%%
 sequenceDiagram
     participant U as 用户
     participant SB as SearchSymbols组件
@@ -31,11 +32,11 @@ sequenceDiagram
     U->>SB: 输入关键词(代码/名称)
     SB->>SB: debounce 300ms
     SB->>ST: searchSymbols(query)
-    ST->>API: GET /api/v1/finance/search?q=xxx&type=all&page=1&page_size=20
-    API-->>ST: 搜索结果列表 (分页, {data, meta:{total,page,page_size}})
+    ST->>API: GET /api/v1/finance/search (q/type/分页参数)
+    API-->>ST: 返回搜索结果列表 (分页)
     U->>SB: 点击结果
     SB->>API: GET /api/v1/finance/quote/{symbol}
-    SB->>SB: 内联渲染 QuoteCard (现价/涨跌/开高低/昨收/市值/PE/52周高低)
+    SB->>SB: 内联渲染 QuoteCard (行情摘要)
 ```
 
 > ⚠️ **未实现**：原设计的 DetailDrawer 右侧滑出抽屉（Sparkline 5日/1月/3月/1年多周期图、"加入自选/关注NAV估值"按钮、SSE 实时联动）不存在；选中搜索结果后仅在 SearchSymbols.vue 内联展示一张 QuoteCard，不打开抽屉。
@@ -82,6 +83,7 @@ async def search_symbols(tenant_id, q, type, market, page, page_size):
 **Watchlist UI 组件（现状）**:
 
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
 graph TD
     WL["Watchlist 子面板<br/>完整自选列表"]
     WL --> Title["标题: '我的自选'"]
@@ -161,6 +163,7 @@ if estimate_type == "realtime" and fund.type == "fund" and nav_official and unde
 #### 3.4.3 MarketIndexCard UI组件（现状）
 
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
 graph TD
     MIC["MarketIndices 组件<br/>市场指数列表/网格"]
     MIC --> IN["指数名称 + 地区标签"]
@@ -211,6 +214,7 @@ MARKET_TIMEZONES = {
 #### 3.5.2 CommodityCard UI组件（现状）
 
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
 graph TD
     CC["Commodities 组件<br/>大宗商品列表"]
     CC --> CN["商品名称"]
@@ -253,26 +257,20 @@ graph TD
 **子面板定义（现状, `FinanceGrid.vue`）**:
 
 ```mermaid
-graph LR
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
+graph TD
     subgraph SubNav["FinanceSubNav 按钮组 (5项)"]
-        OV["Overview"]
-        WL["Watchlist"]
-        SE["Search"]
-        ID["Indices"]
-        CO["Commodities"]
+        direction LR
+        OV["Overview"] ~~~ WL["Watchlist"] ~~~ SE["Search"] ~~~ ID["Indices"] ~~~ CO["Commodities"]
     end
-
-    OV --> OVC["实际仅渲染 MarketIndices 组件"]
-    WL --> WLC["Watchlist 完整自选列表"]
-    SE --> SEC["SearchSymbols 搜索框 + 结果列表 + 内联QuoteCard"]
-    ID --> IDC["MarketIndices 市场指数列表"]
-    CO --> COC["Commodities 大宗商品列表"]
-
     subgraph Right["右侧固定面板 (≥1440px, xl断点)"]
-        WM2["WatchlistMini"]
-        NAV2["FundNAV"]
+        direction LR
+        WM2["WatchlistMini"] ~~~ NAV2["FundNAV"]
     end
+    SubNav ~~~ Right
 ```
+
+各按钮对应的子面板：Overview（实际仅渲染 MarketIndices 组件）/ Watchlist（完整自选列表）/ Search（SearchSymbols 搜索框 + 结果列表 + 内联 QuoteCard）/ Indices（市场指数列表）/ Commodities（大宗商品列表）。
 
 > ⚠️ **未实现**：Overview 混合视图（自选列表摘要 + 重点关注 + 顶部新闻）— 当前 Overview 面板只是 MarketIndices 的复用；右侧面板的 "Top Finance News" 不存在。
 
@@ -306,6 +304,7 @@ graph LR
 #### 3.7.2 最终选型与层级（现状）
 
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
 graph TD
     subgraph Quote["1. 个股行情 (单个symbol)"]
         q1["非CN: yfinance → alpha_vantage → finnhub"]

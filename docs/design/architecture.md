@@ -21,6 +21,7 @@ cross_refs: [infrastructure.md, api.md, database.md, data-flow.md, frontend.md]
 ### 3.1 系统整体架构图
 
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
 graph TD
     subgraph Browser["用户浏览器 (Vue 3 SPA)"]
         FinanceTab["Finance Tab"]
@@ -34,23 +35,7 @@ graph TD
     end
 
     subgraph FastAPIApp["FastAPI Application (Python 3.11+)"]
-        subgraph APILayer["API Layer (REST + SSE) — 共 9 个路由模块"]
-            HealthAPI["/api/v1/health"]
-            AuthAPI["/api/v1/auth"]
-            CatAPI["/api/v1/categories"]
-            SrcAPI["/api/v1/sources"]
-            FinAPI["/api/v1/finance"]
-            TechAPI["/api/v1/tech"]
-            DashAPI["/api/v1/dashboard"]
-            StreamAPI["/api/v1/stream/{category}"]
-            AdminAPI["/api/v1/admin"]
-        end
-        ServiceLayer["Service Layer (Business Logic)"]
-        SchedulerComp["Scheduler (APScheduler, 开发内嵌/生产独立进程)"]
-        SSEManager["SSE Manager (EventRouter + Redis Pub/Sub 5频道)"]
-        CollectorLayer["Collector Layer (httpx爬虫/RSS)"]
-        ProcessorLayer["Processor Layer (去重/过滤/分类)"]
-        AuthLayer["Auth Layer (SSO+JWT)"]
+        APILayer["API Layer (REST + SSE) — 共 9 个路由模块"] ~~~ ServiceLayer["Service Layer (Business Logic)"] ~~~ SchedulerComp["Scheduler (APScheduler, 开发内嵌/生产独立进程)"] ~~~ SSEManager["SSE Manager (EventRouter + Redis Pub/Sub 5频道)"] ~~~ CollectorLayer["Collector Layer (httpx爬虫/RSS)"] ~~~ ProcessorLayer["Processor Layer (去重/过滤/分类)"] ~~~ AuthLayer["Auth Layer (SSO+JWT)"]
     end
 
     subgraph DataLayer["Data Layer"]
@@ -71,6 +56,18 @@ graph TD
     DataLayer --> ExternalSources
 ```
 
+API Layer 的 9 个路由模块（接口定义详见 [api.md](api.md)）：
+
+- `/api/v1/health`
+- `/api/v1/auth`
+- `/api/v1/categories`
+- `/api/v1/sources`
+- `/api/v1/finance`
+- `/api/v1/tech`
+- `/api/v1/dashboard`
+- `/api/v1/stream/{category}`
+- `/api/v1/admin`
+
 > ⚠️ **未实现**：Nginx 限流与 CSP。`docker/nginx/nginx.conf:45-48` 的三个 `limit_req_zone`（api/sse/auth）全部被注释，文件中无任何 `limit_req` 指令，全仓库亦无 Content-Security-Policy 响应头。
 
 > ⚠️ **未实现**：限流中间件。`RedisKeys.RATE_LIMIT` 有定义但 `RateLimitMiddleware`（`app/core/middleware.py:129-132`）是空壳直通，`RATE_LIMIT_PER_MINUTE`/`RATE_LIMIT_BURST` 配置项无任何消费者。
@@ -81,20 +78,25 @@ graph TD
 
 ### 3.2 前后端分离架构
 
+前后端结构各一图（原双 subgraph 并排超宽，按规范拆分）：图 (a) 为前端结构，图 (b) 为后端结构。
+
+**图 (a) 前端结构**
+
 ```mermaid
-graph LR
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
+graph TD
     subgraph Frontend["前端 (Vue 3 SPA) — src/"]
         subgraph Views["views/ (7 个)"]
             FinanceView["FinanceView / TechView / DashboardView"]
             SettingsView["SettingsView"]
             AuthViews["LoginView / AdminLoginView / SSOCallbackView"]
         end
-        subgraph Components["components/ (layout/common/finance/tech/dashboard/settings)"]
-            FinanceGrid["finance/FinanceGrid"]
-            Watchlist["finance/Watchlist + WatchlistMini"]
-            SearchSymbols["finance/SearchSymbols"]
-            NewsFeed["tech/NewsFeed + NewsCard"]
-            ChartWrapper["dashboard/ChartWrapper"]
+        subgraph Components["components/ (6 个分组)"]
+            FinanceGrid["FinanceGrid"]
+            Watchlist["Watchlist + Mini"]
+            SearchSymbols["SearchSymbols"]
+            NewsFeed["NewsFeed + NewsCard"]
+            ChartWrapper["ChartWrapper"]
         end
         subgraph Stores["stores/ (Pinia)"]
             financeStore["financeStore"]
@@ -109,38 +111,43 @@ graph LR
             useResponsive["useResponsive"]
             useTheme["useTheme"]
         end
-    end
-
-    subgraph Backend["后端 (FastAPI) — app/"]
-        subgraph APIRoute["api/ — 路由层"]
-            RouterPy["router.py — 注册 9 个模块"]
-            subgraph V1["v1/"]
-                auth["auth.py"]
-                categories["categories.py"]
-                sources["sources.py"]
-                finance["finance.py"]
-                tech["tech.py"]
-                dashboard["dashboard.py"]
-                health["health.py"]
-                sse["sse.py"]
-                admin["admin.py"]
-            end
-        end
-        Services["services/ — 业务逻辑层"]
-        Collectors["collectors/ — 数据采集层 (finance/ + tech/ 子包)"]
-        Processors["processors/ — 数据处理层"]
-        Models["models/ — 数据模型层"]
-        SchedulerDir["scheduler/ — manager.py + worker.py"]
-        CoreDir["core/ — sse_router.py / security.py / sso_handlers.py / middleware.py / redis.py"]
-        ConfigPy["config.py — 配置 (单文件)"]
-        MainPy["main.py"]
-    end
-
-    subgraph BackendOther[""]
-        Tests["backend/tests/ — unit + integration"]
-        Alembic["app/alembic/ — 迁移脚手架 (无 versions/)"]
+        Views ~~~ Components ~~~ Stores ~~~ Composables
     end
 ```
+
+> components/ 含 layout / common / finance / tech / dashboard / settings 六个分组，图中仅列代表性组件（FinanceGrid / Watchlist(+Mini) / SearchSymbols 属 finance，NewsFeed(+NewsCard) 属 tech，ChartWrapper 属 dashboard）；完整清单见 [frontend.md](frontend.md) §3.1 目录树。
+
+**图 (b) 后端结构**
+
+```mermaid
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
+graph TD
+    subgraph Backend["后端 (FastAPI) — app/"]
+        MainPy["main.py — 应用入口"]
+        subgraph APIRoute["api/ — 路由层"]
+            RouterPy["router.py — 注册 9 个模块"]
+            V1["v1/ — 9 个路由模块<br/>auth / categories / sources / finance / tech<br/>dashboard / health / sse / admin"]
+            RouterPy --> V1
+        end
+        subgraph Biz["业务层"]
+            Services["services/ — 业务逻辑"]
+            Collectors["collectors/ — 数据采集 (finance/ + tech/ 子包)"]
+            Processors["processors/ — 数据处理"]
+        end
+        subgraph Infra["基础层"]
+            Models["models/ — 数据模型"] ~~~ CoreDir["core/ — SSE / 安全 / 中间件 / redis"] ~~~ SchedulerDir["scheduler/ — manager + worker"] ~~~ ConfigPy["config.py — 配置 (单文件)"]
+        end
+        MainPy --> RouterPy
+        APIRoute --> Biz
+        Biz --> Infra
+    end
+    subgraph BackendOther["测试与迁移"]
+        Tests["backend/tests/ — unit + integration"] ~~~ Alembic["app/alembic/ — 迁移脚手架 (无 versions/)"]
+    end
+    Backend ~~~ BackendOther
+```
+
+> core/ 下为 sse_router.py / security.py / sso_handlers.py / middleware.py / redis.py 等文件。
 
 **通信方式**:
 - REST API: `axios` / `fetch` → JSON 请求/响应
@@ -150,6 +157,7 @@ graph LR
 ### 3.3 SSE 实时推送架构
 
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
 graph TD
     Client["客户端 EventSource"] --> SSEEndpoint["/api/v1/stream/{category}"]
     SSEEndpoint --> EventRouter["SSE EventRouter<br>管理所有SSE连接<br>订阅表"]

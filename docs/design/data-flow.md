@@ -40,14 +40,21 @@ cross_refs: [architecture.md, api.md, database.md, data-sources.md, content-cate
 #### 3.1.1 完整采集流程图
 
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
 graph TD
-    Scheduler["Scheduler (定时触发)<br>APScheduler 定时触发采集任务 (开发内嵌/生产独立进程)<br>每个source独立调度, 任务ID = collect_{source_id}"]
-    Scheduler -->|"触发"| Collector["Collector (数据采集)<br>根据source_type选择采集器:<br>rss_collector / api_collector / web_collector / finance_collector"]
-    Collector -->|"raw_data"| Processor["Processor (数据处理)<br>1. 去重 (Redis Set + PG UNIQUE)<br>2. 过滤 (keywords_filter)<br>3. 分类 (auto categorize + topic extraction)<br>4. 格式转换 (统一为Item schema)"]
-    Processor -->|"processed_item"| Store["Store (存储+缓存)<br>1. PostgreSQL items表 (持久化)<br>2. Redis quote/nav/commodity缓存 (实时)"]
-    Store -->|"stored"| PubSub["Pub/Sub (消息分发)<br>Redis PUBLISH channel:{category} event<br>→ SSEEventRouter 接收并转发"]
-    PubSub -->|"sse_event"| SSEPush["SSE Push (前端消费)<br>EventSource → 前端 Pinia store → Vue组件更新"]
+    Scheduler["Scheduler (定时触发)"] -->|"触发"| Collector["Collector (数据采集)"]
+    Collector -->|"raw_data"| Processor["Processor (数据处理)<br>去重 → 过滤 → 分类 → 格式转换"]
+    Processor -->|"processed_item"| Store["Store (存储 + 缓存)"]
+    Store -->|"stored"| PubSub["Pub/Sub (消息分发)"]
+    PubSub -->|"sse_event"| SSEPush["SSE Push (前端消费)"]
 ```
+
+- **Scheduler**：APScheduler 定时触发，每个 source 独立调度，任务 ID = `collect_{source_id}`（开发内嵌 / 生产独立进程，详见 §3.4）。
+- **Collector**：按 `source_type` 经注册表选择采集器（9 个采集器的实际结构见 §3.1.2）。
+- **Processor**：四步处理——去重（Redis Set + PG UNIQUE）、过滤（`keywords_filter`）、分类（auto categorize + topic extraction）、格式转换（统一为 Item schema），详见 §3.3。
+- **Store**：PostgreSQL `items` 表持久化 + Redis quote/nav/commodity 实时缓存（详见 §3.6）。
+- **Pub/Sub**：Redis `PUBLISH channel:{category}`，SSEEventRouter 接收并转发（详见 §3.5）。
+- **SSE Push**：EventSource → 前端 Pinia store → Vue 组件更新。
 
 > ⚠️ **未实现**：原流程中"3. MongoDB raw_content（原始数据）"无任何代码实现，连降级路径都不存在，已从流程图中移除。
 
@@ -116,13 +123,28 @@ class BaseCollector:
 #### 3.2.2 SSE 推送数据流架构
 
 ```mermaid
-graph LR
-    CollectorProcessor["Collector/Processor<br>(数据变更)"] -->|"发布"| RedisPubSub["Redis Pub/Sub<br>channel:xxx"]
-    RedisPubSub -->|"转发"| SSEEventRouter["SSEEventRouter (FastAPI内)<br>维护映射: {client_id → [subscriptions]}<br>接收Pub/Sub消息 → 匹配订阅者 → 发送SSE事件"]
-    SSEEventRouter -->|"finance SSE"| FinanceClient["finance SSE<br>EventSource<br>(客户端1)"]
-    SSEEventRouter -->|"tech SSE"| TechClient["tech SSE<br>EventSource<br>(客户端2)"]
-    SSEEventRouter -->|"dashboard SSE"| DashboardClient["dashboard SSE<br>EventSource<br>(客户端3)"]
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
+graph TD
+    subgraph PublishLayer["发布层"]
+        CollectorProcessor["Collector/Processor (数据变更)"]
+    end
+    subgraph DistributeLayer["分发层"]
+        RedisPubSub["Redis Pub/Sub<br>channel:{category}"]
+        SSEEventRouter["SSEEventRouter<br>(FastAPI 内)"]
+    end
+    subgraph SubscribeLayer["订阅层"]
+        FinanceClient["finance 客户端<br>(EventSource)"]
+        TechClient["tech 客户端<br>(EventSource)"]
+        DashboardClient["dashboard 客户端<br>(EventSource)"]
+    end
+    CollectorProcessor -->|"发布"| RedisPubSub
+    RedisPubSub -->|"转发"| SSEEventRouter
+    SSEEventRouter -->|"finance SSE"| FinanceClient
+    SSEEventRouter -->|"tech SSE"| TechClient
+    SSEEventRouter -->|"dashboard SSE"| DashboardClient
 ```
+
+- **SSEEventRouter**：维护映射 `{client_id → [subscriptions]}`；接收 Pub/Sub 消息 → 匹配订阅者 → 发送 SSE 事件（实现见 §3.2.3）。
 
 #### 3.2.3 SSE EventRouter 实现
 
@@ -198,13 +220,19 @@ async def sse_stream(category: str, token: str = Query(...), db = Depends(get_db
 #### 3.3.1 处理管道流程
 
 ```mermaid
-graph LR
-    RawItem["RawItem<br>(来自Collector)"] --> DedupProcessor["DedupProcessor<br>两层去重键 (注意二者不同):<br>1. Redis Set: MD5(title:url) 快速检查 (processors/dedup.py:40-42)<br>2. PG UNIQUE 兜底: (tenant_id, source_id, url, published_at) (models/item.py:56-63)<br>3. Redis 层不含 published_at"]
-    DedupProcessor -->|"unique_item"| FilterProcessor["FilterProcessor<br>过滤: 分类关键词过滤<br>1. 检查category.keywords_filter<br>2. 标题/摘要必须包含至少1个关键词<br>3. 过滤列表为空 → 不过滤, 全量通过"]
-    FilterProcessor -->|"filtered_item"| Categorizer["Categorizer<br>分类: 自动提取话题标签<br>1. 根据source.category_id确定一级分类<br>2. TechTopicExtractor提取topic_tags<br>3. FinanceCollector自动标记type(stock/fund/...)"]
-    Categorizer -->|"categorized_item"| Transformer["Transformer<br>格式转换: RawItem → items表schema<br>1. 统一字段名映射<br>2. 时区统一为UTC<br>3. HTML摘要清理 (去除标签, 截断200字符)<br>4. URL规范化<br>5. priority计算 (source.priority +热度加权)"]
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
+graph TD
+    RawItem["RawItem (来自 Collector)"] --> DedupProcessor["DedupProcessor (两层去重)"]
+    DedupProcessor -->|"unique_item"| FilterProcessor["FilterProcessor (关键词过滤)"]
+    FilterProcessor -->|"filtered_item"| Categorizer["Categorizer (分类 + 话题标签)"]
+    Categorizer -->|"categorized_item"| Transformer["Transformer (格式转换)"]
     Transformer -->|"processed_item"| Store["Store"]
 ```
+
+- **DedupProcessor 两层去重键（注意二者不同）**：① Redis Set `MD5(title:url)` 快速检查（`processors/dedup.py:40-42`）；② PG UNIQUE 兜底 `(tenant_id, source_id, url, published_at)`（`models/item.py:56-63`）；Redis 层不含 `published_at`。
+- **FilterProcessor**：检查 `category.keywords_filter`，标题/摘要须含至少 1 个关键词；过滤列表为空则全量通过。
+- **Categorizer**：按 `source.category_id` 定一级分类；`TechTopicExtractor` 提取 `topic_tags`；FinanceCollector 自动标记 `type`（stock/fund/...）。
+- **Transformer**：字段名统一映射、时区归一 UTC、HTML 摘要清理（去标签截断 200 字符）、URL 规范化、`priority` 计算（`source.priority` + 热度加权）。
 
 #### 3.3.2 处理器链实现
 
@@ -293,6 +321,7 @@ class AsyncSchedulerManager:
 #### 3.4.3 任务编排策略
 
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
 graph TD
     subgraph Startup["启动时"]
         Step1["1. 从 PostgreSQL sources 表读取所有 is_active=True 的source"]
@@ -362,6 +391,7 @@ graph TD
 #### 3.5.3 SSE连接与Pub/Sub映射
 
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "actorBkg": "#ffffff", "actorBorder": "#000000", "actorTextColor": "#000000", "actorLineColor": "#000000", "noteBkgColor": "#ffffff", "noteTextColor": "#000000", "noteBorderColor": "#000000", "activationBkgColor": "#ffffff", "activationBorderColor": "#000000", "signalColor": "#000000", "signalTextColor": "#000000", "labelBoxBkgColor": "#ffffff", "labelBoxBorderColor": "#000000", "labelTextColor": "#000000", "loopTextColor": "#000000", "altSectionBkgColor": "#ffffff", "sequenceNumberColor": "#000000", "fontSize": "14px"}, "sequence": {"mirrorActors": true, "actorMargin": 50, "width": 160, "height": 50, "messageMargin": 40, "noteMargin": 10, "boxMargin": 8, "wrap": true}}}%%
 sequenceDiagram
     participant Client as 客户端
     participant SSE as SSE端点
@@ -371,20 +401,20 @@ sequenceDiagram
 
     Client->>SSE: 连接 /api/v1/stream/finance?token=xxx
     SSE->>JWT: 验证token → 提取 tenant_id + user_id
-    JWT->>Router: client_id = "{tenant_id}:{user_id}:{随机uuid}"（每次连接唯一, sse.py:80）
+    JWT->>Router: 生成 client_id={tenant}:{user}:{随机uuid} (每次唯一)
     Router->>Router: add_connection(client_id, channels=["finance"])
     Router->>Redis: 订阅 channel:finance
 
-    Note over Client,Redis: 多频道连接 /api/v1/stream/all?token=xxx&channels=finance,tech
-    Client->>SSE: 连接 /api/v1/stream/all?token=xxx&channels=finance,tech
+    Note over Client,Redis: 多频道连接 /stream/all?channels=finance,tech
+    Client->>SSE: 连接 /stream/all?channels=finance,tech
     SSE->>Router: channels=["finance", "tech"]
     Router->>Redis: 订阅 channel:finance + channel:tech
 
     Note over Client,Redis: 消息到达
     Redis->>Router: channel:finance → 消息
     Router->>Router: on_pub_sub_message("channel:finance", 消息)
-    Router->>Router: 查找 subscriptions["channel:finance"] → set of client_ids
-    Router->>Client: 遍历匹配的client_id → 发送SSE事件 (仅转发 tenant_id匹配的消息)
+    Router->>Router: 查订阅表 → 匹配的 client_id 集合
+    Router->>Client: 遍历匹配者转发 (仅 tenant_id 匹配)
 ```
 
 #### 3.5.4 source_health_update 事件契约 (数据源健康表格增量刷新)
@@ -442,10 +472,11 @@ sequenceDiagram
 #### 3.6.1 缓存层级
 
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
 graph TD
-    L1["L1: Redis — 实时缓存, TTL短<br>行情数据、市场指数、大宗商品、NAV估值<br>搜索结果、自选列表、去重集合<br>系统指标、限流计数"]
-    L2["L2: PostgreSQL — 持久化<br>items、finance_quotes、fund_nav_estimates<br>categories、sources、watchlist_items<br>source_health、dashboard_snapshots"]
-    L3["L3: MongoDB — 原始数据, 按需启用<br>raw_crawled_content、historical_quotes<br>news_full_text"]
+    L1["L1: Redis — 实时缓存, TTL 短<br>行情/指数/商品/NAV 估值/搜索结果/自选列表<br>去重集合/系统指标/限流计数"]
+    L2["L2: PostgreSQL — 持久化<br>items/finance_quotes/fund_nav_estimates/categories<br>sources/watchlist_items/source_health/dashboard_snapshots"]
+    L3["L3: MongoDB — 原始数据, 按需启用<br>raw_crawled_content/historical_quotes/news_full_text"]
     L1 -->|"缓存未命中"| L2
     L2 -->|"需要原始数据"| L3
 ```
@@ -474,6 +505,7 @@ graph TD
 #### 3.7.1 采集错误处理
 
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
 graph TD
     CollectFail["Collector.collect() 失败"]
     CollectFail --> RecordHealth["记录错误到 source_health 表<br>- consecutive_failures += 1<br>- last_failure_at = now()<br>- last_error_message = str(exception)"]
@@ -498,6 +530,7 @@ graph TD
 #### 3.7.2 处理错误处理
 
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
 graph TD
     SingleFail["单条处理失败"]
     SingleFail --> LogWarning["logger.warning<br>Processing failed: {url}: {error}"]
@@ -513,6 +546,7 @@ graph TD
 #### 3.7.3 SSE推送错误处理
 
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
 graph TD
     subgraph ClientDisconnect["客户端断开"]
         AutoReconnect["EventSource自动重连 (SSE原生)"]
@@ -539,6 +573,7 @@ graph TD
 #### 3.7.4 全链路错误恢复
 
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
 graph TD
     subgraph RedisUnavailable["Redis不可用"]
         CacheDegrad["缓存层降级: 读路径直落 PostgreSQL"]
@@ -553,7 +588,7 @@ graph TD
     end
 
     subgraph MongoUnavailable["MongoDB"]
-        NotImpl["原始内容存储: ⚠️ 未实现 (无任何代码, 无降级路径)"]
+        NotImpl["原始内容存储: 未实现 (无任何代码, 无降级路径)"]
     end
 ```
 
@@ -564,37 +599,37 @@ graph TD
 #### 3.8.1 科技新闻采集-推送时序
 
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "actorBkg": "#ffffff", "actorBorder": "#000000", "actorTextColor": "#000000", "actorLineColor": "#000000", "noteBkgColor": "#ffffff", "noteTextColor": "#000000", "noteBorderColor": "#000000", "activationBkgColor": "#ffffff", "activationBorderColor": "#000000", "signalColor": "#000000", "signalTextColor": "#000000", "labelBoxBkgColor": "#ffffff", "labelBoxBorderColor": "#000000", "labelTextColor": "#000000", "loopTextColor": "#000000", "altSectionBkgColor": "#ffffff", "sequenceNumberColor": "#000000", "fontSize": "14px"}, "sequence": {"mirrorActors": true, "actorMargin": 50, "width": 160, "height": 50, "messageMargin": 40, "noteMargin": 10, "boxMargin": 8, "wrap": true}}}%%
 sequenceDiagram
-    participant Scheduler
-    participant RSSCollector
-    participant ProcessorChain
-    participant Store
+    participant Collector as RSSCollector
+    participant Chain as ProcessorChain
+    participant PG
     participant Redis
-    participant SSEEventRouter
+    participant Router as EventRouter
     participant Frontend
 
-    Scheduler->>RSSCollector: t=0s 触发: collect_source_123 (HackerNews RSS)
-    RSSCollector->>RSSCollector: t=0.1s httpx.AsyncClient.GET(hnrss.org/new?q=AI)
-    RSSCollector->>RSSCollector: t=0.5s 收到RSS XML响应 (5条新文章)
-    RSSCollector->>ProcessorChain: t=0.6s feedparser.parse → 5个RawItem
-    ProcessorChain->>ProcessorChain: t=0.7s ProcessorChain.process
-    ProcessorChain->>ProcessorChain: t=0.8s DedupProcessor: Redis SISMEMBER检查 → 3条重复, 2条新增
-    ProcessorChain->>ProcessorChain: t=0.9s FilterProcessor: keywords_filter匹配 → 2条通过
-    ProcessorChain->>ProcessorChain: t=1.0s Categorizer: topic_tags提取 → ["ai", "llm"]
-    ProcessorChain->>ProcessorChain: t=1.1s Transformer: 格式转换 → 2个Item对象
-    ProcessorChain->>Store: t=1.2s PostgreSQL INSERT items × 2
-    ProcessorChain->>Redis: t=1.3s Redis SADD dedup × 2 (去重集合)
-    Store->>Redis: t=1.4s Redis PUBLISH channel:tech (2条item_update事件)
-    Redis->>SSEEventRouter: t=1.5s SSEEventRouter接收Pub/Sub消息
-    SSEEventRouter->>Frontend: t=1.6s 匹配tech频道订阅者 → 发送SSE事件
-    Frontend->>Frontend: t=1.7s Pinia techStore更新 → Vue组件渲染
+    Note over Collector: t=0s Scheduler 触发 (HackerNews RSS)
+    Collector->>Collector: t=0.1s GET hnrss.org/new?q=AI
+    Collector->>Collector: t=0.5s 收到 RSS (5 条新文章)
+    Collector->>Chain: t=0.6s feedparser 解析 → 5 个 RawItem
+    Chain->>Chain: t=0.8s 去重检查 → 3 重复 2 新增
+    Chain->>Chain: t=0.9s 关键词过滤 → 2 条通过
+    Chain->>Chain: t=1.0s 提取 topic_tags
+    Chain->>Chain: t=1.1s 格式转换 → 2 个 Item
+    Chain->>PG: t=1.2s INSERT items × 2
+    Chain->>Redis: t=1.3s SADD 去重集合 × 2
+    PG->>Redis: t=1.4s PUBLISH channel:tech
+    Redis->>Router: t=1.5s 接收 Pub/Sub 消息
+    Router->>Frontend: t=1.6s 匹配订阅者 → SSE 推送
+    Frontend->>Frontend: t=1.7s Pinia 更新 → Vue 渲染
 
-    Note over Scheduler,Frontend: 总延迟: ~1.7s (从触发到前端可见)
+    Note over Collector,Frontend: 总延迟 ~1.7s (触发到前端可见)
 ```
 
 #### 3.8.2 财经行情采集-推送时序
 
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "actorBkg": "#ffffff", "actorBorder": "#000000", "actorTextColor": "#000000", "actorLineColor": "#000000", "noteBkgColor": "#ffffff", "noteTextColor": "#000000", "noteBorderColor": "#000000", "activationBkgColor": "#ffffff", "activationBorderColor": "#000000", "signalColor": "#000000", "signalTextColor": "#000000", "labelBoxBkgColor": "#ffffff", "labelBoxBorderColor": "#000000", "labelTextColor": "#000000", "loopTextColor": "#000000", "altSectionBkgColor": "#ffffff", "sequenceNumberColor": "#000000", "fontSize": "14px"}, "sequence": {"mirrorActors": true, "actorMargin": 50, "width": 160, "height": 50, "messageMargin": 40, "noteMargin": 10, "boxMargin": 8, "wrap": true}}}%%
 sequenceDiagram
     participant Scheduler
     participant FinanceCollector
@@ -603,15 +638,15 @@ sequenceDiagram
     participant SSEEventRouter
     participant Frontend
 
-    Scheduler->>FinanceCollector: t=0s 触发: collect_{source_id}（finance_market_indices 类型, 默认间隔 30s）
-    FinanceCollector->>FinanceCollector: t=0.1s 并发拉取 13 个指数('^GSPC','^DJI','000001.SS',... finance.py:27-41)
-    FinanceCollector->>FinanceCollector: t=0.5s 收到 13 个指数行情数据
-    FinanceCollector->>Redis: t=0.6s SET t:{tid}:market_indices (Hash, TTL 60s)
-    FinanceCollector->>PostgreSQL: t=0.7s INSERT finance_quotes × 9 (历史记录)
-    FinanceCollector->>FinanceCollector: t=0.8s 更新source_health: 成功, avg_response_time=400ms
-    FinanceCollector->>Redis: t=0.9s PUBLISH channel:finance (market_index_update)
-    Redis->>SSEEventRouter: t=1.0s SSEEventRouter → 匹配finance订阅者 → SSE推送
-    SSEEventRouter->>Frontend: t=1.1s Pinia financeStore.updateIndices → Vue渲染
+    Scheduler->>FinanceCollector: t=0s 触发采集任务 (默认间隔 30s)
+    FinanceCollector->>FinanceCollector: t=0.1s 并发拉取 13 个指数行情
+    FinanceCollector->>FinanceCollector: t=0.5s 收到 13 个指数数据
+    FinanceCollector->>Redis: t=0.6s SET t:{tid}:market_indices (TTL 60s)
+    FinanceCollector->>PostgreSQL: t=0.7s INSERT finance_quotes × 9
+    FinanceCollector->>FinanceCollector: t=0.8s 更新 source_health: 成功
+    FinanceCollector->>Redis: t=0.9s PUBLISH channel:finance
+    Redis->>SSEEventRouter: t=1.0s 匹配 finance 订阅者
+    SSEEventRouter->>Frontend: t=1.1s SSE 推送 → Vue 渲染
 
     Note over Scheduler,Frontend: 总延迟: ~1.1s (从触发到前端可见)
 ```

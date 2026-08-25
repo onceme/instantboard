@@ -165,16 +165,13 @@ ENABLED_SSO_PROVIDERS: list[str] = ["google", "github"]  # 默认值
 **启用检查**：
 
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
 graph LR
     A["前端加载"] -->|"GET /api/v1/auth/sso/providers"| B["后端返回<br/>enabled_providers"]
     B --> C["前端动态渲染<br/>只显示启用的登录按钮"]
     D["用户点击登录"] -->|"POST /api/v1/auth/sso/{provider}"| E{"provider 在<br/>ENABLED_SSO_PROVIDERS 中?"}
     E -->|"否"| F["返回 400<br/>VALIDATION_ERROR"]
     E -->|"是"| G["执行 OAuth2 流程"]
-
-    style E fill:#fff3e0,stroke:#ef6c00,color:#000
-    style F fill:#fce4ec,stroke:#c62828,color:#000
-    style G fill:#e8f5e9,stroke:#2e7d32,color:#000
 ```
 
 **设计原则**：
@@ -186,26 +183,25 @@ graph LR
 #### 统一OAuth2 流程架构
 
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "actorBkg": "#ffffff", "actorBorder": "#000000", "actorTextColor": "#000000", "actorLineColor": "#000000", "noteBkgColor": "#ffffff", "noteTextColor": "#000000", "noteBorderColor": "#000000", "activationBkgColor": "#ffffff", "activationBorderColor": "#000000", "signalColor": "#000000", "signalTextColor": "#000000", "labelBoxBkgColor": "#ffffff", "labelBoxBorderColor": "#000000", "labelTextColor": "#000000", "loopTextColor": "#000000", "altSectionBkgColor": "#ffffff", "sequenceNumberColor": "#000000", "fontSize": "14px"}, "sequence": {"mirrorActors": true, "actorMargin": 50, "width": 160, "height": 50, "messageMargin": 40, "noteMargin": 10, "boxMargin": 8, "wrap": true}}}%%
 sequenceDiagram
     participant FE as Frontend
     participant BE as Backend
     participant SSO as SSO Provider
-
-    FE->>BE: 0. GET /api/v1/auth/sso/providers
-    BE-->>FE: 返回 enabled_providers 列表
-    FE->>FE: 1. 动态渲染登录按钮（仅显示已启用提供商）
-    FE->>BE: 2. GET /api/v1/auth/sso/{provider}/authorize
-    BE->>BE: 2a. 检查 provider 是否在 enabled_providers 中
-    BE-->>FE: 返回授权URL
-    FE->>SSO: 3. 重定向到SSO提供商授权页面
-    SSO-->>FE: 4. 用户授权 → 回调到InstantBoard callback URL
-    FE->>BE: 5. POST /api/v1/auth/sso/{provider} 发送code
-    BE->>SSO: 6a. code → access_token 提供商
-    SSO-->>BE: 6b. 返回access_token
-    BE->>BE: 6c. access_token → 用户信息 → 创建/查找user → 生成JWT
-    BE-->>FE: 7. 返回 JWT access_token + refresh_token
-
-    Note over BE: 内部实现差异仅在Step 6的<br/>"code → access_token → 用户信息"部分
+    FE->>BE: 0. GET /auth/sso/providers
+    BE-->>FE: 返回 enabled_providers
+    FE->>FE: 1. 动态渲染登录按钮
+    FE->>BE: 2. GET /auth/sso/{provider}/authorize
+    BE->>BE: 2a. 校验 provider 已启用
+    BE-->>FE: 返回授权 URL
+    FE->>SSO: 3. 重定向授权页
+    SSO-->>FE: 4. 用户授权后回调
+    FE->>BE: 5. POST code
+    BE->>SSO: 6a. code 换 access_token
+    SSO-->>BE: 6b. 返回 access_token
+    BE->>BE: 6c. 取用户信息, 建/查用户, 签发 JWT
+    BE-->>FE: 7. 返回 access + refresh token
+    Note over BE: 各提供商差异仅在 Step 6
 ```
 
 #### Google OAuth2
@@ -363,6 +359,7 @@ class SSOUserInfo:
 **双 Token 方案 (Access + Refresh)**:
 
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
 graph LR
   subgraph accessToken["Access Token"]
     ATexp["有效期: 1h 可配置"]
@@ -379,7 +376,7 @@ graph LR
     RTcontent["内容: user_id, tenant_id, role, provider, refresh_version"]
     RTsign["签名: HS256 JWT_SECRET"]
     RTrotation["单次使用: 使用后旧token失效 返回新pair Rotation"]
-    RTdetect["失效检测: Redis黑名单 token_blacklist:{jti}<br/>TTL=token剩余有效期 (refresh默认7d)"]
+    RTdetect["失效检测: Redis黑名单<br/>token_blacklist:{jti}<br/>TTL=剩余有效期"]
   end
 
   subgraph lifecycle["Token 生命周期"]

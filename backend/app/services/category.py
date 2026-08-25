@@ -144,7 +144,10 @@ class CategoryService:
         if category is None:
             raise CategoryNotFound()
 
-        if category.tenant_id != tenant_id and category.tenant_id != SYSTEM_TENANT_ID:
+        # str() on both sides: category.tenant_id is a UUID ORM attribute, the JWT
+        # tenant id is a str — a direct comparison is always unequal and would 404
+        # every tenant-owned category.
+        if str(category.tenant_id) != tenant_id and category.tenant_id != SYSTEM_TENANT_ID:
             raise CategoryNotFound(message="Category not accessible for this tenant")
 
         source_count_stmt = select(func.count()).select_from(Source).where(Source.category_id == category_id)
@@ -324,7 +327,10 @@ class CategoryService:
         if category is None:
             raise CategoryNotFound()
 
-        if category.tenant_id != tenant_id and category.tenant_id != SYSTEM_TENANT_ID:
+        # str() on both sides: category.tenant_id is a UUID ORM attribute, the JWT
+        # tenant id is a str — a direct comparison is always unequal and would 404
+        # every tenant-owned category.
+        if str(category.tenant_id) != tenant_id and category.tenant_id != SYSTEM_TENANT_ID:
             raise CategoryNotFound(message="Category not accessible for this tenant")
 
         sources_stmt = (
@@ -384,7 +390,10 @@ class CategoryService:
         if category is None:
             raise CategoryNotFound()
 
-        if category.tenant_id != tenant_id and category.tenant_id != SYSTEM_TENANT_ID:
+        # str() on both sides: category.tenant_id is a UUID ORM attribute, the JWT
+        # tenant id is a str — a direct comparison is always unequal and would 404
+        # every tenant-owned category.
+        if str(category.tenant_id) != tenant_id and category.tenant_id != SYSTEM_TENANT_ID:
             raise CategoryNotFound(message="Category not accessible for this tenant")
 
         tag_count_stmt = (

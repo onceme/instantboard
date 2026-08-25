@@ -236,7 +236,7 @@ graph TD
     step3["Step 3 数据库<br/>写入 categories 行 (默认值补齐)"]
     step4["Step 4 添加数据源<br/>写入 sources / source_health"]
     step5["Step 5 采集器启动<br/>worker 仅消费启用/删除事件"]
-    step6["Step 6 SSE 推送生效<br/>频道通用, 前端待接线"]
+    step6["Step 6 前台视图接线完成<br/>REST 泛型流 (/c/:slug), SSE 频道仍未订阅"]
     step1 --> step2 --> step3 --> step4 --> step5 --> step6
 ```
 
@@ -247,12 +247,13 @@ graph TD
 3. **Step 3 数据库 — categories 表**：INSERT categories：id = gen_random_uuid()，tenant_id = {current_tenant}，示例 name = 体育、slug = sports，icon = folder (默认)，color = #3B82F6 (默认)，type = custom，refresh_interval_seconds = 300 (默认)，is_active = true。
 4. **Step 4 添加数据源 — 数据源管理面板**：POST /api/v1/sources：name / category_id / source_type / url / refresh_interval_seconds / config.library → collector_available 校验 (resolve_collector) → INSERT INTO sources + source_health → 发布 source_created 事件 (channel:dashboard⚠️)。
 5. **Step 5 采集器启动 — worker 事件消费 (现状说明)**：worker 仅消费 SOURCE_EVENT_NAMES = {source_enabled, source_disabled, source_deleted}；source_created 被 worker 忽略 ⚠️ → 新源需 worker 重启或后续启用操作 (source_enabled → add_job) 才开始采集；启动后：Collector采集 → Processor处理 → Store存储 → SSE推送。
-6. **Step 6 SSE 推送生效 — 后端通用, 前端待接线 (说明)**：后端 /api/v1/stream/{category} 频道通用，可 EventSource(/api/v1/stream/sports) 订阅 ⚠️；前端侧边栏目前固定 4 项：财经/科技/仪表盘/设置 (Sidebar.vue) → 自定义分类不会自动生成导航条目与视图；stream/{category} 目前仅被前端订阅 finance/tech/dashboard。
+6. **Step 6 前台视图接线完成 — REST 泛型流已接线, SSE 频道仍未订阅 (现状)**：新建自定义分类后，前端侧边栏在固定 4 项（财经/科技/仪表盘/设置）之下动态渲染该分类条目（`type=custom` 且 `is_active`，`Sidebar.vue`），点击路由到 `/c/{slug}` 通用信息流视图（`CategoryView.vue`，复用 NewsCard + useInfiniteScroll 无限滚动）；条目经 `GET /api/v1/categories/{id}/items` 拉取（分页 + `since` + `sort`（time 默认/hot/relevance），响应复用 TechNewsResponse schema）。⚠️ 实时推送仍待接线：后端 /api/v1/stream/{category} 频道通用，可 EventSource(/api/v1/stream/sports) 订阅，但 stream/{category} 目前仍仅被前端订阅 finance/tech/dashboard，自定义分类视图不订阅其 SSE 频道。
 
-> ⚠️ **三处未实现（潜在体验问题）**：
+> ⚠️ **两处未实现（潜在体验问题）**：
 > 1. **前端表单不完整**：`CategoryEditor.vue:63-78` 只提交 name+description（type 固定为 custom），后端支持的 slug/icon/color/刷新频率/关键词过滤均无 UI 控件；
-> 2. **新建源不会自动开始采集**：`source_created` 发布在 **channel:dashboard**（`services/source.py:286-294`），worker 忽略该事件（`scheduler/worker.py:35-37`），需 worker 重启或后续启用操作；
-> 3. **自定义分类无前台视图**：侧边导航写死（`Sidebar.vue:21-32`），无 SportsView/sportsStore，后端 SSE 频道虽通用但前端未订阅。
+> 2. **新建源不会自动开始采集**：`source_created` 发布在 **channel:dashboard**（`services/source.py:286-294`），worker 忽略该事件（`scheduler/worker.py:35-37`），需 worker 重启或后续启用操作。
+>
+> ✅ 原第 3 条"自定义分类无前台视图"已实现：`Sidebar.vue` 在固定导航项之下动态渲染自定义分类条目（lucide 图标名映射 + Folder 兜底），路由到 `/c/:slug` 的 `CategoryView.vue` 通用信息流视图（无需逐分类建 SportsView/sportsStore），条目经 `GET /api/v1/categories/{id}/items` 拉取（见 §3.4.5）；仍遗留：前端未订阅自定义分类的 SSE 频道（见 Step 6）。
 
 #### 3.3.2 修改分类的流程
 
@@ -360,8 +361,11 @@ SQL查询逻辑:
 
 结果: 租户看到 = 预定义分类(不可删/不可改) + 自定义分类(可删/可改)
 前端: 分类管理在 SettingsView → CategoryEditor 面板;
-     ⚠️ 侧边导航目前固定4项 财经/科技/仪表盘/设置 (Sidebar.vue:21-32),
-     不随分类列表动态扩展
+     侧边导航固定项为 财经/科技/仪表盘/设置 (Sidebar.vue)，
+     其下动态渲染当前租户的自定义分类条目 (type=custom 且
+     is_active，lucide 图标名映射 + Folder 兜底)，点击路由到
+     /c/{slug} 通用信息流视图 CategoryView；
+     预定义分类仍走各自专属视图，不进入 /c/{slug}
 
 数据隔离:
   - 租户 A 看不到租户 B 的自定义分类 (WHERE tenant_id隔离)
@@ -423,6 +427,7 @@ SQL查询逻辑:
 | `/api/v1/categories/predefined` | GET | 系统预定义分类列表（含 source_count，按 name 升序） | `services/category.py::get_predefined_categories` |
 | `/api/v1/categories/{id}/sources` | GET | 分类详情 + 全部数据源列表（含 health_status / priority / refresh_interval_seconds） | `get_category_with_sources` |
 | `/api/v1/categories/{id}/subcategories` | GET | 二级子分类动态统计：按 `items.topic_tags` 聚合计数；财经/科技按固定二级 slug 白名单过滤，自定义分类返回全部标签 | `list_subcategories`（:375-460） |
+| `/api/v1/categories/{id}/items` | GET | 通用分类条目流：分页（`page`/`page_size`，PaginationParams）+ `since`（ISO-8601 下界）+ `sort`（time 默认/hot/relevance）；响应复用 TechNewsResponse schema；分类不存在或跨租户 → 404 `CATEGORY_NOT_FOUND` | `services/category.py::list_category_items`（查询复用 `TechService.list_category_items`），映射复用 `api/v1/tech.py::build_news_response` |
 
 > 数据模型补充：categories 表另含 `priority_sort`（Boolean，默认 false）与 `is_active` 字段（`models/category.py:24-25`）；`CategoryUpdate` 支持 `priority_sort` / `is_active` 的部分更新。
 

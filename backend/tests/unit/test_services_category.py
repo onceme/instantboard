@@ -821,3 +821,76 @@ class TestListSubcategories:
         result = await service.list_subcategories(str(cat.id), "tenant-1")
         china_stock_count = sum(1 for s in result.data if s.tag == "china-stock")
         assert china_stock_count == 1
+
+
+class TestListCategoryItems:
+    async def test_missing_category_raises_not_found(self):
+        db, mock_result = _mock_db()
+        redis = _mock_redis()
+        mock_result.scalar_one_or_none.return_value = None
+
+        service = CategoryService(db, redis)
+        with pytest.raises(CategoryNotFound):
+            await service.list_category_items(str(uuid.uuid4()), "tenant-1")
+
+    async def test_cross_tenant_raises_not_found(self):
+        db, mock_result = _mock_db()
+        redis = _mock_redis()
+
+        cat = _make_category(tenant_id=uuid.uuid4())
+        mock_result.scalar_one_or_none.return_value = cat
+
+        service = CategoryService(db, redis)
+        with pytest.raises(CategoryNotFound) as exc_info:
+            await service.list_category_items(str(cat.id), "other-tenant")
+        assert "not accessible" in str(exc_info.value.error_message)
+
+    async def test_own_tenant_delegates_to_tech_service(self):
+        db, mock_result = _mock_db()
+        redis = _mock_redis()
+
+        tenant_id = str(uuid.uuid4())
+        cat = _make_category(tenant_id=tenant_id)
+        mock_result.scalar_one_or_none.return_value = cat
+
+        envelope = {"data": [], "meta": {"total": 0, "page": 2, "page_size": 7}}
+        with patch("app.services.category.TechService") as mock_tech_cls:
+            mock_tech_cls.return_value.list_category_items = AsyncMock(return_value=envelope)
+
+            service = CategoryService(db, redis)
+            result = await service.list_category_items(
+                str(cat.id),
+                tenant_id,
+                sort="time",
+                page=2,
+                page_size=7,
+                since="2026-01-01T00:00:00Z",
+            )
+
+        assert result == envelope
+        mock_tech_cls.assert_called_once_with(db=db, redis=redis)
+        mock_tech_cls.return_value.list_category_items.assert_awaited_once_with(
+            category_id=cat.id,
+            tenant_id=tenant_id,
+            sort="time",
+            page=2,
+            page_size=7,
+            since="2026-01-01T00:00:00Z",
+        )
+
+    async def test_system_tenant_category_is_accessible(self):
+        db, mock_result = _mock_db()
+        redis = _mock_redis()
+
+        cat = _make_category(tenant_id=SYSTEM_TENANT_ID)
+        mock_result.scalar_one_or_none.return_value = cat
+
+        envelope = {"data": [], "meta": {"total": 0, "page": 1, "page_size": 20}}
+        with patch("app.services.category.TechService") as mock_tech_cls:
+            mock_tech_cls.return_value.list_category_items = AsyncMock(return_value=envelope)
+
+            service = CategoryService(db, redis)
+            result = await service.list_category_items(str(cat.id), "tenant-1")
+
+        assert result == envelope
+        mock_tech_cls.return_value.list_category_items.assert_awaited_once()

@@ -228,3 +228,127 @@ def _token(tenant_id=None):
 
 # Need the import here
 from app.core.security import create_access_token  # noqa: E402
+
+
+def _item_response(**overrides):
+    base = {
+        "id": str(uuid.uuid4()),
+        "title": "Test Item",
+        "summary": "Summary",
+        "url": "https://example.com/item",
+        "source_name": "TestSource",
+        "source_id": str(uuid.uuid4()),
+        "category_id": str(uuid.uuid4()),
+        "topic_tags": ["custom"],
+        "domain_tag": None,
+        "published_at": NOW,
+        "fetched_at": NOW,
+        "image_url": None,
+        "priority": 5,
+        "extra_data": {},
+        "hot_score": 5.0,
+    }
+    base.update(overrides)
+    return base
+
+
+class TestListCategoryItems:
+    @patch("app.api.v1.categories._get_category_service")
+    def test_list_items_success_with_pagination_echo(self, mock_svc_fn, client):
+        headers = {"Authorization": f"Bearer {_token()}"}
+        cid = str(uuid.uuid4())
+        mock_svc = AsyncMock()
+        mock_svc.list_category_items.return_value = {
+            "data": [_item_response(title="First"), _item_response(title="Second")],
+            "meta": {"total": 12, "page": 2, "page_size": 5},
+        }
+        mock_svc_fn.return_value = mock_svc
+
+        resp = client.get(f"/api/v1/categories/{cid}/items?page=2&page_size=5", headers=headers)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert [item["title"] for item in body["data"]] == ["First", "Second"]
+        assert body["meta"] == {"total": 12, "page": 2, "page_size": 5}
+
+    @patch("app.api.v1.categories._get_category_service")
+    def test_list_items_forwards_since_sort_and_pagination(self, mock_svc_fn, client):
+        tenant_id = str(uuid.uuid4())
+        headers = {"Authorization": f"Bearer {_token(tenant_id)}"}
+        cid = str(uuid.uuid4())
+        mock_svc = AsyncMock()
+        mock_svc.list_category_items.return_value = {
+            "data": [],
+            "meta": {"total": 0, "page": 3, "page_size": 10},
+        }
+        mock_svc_fn.return_value = mock_svc
+
+        since = "2026-01-01T00:00:00Z"
+        resp = client.get(
+            f"/api/v1/categories/{cid}/items?page=3&page_size=10&sort=hot&since={since}",
+            headers=headers,
+        )
+        assert resp.status_code == 200
+        mock_svc.list_category_items.assert_awaited_once_with(
+            category_id=cid,
+            tenant_id=tenant_id,
+            sort="hot",
+            page=3,
+            page_size=10,
+            since=since,
+        )
+
+    @patch("app.api.v1.categories._get_category_service")
+    def test_list_items_defaults_to_time_sort(self, mock_svc_fn, client):
+        headers = {"Authorization": f"Bearer {_token()}"}
+        cid = str(uuid.uuid4())
+        mock_svc = AsyncMock()
+        mock_svc.list_category_items.return_value = {
+            "data": [],
+            "meta": {"total": 0, "page": 1, "page_size": 20},
+        }
+        mock_svc_fn.return_value = mock_svc
+
+        resp = client.get(f"/api/v1/categories/{cid}/items", headers=headers)
+        assert resp.status_code == 200
+        assert mock_svc.list_category_items.await_args.kwargs["sort"] == "time"
+        assert mock_svc.list_category_items.await_args.kwargs["since"] is None
+
+    @patch("app.api.v1.categories._get_category_service")
+    def test_list_items_invalid_sort_rejected(self, mock_svc_fn, client):
+        headers = {"Authorization": f"Bearer {_token()}"}
+        mock_svc_fn.return_value = AsyncMock()
+
+        resp = client.get(f"/api/v1/categories/{uuid.uuid4()}/items?sort=bogus", headers=headers)
+        assert resp.status_code == 422
+
+    @patch("app.api.v1.categories._get_category_service")
+    def test_list_items_category_not_found(self, mock_svc_fn, client):
+        from app.core.exceptions import CategoryNotFound
+
+        headers = {"Authorization": f"Bearer {_token()}"}
+        mock_svc = AsyncMock()
+        mock_svc.list_category_items.side_effect = CategoryNotFound()
+        mock_svc_fn.return_value = mock_svc
+
+        resp = client.get(f"/api/v1/categories/{uuid.uuid4()}/items", headers=headers)
+        assert resp.status_code == 404
+        assert resp.json()["detail"]["error"]["code"] == "CATEGORY_NOT_FOUND"
+
+    @patch("app.api.v1.categories._get_category_service")
+    def test_list_items_cross_tenant_returns_404(self, mock_svc_fn, client):
+        from app.core.exceptions import CategoryNotFound
+
+        headers = {"Authorization": f"Bearer {_token()}"}
+        mock_svc = AsyncMock()
+        mock_svc.list_category_items.side_effect = CategoryNotFound(message="Category not accessible for this tenant")
+        mock_svc_fn.return_value = mock_svc
+
+        resp = client.get(f"/api/v1/categories/{uuid.uuid4()}/items", headers=headers)
+        assert resp.status_code == 404
+        error = resp.json()["detail"]["error"]
+        assert error["code"] == "CATEGORY_NOT_FOUND"
+        assert error["message"] == "Category not accessible for this tenant"
+
+    def test_list_items_no_auth(self, client):
+        resp = client.get(f"/api/v1/categories/{uuid.uuid4()}/items")
+        assert resp.status_code == 401

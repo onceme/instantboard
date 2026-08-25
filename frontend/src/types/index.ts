@@ -180,7 +180,9 @@ export interface TechNewsItem {
   title: string;
   summary?: string;
   url: string;
-  source_name: string;
+  // Backend TechNewsResponse.source_name is str | None (the generic
+  // /categories/{id}/items feed also uses this shape)
+  source_name: string | null;
   source_id: string;
   category_id: string;
   topic_tags: string[];

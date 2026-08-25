@@ -24,6 +24,7 @@ from app.schemas.category import (
     CategoryWithSourcesResponse,
     SubCategoryResponse,
 )
+from app.services.tech import TechService
 
 logger = logging.getLogger(__name__)
 
@@ -384,6 +385,39 @@ class CategoryService:
                 created_at=category.created_at,
                 updated_at=category.updated_at,
             ),
+        )
+
+    async def list_category_items(
+        self,
+        category_id: str,
+        tenant_id: str,
+        sort: str = "time",
+        page: int = 1,
+        page_size: int = 20,
+        since: str | None = None,
+    ) -> dict:
+        stmt = select(Category).where(Category.id == category_id)
+        result = await self.db.execute(stmt)
+        category = result.scalar_one_or_none()
+
+        if category is None:
+            raise CategoryNotFound()
+
+        # Cross-tenant access is reported as 404 (not 403) to avoid leaking the
+        # existence of other tenants' categories — same rule as get_category.
+        # str() on both sides: category.tenant_id is a UUID ORM attribute, the JWT
+        # tenant id is a str.
+        if str(category.tenant_id) != tenant_id and category.tenant_id != SYSTEM_TENANT_ID:
+            raise CategoryNotFound(message="Category not accessible for this tenant")
+
+        tech_service = TechService(db=self.db, redis=self.redis)
+        return await tech_service.list_category_items(
+            category_id=category.id,
+            tenant_id=tenant_id,
+            sort=sort,
+            page=page,
+            page_size=page_size,
+            since=since,
         )
 
     async def list_subcategories(

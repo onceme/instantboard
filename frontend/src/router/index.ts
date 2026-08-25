@@ -25,6 +25,12 @@ const routes = [
     component: () => import("@/views/TechView.vue"),
   },
   {
+    // Generic feed view for custom categories; plain login guard like /
+    path: "/c/:slug",
+    name: "category",
+    component: () => import("@/views/CategoryView.vue"),
+  },
+  {
     path: "/dashboard",
     name: "dashboard",
     component: () => import("@/views/DashboardView.vue"),

@@ -16,30 +16,12 @@ async def _get_tech_service(db: AsyncSession = Depends(get_db), redis: Redis = D
     return TechService(db=db, redis=redis)
 
 
-@router.get("/news", response_model=PaginatedResponse[TechNewsResponse])
-async def get_tech_news(
-    domain: str | None = Query(default=None),
-    subcategory: str | None = Query(default=None),
-    sort: str = Query(default="hot", pattern="^(hot|time|relevance)$"),
-    source_id: str | None = Query(default=None),
-    since: str | None = Query(default=None),
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=1, le=100),
-    service: TechService = Depends(_get_tech_service),
-    user: dict = Depends(get_current_user),
-    tenant_id: str = Depends(get_current_tenant),
-):
-    result = await service.get_news(
-        tenant_id=tenant_id,
-        domain=domain,
-        subcategory=subcategory,
-        sort=sort,
-        page=page,
-        page_size=page_size,
-        source_id=source_id,
-        since=since,
-    )
+def build_news_response(result: dict) -> PaginatedResponse[TechNewsResponse]:
+    """Map the TechService item envelope to the paginated response schema.
 
+    Shared with the generic GET /categories/{id}/items endpoint, which reuses the
+    same item query/response shape for any category.
+    """
     data = []
     for item in result["data"]:
         published_at = item.get("published_at")
@@ -80,6 +62,33 @@ async def get_tech_news(
         data=data,
         meta=PaginatedMeta(**result["meta"]),
     )
+
+
+@router.get("/news", response_model=PaginatedResponse[TechNewsResponse])
+async def get_tech_news(
+    domain: str | None = Query(default=None),
+    subcategory: str | None = Query(default=None),
+    sort: str = Query(default="hot", pattern="^(hot|time|relevance)$"),
+    source_id: str | None = Query(default=None),
+    since: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    service: TechService = Depends(_get_tech_service),
+    user: dict = Depends(get_current_user),
+    tenant_id: str = Depends(get_current_tenant),
+):
+    result = await service.get_news(
+        tenant_id=tenant_id,
+        domain=domain,
+        subcategory=subcategory,
+        sort=sort,
+        page=page,
+        page_size=page_size,
+        source_id=source_id,
+        since=since,
+    )
+
+    return build_news_response(result)
 
 
 @router.get("/topics", response_model=SuccessResponse[list[TechTopicResponse]])

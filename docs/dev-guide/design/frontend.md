@@ -31,10 +31,11 @@ frontend/src/
 │   ├── finance.ts
 │   ├── sources.ts
 │   └── tech.ts
-├── router/                 # 路由: / → Finance, /tech, /dashboard, /settings, /login, /auth/callback, /ibadmin
-├── views/                  # 共 7 个视图
+├── router/                 # 路由: / → Finance, /tech, /c/:slug, /dashboard, /settings, /login, /auth/callback, /ibadmin
+├── views/                  # 共 8 个视图
 │   ├── FinanceView.vue
 │   ├── TechView.vue
+│   ├── CategoryView.vue    # /c/:slug 自定义分类通用信息流
 │   ├── DashboardView.vue
 │   ├── SettingsView.vue
 │   ├── LoginView.vue
@@ -96,7 +97,8 @@ frontend/src/
 graph TD
   AppVue["App.vue → AppLayout"]
   AppVue --> SideVue["Sidebar.vue — 侧边导航"]
-  SideVue --> NavItems["导航项: Finance / Tech / Dashboard / Settings"]
+  SideVue --> NavItems["固定导航项: Finance / Tech / Dashboard / Settings"]
+  SideVue --> CustomNav["自定义分类动态条目 (/c/:slug)<br/>type=custom 且启用, 图标按 lucide 名映射 (Folder 兜底)"]
   SideVue --> AdminNav["admin-entry: /ibadmin<br/>管理员登录后切换第二套导航"]
   SideVue --> ThemeSide["ThemeToggle"]
 ```
@@ -121,6 +123,7 @@ graph TD
 
 - **FinanceView**: FinanceSubNav + FinanceGrid；右栏（≥1440px）WatchlistMini + FundNAV；Overview 面板目前只渲染 MarketIndices（见 [finance-tab.md](finance-tab.md)）
 - **TechView**: TechSubNav + TopicFilter + CategoryPanel×4 / NewsFeed 双视图（见 [tech-tab.md](tech-tab.md)）
+- **CategoryView**: /c/:slug 自定义分类通用信息流 — 按 slug 解析自定义分类（未命中显示 EmptyState），GET /categories/{id}/items 分页拉取（useInfiniteScroll 无限滚动，复用 NewsCard）；加载/错误/重试与 FinanceView 模式一致（见 [content-categories.md](content-categories.md) §3.3.1 Step 6）
 - **DashboardView**: HealthPanel + 双列 flex（左 SystemStatus/DataSourcesHealth，右 ServicesHealth/SSEStats）（见 [dashboard-tab.md](dashboard-tab.md)）
 - **SettingsView**: CategoryEditor / SourceEditor / ProfileSettings / ThemeToggle
 - **LoginView**: SSO 按钮；SSOCallbackView 处理 /auth/callback；AdminLoginView 为 /ibadmin 独立入口
@@ -170,6 +173,7 @@ graph LR
       Logo["IB Logo"]
       NavFin["Finance"]
       NavTech["Tech"]
+      NavCustom["自定义分类 (动态, /c/:slug)"]
       NavDash["Dashboard"]
       NavSet["Settings"]
       ThemeBtn["ThemeToggle"]

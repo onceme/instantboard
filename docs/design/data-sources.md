@@ -107,8 +107,8 @@ cross_refs: [architecture.md, api.md, database.md, data-flow.md, finance-tab.md,
 | **URL** | `https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol=AAPL&apikey={KEY}` |
 | **数据格式** | JSON |
 | **费用** | 免费(5 calls/min) / Premium($49/月, 600 calls/min) |
-| **API Key** | 需要 (`ALPHA_VANTAGE_API_KEY`) |
-| **频率限制** | 5 calls/min (免费) / 600/min (付费) |
+| **API Key** | 需要 (`ALPHA_VANTAGE_API_KEY`)，支持多Key池 (`ALPHA_VANTAGE_API_KEYS`，优先于单Key) |
+| **频率限制** | 5 calls/min (免费) / 600/min (付费)；429时标记该Key限流并轮换下一Key（见§3.6.2） |
 | **数据延迟** | 实时 (付费) / 15min延迟 (免费部分功能) |
 | **优点** | 官方API、有SLA、技术指标丰富 |
 | **缺点** | 免费Key严格限流(5/min)、付费成本、非全球覆盖 |
@@ -144,7 +144,7 @@ cross_refs: [architecture.md, api.md, database.md, data-flow.md, finance-tab.md,
 | **数据格式** | JSON |
 | **费用** | 免费(60 calls/min) / Premium |
 | **API Key** | 需要 (`FINNHUB_API_KEY`), 支持多Key池 (`FINNHUB_API_KEYS`) |
-| **频率限制** | 60 calls/min (免费), 429时自动等待60s重试 |
+| **频率限制** | 60 calls/min (免费), 429时标记该Key限流并轮换下一Key（见§3.6.2） |
 | **数据延迟** | 实时 |
 | **优点** | WebSocket实时推送、官方API、搜索和基本面数据丰富 |
 | **缺点** | 免费版大宗商品支持有限、覆盖不如yfinance全面 |
@@ -171,11 +171,12 @@ cross_refs: [architecture.md, api.md, database.md, data-flow.md, finance-tab.md,
 
 支持的 `data_type` 值: `stock_quote`, `market_indices`, `commodities`, `search`, `company_profile`
 
-**API Key轮换策略**: 多Key池进程内round-robin（`FinnhubCollector._key_index` 顺序取Key，内存索引、进程重启丢失、不跨进程/实例共享）；**无429限流标记、无Key间限流状态共享、无Key失效通知**（429仅使当前请求等待60s重试一次）
+**API Key轮换策略**: 统一 `APIKeyManager`（`app/core/api_keys.py`，见§3.6.2）。Key池由 `settings.finnhub_api_keys` + `settings.finnhub_api_key` 合并，采集器构造时建池；轮换索引存 Redis（`apikey:rotation:finnhub`，INCR 自增，跨进程/实例共享、重启不丢）。收到429→标记该Key限流（`apikey:limited:finnhub:{hash}`，TTL默认60s冷却）并轮换下一Key；收到401/403→标记失效（`apikey:invalid:finnhub:{hash}`，无TTL，永久跳过直至 `clear()`）。Redis 故障时退化为进程内 round-robin（fail-open）。
 
 **错误处理**:
-- 401/403: 标记Key失效, 返回None → 上层触发failover到下一个数据源
-- 429: 等待60秒重试一次
+- 401/403: 标记该Key失效并轮换；池中无其他可用Key → 返回None → 上层触发failover到下一个数据源
+- 429: 标记该Key限流（冷却60s）并轮换下一Key重试
+- 全部Key限流: 返回None → 上层触发failover
 - 超时: 10秒, 走BaseCollector的retry机制 (3次指数退避)
 
 #### 3.2.5 天天基金 (中国基金NAV)
@@ -434,44 +435,28 @@ graph TD
 
 #### 3.6.2 Key轮换策略
 
-> ⚠️ **未实现**：`config/api_keys.py::APIKeyManager` **不存在**——无 Redis 轮换索引、无 429 限流标记、无 Key 失效检测/通知、无 `AllKeysRateLimited` 异常。现状仅 Finnhub 多 Key 进程内 round-robin（`finnhub_collector.py:34-52`，见 §3.2.4）。以下为设计意图，保留供参考：
+> ✅ **已实现**：统一Key管理器 `app/core/api_keys.py::APIKeyManager`。Finnhub 与 Alpha Vantage 采集器已迁移（构造时建池），替代了早期各自的进程内 round-robin。
+
+机制:
+1. **多Key池**: `FINNHUB_API_KEYS=k1,k2` / `ALPHA_VANTAGE_API_KEYS=key1,key2`（逗号分隔），采集器 `_load_api_keys()` 合并单Key配置项
+2. **自动轮换**: 每次取Key对轮换索引 `apikey:rotation:{service}` 执行 INCR，跨进程/重启共享；从下一个候选开始最多绕一圈，跳过失效/限流中的Key
+3. **限流检测**: 采集器收到429 → `mark_rate_limited(key)` 写限流标记 `apikey:limited:{service}:{key_hash}`（TTL=60s，`cooldown_seconds` 可调），冷却过期自动恢复
+4. **失效检测**: 采集器收到401/403 → `mark_invalid(key)` 写失效标记 `apikey:invalid:{service}:{key_hash}`（无TTL，永久跳过，需 `clear(key)` 手动恢复）
+5. **异常语义**: 全部限流 → `AllKeysRateLimited`（临时）；池为空或全部失效 → `AllKeysUnavailable`（永久）。采集器捕获后按"无可用Key"路径返回 None → 采集失败 → 财经源触发 failover（见§3.5.1）
+6. **存储安全**: Key 以 md5 前12位哈希（`key_hash`）映射标记，明文不落 Redis
+7. **Redis 降级**: 所有 Redis 操作异常仅记日志；`get_key` 退化为进程内 round-robin（fail-open），Redis 故障不阻塞采集
 
 ```python
-# config/api_keys.py (设计意图, 未实现)
-
+# app/core/api_keys.py (已实现)
 class APIKeyManager:
-    """
-    API Key管理器
-    
-    功能:
-    1. 多Key池: 支持同一服务配置多个Key (避免单Key限流)
-       ALPHA_VANTAGE_API_KEYS=key1,key2,key3
-       
-    2. 自动轮换: 按顺序使用Key, 限流时切换下一个
-       current_key_index = Redis GET api_key_index:{service}
-       
-    3. 限流检测: 收到429响应 → 标记当前Key限流, 切换下一个
-       限流Key: Redis SET限流标记 TTL=60s
-       
-    4. Key失效检测: Key返回401 → 标记失效, 通知管理员
-       失效Key: 不再使用, Dashboard显示警告
-    """
-    
-    def get_next_key(self, service: str) -> str:
-        keys = settings.get_list(f"{service}_API_KEYS")
-        if len(keys) == 1:
-            return keys[0]
-        
-        # 轮换: 跳过限流/失效的Key
-        current_idx = int(redis.get(f"api_key_index:{service}") or "0")
-        for i in range(len(keys)):
-            idx = (current_idx + i) % len(keys)
-            if not redis.exists(f"api_key_ratelimited:{service}:{idx}"):
-                redis.set(f"api_key_index:{service}", idx)
-                return keys[idx]
-        
-        # 所有Key限流 → 使用最早解除限流的Key
-        raise AllKeysRateLimited(f"{service}所有API Key均限流")
+    def __init__(self, service: str, keys: list[str], redis_client=None): ...  # redis_client 供测试注入
+
+    async def get_key(self) -> str            # INCR轮换索引, 跳过失效/限流, 最多绕一圈
+    async def mark_rate_limited(self, key, cooldown_seconds=60)  # 429 → TTL限流标记
+    async def mark_invalid(self, key)         # 401/403 → 永久失效标记
+    async def clear(self, key)                # 移除限流+失效标记（手动恢复）
+
+# Redis 不可用时抛 AllKeysRateLimited / AllKeysUnavailable; Redis 故障时 fail-open 回退进程内轮换
 ```
 
 #### 3.6.3 Key配置清单
@@ -479,8 +464,8 @@ class APIKeyManager:
 | 服务 | 环境变量 | 必需? | 免费 | 付费 | 说明 |
 |------|---------|------|------|------|------|
 | Yahoo Finance | `YAHOO_FINANCE_API_KEY` ⚠️死配置 | 否 | - | - | httpx直连、无需Key；字段已定义但无使用方 |
-| Alpha Vantage | `ALPHA_VANTAGE_API_KEY` / `ALPHA_VANTAGE_API_KEYS` | 推荐(备用源) | 5/min | $49/月 600/min | 支持多Key列表（逗号分隔，进程内round-robin），`ALPHA_VANTAGE_API_KEYS` 优先于单Key |
-| Finnhub | `FINNHUB_API_KEY` / `FINNHUB_API_KEYS` | 可选 | 60/min | $29/月 | 支持多Key列表（进程内round-robin） |
+| Alpha Vantage | `ALPHA_VANTAGE_API_KEY` / `ALPHA_VANTAGE_API_KEYS` | 推荐(备用源) | 5/min | $49/月 600/min | 支持多Key列表（逗号分隔，统一APIKeyManager轮换/限流标记/失效检测，见§3.6.2），`ALPHA_VANTAGE_API_KEYS` 优先于单Key |
+| Finnhub | `FINNHUB_API_KEY` / `FINNHUB_API_KEYS` | 可选 | 60/min | $29/月 | 支持多Key列表（统一APIKeyManager轮换/限流标记/失效检测，见§3.6.2） |
 | IEX Cloud | ⚠️ 未实现 | 可选 | 限量 | $9/月起 | 无采集器/配置/种子 |
 | 东方财富 | 无 | 否 | - | - | 无需Key, 控制频率即可 |
 | Reddit | ⚠️ 未实现 | 可选 | 限量 | - | 无 `REDDIT_CLIENT_ID` 配置、无 social 采集器 |
@@ -494,7 +479,7 @@ class APIKeyManager:
 | 科技源策略 | 独立无failover | RSS源内容不同不可替代，失败仅标记不影响其他 |
 | 健康监控 | source_health表+Redis缓存 | PG持久记录+Redis快速查询，双重保障 |
 | API Key存储 | .env环境变量 | 不入代码/数据库/日志，安全且易管理 |
-| API Key限流处理 | Finnhub/Alpha Vantage多Key池进程内round-robin | 缓解单Key限流；统一Key管理器（限流标记/失效检测）未实现，见§3.6.2 |
+| API Key限流处理 | 统一 `APIKeyManager`（Redis 轮换索引 + 429限流标记 + 401/403永久失效标记） | `app/core/api_keys.py`，Finnhub/Alpha Vantage 已接入（见§3.6.2）；跨进程轮换、限流冷却自恢复、失效永久跳过，Redis 故障时 fail-open 回退进程内轮换 |
 | 采集频率 | 分类级别配置(30s-5min可调) | 高频行情30s, 低频新闻5min, 灵活可配 |
 
 ## 5. 边界情况

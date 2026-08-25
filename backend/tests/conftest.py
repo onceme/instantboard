@@ -152,26 +152,52 @@ def redis_mock():
     class MockRedis:
         def __init__(self):
             self._data = {}
+            self._expiry = {}
+            self._clock = 0.0
+
+        def advance(self, seconds):
+            """Fast-forward the virtual clock so TTL-marked keys expire deterministically."""
+            self._clock += seconds
+
+        def _purge_expired(self, key):
+            expires_at = self._expiry.get(key)
+            if expires_at is not None and self._clock >= expires_at:
+                self._data.pop(key, None)
+                self._expiry.pop(key, None)
 
         async def ping(self):
             return True
 
         async def get(self, key):
+            self._purge_expired(key)
             return self._data.get(key)
 
         async def set(self, key, value, ex=None):
             self._data[key] = value
+            if ex is not None:
+                self._expiry[key] = self._clock + ex
+            else:
+                self._expiry.pop(key, None)
 
         async def delete(self, key):
             self._data.pop(key, None)
+            self._expiry.pop(key, None)
+
+        async def exists(self, key):
+            self._purge_expired(key)
+            return int(key in self._data)
 
         async def incr(self, key):
+            self._purge_expired(key)
             value = int(self._data.get(key, 0)) + 1
             self._data[key] = value
             return value
 
         async def expire(self, key, seconds):
-            return key in self._data
+            if key not in self._data:
+                return False
+            self._expiry[key] = self._clock + seconds
+            return True
 
         async def publish(self, channel, message):
             pass

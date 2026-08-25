@@ -62,6 +62,9 @@ class RedisKeys:
     ADMIN_LOGIN_LOCK_IP = "admin_login:lock_ip:{ip}"
     WORKER_HEARTBEAT = "scheduler:worker:heartbeat"
     STREAM_HISTORY = "stream:history:{category}"
+    APIKEY_ROTATION = "apikey:rotation:{service}"
+    APIKEY_LIMITED = "apikey:limited:{service}:{key_hash}"
+    APIKEY_INVALID = "apikey:invalid:{service}:{key_hash}"
 
     SEARCH_TTL = 300
     STREAM_HISTORY_LIMIT = 500

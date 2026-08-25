@@ -90,6 +90,7 @@ def _clean_redis_state(e2e_env):
     """Wipe cached/blacklist/dedup keys so scenarios start from a clean slate."""
     _, mock_redis = e2e_env
     mock_redis._data.clear()
+    mock_redis._expiry.clear()
 
 
 @pytest.fixture(autouse=True)

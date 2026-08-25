@@ -15,6 +15,7 @@ from app.collectors.finance.yfinance_collector import YFinanceCollector
 from app.collectors.tech.arxiv_collector import ArxivCollector
 from app.collectors.tech.hackernews_collector import HackerNewsCollector
 from app.collectors.tech.rss_collector import RSSCollector, _parse_feedparser_date
+from app.core.api_keys import APIKeyManager
 
 
 def _make_source(**kwargs):
@@ -525,21 +526,23 @@ class TestAlphaVantageCollector:
             c = AlphaVantageCollector()
         assert c._api_keys == []
 
-    async def test_key_rotation_order(self):
+    async def test_key_rotation_order(self, redis_mock):
+        manager = APIKeyManager("alpha_vantage", ["key1", "key2"], redis_client=redis_mock)
         with patch.object(AlphaVantageCollector, "_load_api_keys", return_value=["key1", "key2"]):
-            c = AlphaVantageCollector()
-        assert c._get_next_key() == "key1"
-        assert c._get_next_key() == "key2"
-        assert c._get_next_key() == "key1"
+            c = AlphaVantageCollector(key_manager=manager)
+        assert await c._key_manager.get_key() == "key1"
+        assert await c._key_manager.get_key() == "key2"
+        assert await c._key_manager.get_key() == "key1"
 
     async def test_get_next_key_empty_returns_none(self):
         with patch.object(AlphaVantageCollector, "_load_api_keys", return_value=[]):
             c = AlphaVantageCollector()
-        assert c._get_next_key() is None
+        assert await c._next_key_or_none() is None
 
-    async def test_fetch_data_rotates_keys_across_requests(self):
+    async def test_fetch_data_rotates_keys_across_requests(self, redis_mock):
+        manager = APIKeyManager("alpha_vantage", ["key1", "key2"], redis_client=redis_mock)
         with patch.object(AlphaVantageCollector, "_load_api_keys", return_value=["key1", "key2"]):
-            c = AlphaVantageCollector()
+            c = AlphaVantageCollector(key_manager=manager)
         source = _make_source(config={"symbols": ["AAPL", "MSFT"], "function": "TIME_SERIES_INTRADAY"})
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -877,12 +880,13 @@ class TestFinnhubCollector:
         )
         assert len(valid) == 2
 
-    async def test_key_rotation(self):
+    async def test_key_rotation(self, redis_mock):
+        manager = APIKeyManager("finnhub", ["key1", "key2"], redis_client=redis_mock)
         with patch.object(FinnhubCollector, "_load_api_keys", return_value=["key1", "key2"]):
-            c = FinnhubCollector()
-        k1 = c._get_next_key()
-        k2 = c._get_next_key()
-        k3 = c._get_next_key()
+            c = FinnhubCollector(key_manager=manager)
+        k1 = await c._key_manager.get_key()
+        k2 = await c._key_manager.get_key()
+        k3 = await c._key_manager.get_key()
         assert k1 == "key1"
         assert k2 == "key2"
         assert k3 == "key1"

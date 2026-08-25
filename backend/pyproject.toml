@@ -70,6 +70,7 @@ ignore = [
 "app/models/__init__.py" = ["F401"]
 "app/schemas/__init__.py" = ["F401"]
 "app/api/v1/__init__.py" = ["F401"]
+"app/core/api_keys.py" = ["N818"]
 "tests/**" = ["F401", "F811"]
 
 [tool.ruff.lint.isort]

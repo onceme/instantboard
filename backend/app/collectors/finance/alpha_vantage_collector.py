@@ -5,6 +5,7 @@ import httpx
 
 from app.collectors.base import BaseCollector
 from app.config import settings
+from app.core.api_keys import AllKeysRateLimited, AllKeysUnavailable, APIKeyManager
 
 logger = logging.getLogger(__name__)
 
@@ -16,10 +17,13 @@ class AlphaVantageCollector(BaseCollector):
     rate_limit_per_minute = 5
     base_url = "https://www.alphavantage.co/query"
 
-    def __init__(self) -> None:
+    def __init__(self, key_manager: APIKeyManager | None = None) -> None:
         super().__init__()
-        self._key_index: int = 0
         self._api_keys: list[str] = self._load_api_keys()
+        if key_manager is not None:
+            self._key_manager = key_manager
+        else:
+            self._key_manager = APIKeyManager("alpha_vantage", self._api_keys)
 
     def _load_api_keys(self) -> list[str]:
         if settings.alpha_vantage_api_keys:
@@ -30,12 +34,12 @@ class AlphaVantageCollector(BaseCollector):
             return [settings.alpha_vantage_api_key]
         return []
 
-    def _get_next_key(self) -> str | None:
-        if not self._api_keys:
+    async def _next_key_or_none(self) -> str | None:
+        """Return the next usable key, or None when the pool is exhausted/unavailable."""
+        try:
+            return await self._key_manager.get_key()
+        except (AllKeysRateLimited, AllKeysUnavailable):
             return None
-        key = self._api_keys[self._key_index % len(self._api_keys)]
-        self._key_index += 1
-        return key
 
     async def fetch_data(self, source: Any) -> Any:
         config = getattr(source, "config", {}) or {}
@@ -48,8 +52,9 @@ class AlphaVantageCollector(BaseCollector):
 
         results = []
         for symbol in symbols:
-            api_key = self._get_next_key()
+            api_key = await self._next_key_or_none()
             if api_key is None:
+                logger.warning("Alpha Vantage: no usable API key left, stopping batch")
                 break
             try:
                 quote = await self._fetch_quote(symbol, function, api_key)
@@ -76,6 +81,11 @@ class AlphaVantageCollector(BaseCollector):
                 response = await client.get(self.base_url, params=params)
                 if response.status_code == 429:
                     logger.warning(f"Alpha Vantage rate limited for {symbol}")
+                    await self._key_manager.mark_rate_limited(api_key)
+                    return None
+                if response.status_code in (401, 403):
+                    logger.error(f"Alpha Vantage API key invalid or forbidden for {symbol}")
+                    await self._key_manager.mark_invalid(api_key)
                     return None
                 if response.status_code != 200:
                     logger.warning(f"Alpha Vantage API returned {response.status_code} for {symbol}")

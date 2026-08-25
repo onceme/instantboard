@@ -10,7 +10,7 @@ env:
 
 jobs:
   build-and-push:
-    name: Build & Push Production Images
+    name: Build or Promote Production Images
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -18,12 +18,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0    # HEAD^2 requires full history; the default fetch-depth=1 cannot resolve parent commits
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
 
       - name: Login to GHCR
         uses: docker/login-action@v4
@@ -37,9 +36,56 @@ jobs:
         run: |
           echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
           echo "release_tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-          echo "timestamp=$(date +%s)" >> $GITHUB_OUTPUT
 
-      - name: Build and push backend image
+      - name: Decide promote or fallback build
+        id: decide
+        run: |
+          # Promote semantics (build-once): staging merges into main as merge commit M,
+          # whose second parent M^2 is the staging tip S that staging already deployed
+          # as staging-<short(S)>. When both staging images exist in GHCR, retag them to
+          # production (registry-side manifest rewrite only — no layers are copied, takes
+          # seconds). Otherwise (hotfix/squash/re-cut release, or images cleaned up) fall
+          # back to a full multi-arch build exactly as before.
+          # See docs/design/cd-workflow-optimization.md §4.2.
+          set -euo pipefail
+          STAGING_SHA="$(git rev-parse --verify --quiet HEAD^2 || true)"
+          if [ -z "$STAGING_SHA" ]; then
+            echo "::warning::release commit is not a merge commit (no second parent) — falling back to full build"
+            echo "mode=build" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          SHORT="$(git rev-parse --short "$STAGING_SHA")"
+          API="ghcr.io/${{ env.IMAGE_PREFIX }}-api:staging-$SHORT"
+          FE="ghcr.io/${{ env.IMAGE_PREFIX }}-frontend:staging-$SHORT"
+          if docker buildx imagetools inspect "$API" >/dev/null 2>&1 \
+             && docker buildx imagetools inspect "$FE" >/dev/null 2>&1; then
+            echo "::notice::promoting staging images (S=$SHORT)"
+            echo "mode=promote" >> "$GITHUB_OUTPUT"
+            echo "staging_short=$SHORT" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::staging-$SHORT images not found in GHCR (never deployed / cleaned up) — falling back to full build"
+            echo "mode=build" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Promote staging images (retag, no rebuild)
+        if: steps.decide.outputs.mode == 'promote'
+        run: |
+          set -euo pipefail
+          SHORT="${{ steps.decide.outputs.staging_short }}"
+          for name in api frontend; do
+            docker buildx imagetools create \
+              --tag "ghcr.io/${{ env.IMAGE_PREFIX }}-$name:production-latest" \
+              --tag "ghcr.io/${{ env.IMAGE_PREFIX }}-$name:production-${{ steps.meta.outputs.sha_short }}" \
+              --tag "ghcr.io/${{ env.IMAGE_PREFIX }}-$name:${{ steps.meta.outputs.release_tag }}" \
+              "ghcr.io/${{ env.IMAGE_PREFIX }}-$name:staging-$SHORT"
+          done
+
+      - name: Set up QEMU
+        if: steps.decide.outputs.mode == 'build'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Build and push backend image (fallback)
+        if: steps.decide.outputs.mode == 'build'
         uses: docker/build-push-action@v7
         with:
           context: backend
@@ -51,10 +97,13 @@ jobs:
             ghcr.io/${{ env.IMAGE_PREFIX }}-api:production-latest
             ghcr.io/${{ env.IMAGE_PREFIX }}-api:production-${{ steps.meta.outputs.sha_short }}
             ghcr.io/${{ env.IMAGE_PREFIX }}-api:${{ steps.meta.outputs.release_tag }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: |
+            type=gha,scope=production-backend
+            type=gha,scope=staging-backend
+          cache-to: type=gha,scope=production-backend,mode=max
 
-      - name: Build and push frontend image
+      - name: Build and push frontend image (fallback)
+        if: steps.decide.outputs.mode == 'build'
         uses: docker/build-push-action@v7
         with:
           context: frontend
@@ -66,8 +115,10 @@ jobs:
             ghcr.io/${{ env.IMAGE_PREFIX }}-frontend:production-latest
             ghcr.io/${{ env.IMAGE_PREFIX }}-frontend:production-${{ steps.meta.outputs.sha_short }}
             ghcr.io/${{ env.IMAGE_PREFIX }}-frontend:${{ steps.meta.outputs.release_tag }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: |
+            type=gha,scope=production-frontend
+            type=gha,scope=staging-frontend
+          cache-to: type=gha,scope=production-frontend,mode=max
 
   deploy:
     name: Deploy to Production

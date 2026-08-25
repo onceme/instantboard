@@ -21,15 +21,19 @@ function mountPagination(props: {
 }
 
 function pageLabels(wrapper: VueWrapper): string[] {
-  return wrapper.findAll(".page-btn").map(btn => btn.text());
+  return wrapper.findAll(".page-btn").map((btn) => btn.text());
 }
 
 describe("Pagination", () => {
   it("computes totalPages from total/pageSize and never goes below 1", () => {
     expect(mountPagination({ page: 1, total: 95 }).vm.totalPages).toBe(10);
-    expect(mountPagination({ page: 1, total: 91, pageSize: 13 }).vm.totalPages).toBe(7);
+    expect(
+      mountPagination({ page: 1, total: 91, pageSize: 13 }).vm.totalPages,
+    ).toBe(7);
     expect(mountPagination({ page: 1, total: 0 }).vm.totalPages).toBe(1);
-    expect(mountPagination({ page: 1, total: 42, pageSize: 0 }).vm.totalPages).toBe(1);
+    expect(
+      mountPagination({ page: 1, total: 42, pageSize: 0 }).vm.totalPages,
+    ).toBe(1);
   });
 
   it("renders every page number when there are at most 7 pages", () => {

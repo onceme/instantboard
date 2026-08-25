@@ -103,7 +103,9 @@ describe("SearchBar", () => {
     const idle = mount(SearchBar, { props: { modelValue: "" } });
     expect(idle.find(".search-loading").exists()).toBe(false);
 
-    const loading = mount(SearchBar, { props: { modelValue: "", loading: true } });
+    const loading = mount(SearchBar, {
+      props: { modelValue: "", loading: true },
+    });
     expect(loading.find(".search-loading").exists()).toBe(true);
   });
 });

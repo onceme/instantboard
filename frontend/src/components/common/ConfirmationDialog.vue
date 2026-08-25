@@ -46,7 +46,7 @@ function onKeydown(event: KeyboardEvent) {
 
 watch(
   () => props.visible,
-  visible => {
+  (visible) => {
     if (visible) {
       previouslyFocused =
         document.activeElement instanceof HTMLElement
@@ -68,17 +68,8 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
 <template>
   <Teleport to="body">
     <Transition name="dialog-fade">
-      <div
-        v-if="visible"
-        class="dialog-overlay"
-        @click.self="handleCancel"
-      >
-        <div
-          class="dialog"
-          role="dialog"
-          aria-modal="true"
-          :aria-label="title"
-        >
+      <div v-if="visible" class="dialog-overlay" @click.self="handleCancel">
+        <div class="dialog" role="dialog" aria-modal="true" :aria-label="title">
           <div class="dialog-header">
             <AlertTriangle
               v-if="danger"

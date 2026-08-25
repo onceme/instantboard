@@ -30,7 +30,7 @@ function overlay(): HTMLElement | null {
 }
 
 afterEach(() => {
-  wrappers.forEach(wrapper => wrapper.unmount());
+  wrappers.forEach((wrapper) => wrapper.unmount());
   wrappers.length = 0;
   document.body.innerHTML = "";
 });

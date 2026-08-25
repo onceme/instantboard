@@ -274,7 +274,7 @@ class TestGetSource:
 
 class TestCreateSource:
     @patch("app.services.source.redis_publish", new_callable=AsyncMock)
-    @patch("app.services.source.redis_hset", new_callable=AsyncMock)
+    @patch("app.services.source.redis_set", new_callable=AsyncMock)
     async def test_create_success(self, mock_hset, mock_publish):
         db, mock_result = _mock_db()
         redis = _mock_redis()
@@ -475,7 +475,7 @@ class TestCreateSource:
         db.add.assert_not_called()
 
     @patch("app.services.source.redis_publish", new_callable=AsyncMock)
-    @patch("app.services.source.redis_hset", new_callable=AsyncMock)
+    @patch("app.services.source.redis_set", new_callable=AsyncMock)
     async def test_create_active_with_library_collector_ok(self, mock_hset, mock_publish):
         """Same web_scrape source but with a config.library fallback → resolves to a
         real collector and may be created active."""
@@ -524,7 +524,7 @@ class TestCreateSource:
         assert result.success is True
 
     @patch("app.services.source.redis_publish", new_callable=AsyncMock)
-    @patch("app.services.source.redis_hset", new_callable=AsyncMock)
+    @patch("app.services.source.redis_set", new_callable=AsyncMock)
     async def test_create_inactive_without_collector_allowed(self, mock_hset, mock_publish):
         """Inactive sources may be created without a collector (draft state)."""
         db, _ = _mock_db()

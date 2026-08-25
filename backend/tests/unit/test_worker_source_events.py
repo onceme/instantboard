@@ -382,7 +382,7 @@ class TestServiceToWorkerProtocol:
 
         with (
             patch("app.services.source.redis_publish", new_callable=AsyncMock) as mock_publish,
-            patch("app.services.source.redis_hset", new_callable=AsyncMock),
+            patch("app.services.source.redis_set", new_callable=AsyncMock),
         ):
             service = SourceService(db, AsyncMock())
             await service.create_source(

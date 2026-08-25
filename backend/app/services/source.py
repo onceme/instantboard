@@ -17,7 +17,7 @@ from app.core.exceptions import (
     SourceNotFound,
     ValidationError,
 )
-from app.core.redis import RedisKeys, redis_delete, redis_hset, redis_publish
+from app.core.redis import RedisKeys, redis_delete, redis_publish, redis_set
 from app.models.category import Category
 from app.models.source import Source, SourceHealth
 from app.models.tenant import Tenant
@@ -275,13 +275,20 @@ class SourceService:
         await self.db.refresh(source)
 
         redis_key = RedisKeys.source_health_key(str(source.id))
-        await redis_hset(
+        # Same format and TTL as the collection path (collectors/base.py
+        # record_health): a JSON string with ex=300. Writing a TTL-less hash here
+        # mixed two formats for the same key, so readers (json.loads) could not
+        # parse the create-time value and the key never expired.
+        await redis_set(
             redis_key,
-            mapping={
+            {
                 "status": "healthy",
-                "consecutive_failures": "0",
-                "avg_response_time_ms": "0",
+                "consecutive_failures": 0,
+                "total_fetches_24h": 0,
+                "success_count_24h": 0,
+                "avg_response_time_ms": 0,
             },
+            ex=300,
         )
         await redis_publish(
             RedisKeys.channel_key("dashboard"),

@@ -1162,7 +1162,7 @@ class TestUpdateHealthAfterCollection:
     async def test_health_status_change_triggers_sse(self):
         """Lines 482-491: status change → publish SSE event with the full row payload.
 
-        Contract: docs/design/data-flow.md §3.5.4. The event payload must carry
+        Contract: docs/dev-guide/design/data-flow.md §3.5.4. The event payload must carry
         every field the dashboard health table renders (keyed by source_id), and the
         tenant must be the source's own tenant so matching SSE sessions receive it.
         """

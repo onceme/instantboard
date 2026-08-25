@@ -67,13 +67,12 @@ class Settings(BaseSettings):
     mongodb_url: str | None = Field(default=None, alias="MONGODB_URL")
 
     # JWT
-    secret_key: str = Field(default="change-this-in-production", alias="SECRET_KEY")
     jwt_secret: str = Field(default="change-this-in-production", alias="JWT_SECRET")
     jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
     jwt_access_token_expire_minutes: int = Field(default=60, alias="JWT_ACCESS_TOKEN_EXPIRE_MINUTES")
     jwt_refresh_token_expire_days: int = Field(default=7, alias="JWT_REFRESH_TOKEN_EXPIRE_DAYS")
 
-    # Local Admin Login (isolated admin identity, see docs/design/admin-login.md)
+    # Local Admin Login (isolated admin identity, see docs/dev-guide/design/admin-login.md)
     admin_email: str | None = Field(default=None, alias="ADMIN_EMAIL")
     admin_password_hash: str | None = Field(default=None, alias="ADMIN_PASSWORD_HASH")
     admin_password: str | None = Field(default=None, alias="ADMIN_PASSWORD")
@@ -110,8 +109,15 @@ class Settings(BaseSettings):
     # Financial Data API Keys
     yahoo_finance_api_key: str | None = Field(default=None, alias="YAHOO_FINANCE_API_KEY")
     alpha_vantage_api_key: str | None = Field(default=None, alias="ALPHA_VANTAGE_API_KEY")
+    # Comma-separated list of keys; the collector rotates through them round-robin.
+    # Takes precedence over alpha_vantage_api_key when non-empty.
+    alpha_vantage_api_keys: str | None = Field(default=None, alias="ALPHA_VANTAGE_API_KEYS")
     finnhub_api_key: str = Field(default="", alias="FINNHUB_API_KEY")
     finnhub_api_keys: Annotated[list[str], NoDecode] = Field(default=[], alias="FINNHUB_API_KEYS")
+    # IEX Cloud is an optional US-stock source; the collector stays dormant without a key.
+    iex_cloud_api_key: str | None = Field(default=None, alias="IEX_CLOUD_API_KEY")
+    # Override to point at a sandbox/test deployment (e.g. https://sandbox.iexapis.com/stable).
+    iex_cloud_base_url: str = Field(default="https://cloud.iexapis.com/stable", alias="IEX_CLOUD_BASE_URL")
 
     # CORS
     cors_origins: Annotated[list[str], NoDecode] = Field(

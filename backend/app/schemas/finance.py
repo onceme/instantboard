@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class FinanceSearchResult(BaseModel):
@@ -76,10 +76,17 @@ class FundNAVResponse(BaseModel):
 
 
 class WatchlistItemCreate(BaseModel):
-    symbol_id: str
+    symbol_id: str | None = Field(default=None)
+    symbol: str | None = Field(default=None)
     display_order: int = Field(default=0)
     notes: str | None = Field(default=None, max_length=200)
     alert_threshold_percent: float | None = Field(default=None)
+
+    @model_validator(mode="after")
+    def _require_symbol_or_symbol_id(self) -> "WatchlistItemCreate":
+        if not self.symbol_id and not self.symbol:
+            raise ValueError("Either symbol_id or symbol must be provided")
+        return self
 
 
 class WatchlistOrderUpdate(BaseModel):

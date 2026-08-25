@@ -1,6 +1,6 @@
 """Unit tests for AuthService.admin_login and the local-admin refresh kill-switch.
 
-The local admin identity model is defined in docs/design/admin-login.md: the admin
+The local admin identity model is defined in docs/dev-guide/design/admin-login.md: the admin
 record lives in the system tenant with provider='local' and is isolated from SSO users.
 """
 

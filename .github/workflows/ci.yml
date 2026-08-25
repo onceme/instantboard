@@ -124,7 +124,6 @@ jobs:
           ENV: test
           DATABASE_URL: postgresql+asyncpg://instantboard:testpass@localhost:5432/instantboard_test
           REDIS_URL: redis://localhost:6379/1
-          SECRET_KEY: test-secret-key-for-ci
           JWT_SECRET: test-jwt-secret-for-ci
           SCHEDULER_ENABLED: false
         run: |
@@ -201,8 +200,8 @@ jobs:
           file: backend/Dockerfile
           target: production
           push: false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=staging-backend
+          # Read-only mirror of staging scope: CI is a validation build, not a cache writer (see cd-workflow-optimization.md §4.1)
 
       - name: Build frontend Docker image
         uses: docker/build-push-action@v7
@@ -211,5 +210,5 @@ jobs:
           file: frontend/Dockerfile
           target: prod
           push: false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=staging-frontend
+          # Read-only mirror of staging scope: CI is a validation build, not a cache writer (see cd-workflow-optimization.md §4.1)

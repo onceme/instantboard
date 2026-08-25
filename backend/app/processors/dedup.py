@@ -8,6 +8,10 @@ from app.processors.base import BaseProcessor
 
 logger = logging.getLogger(__name__)
 
+# Dedup sets grow with every unseen item; expire them 24h after the last write
+# (original design) so memory stays bounded without resurrecting stale entries.
+DEDUP_TTL_SECONDS = 86400
+
 
 class DedupProcessor(BaseProcessor):
     async def process(self, item: dict, source: Any) -> dict | None:
@@ -30,7 +34,7 @@ class DedupProcessor(BaseProcessor):
                 logger.debug(f"Dedup: skipping duplicate item '{title}' (hash={content_hash})")
                 return None
 
-            await redis_sadd(dedup_key, dedup_member)
+            await redis_sadd(dedup_key, dedup_member, ttl=DEDUP_TTL_SECONDS)
         except Exception as e:
             logger.warning(f"Redis dedup check failed, proceeding without dedup: {e}")
 

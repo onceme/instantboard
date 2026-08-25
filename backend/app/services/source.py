@@ -17,7 +17,8 @@ from app.core.exceptions import (
     SourceNotFound,
     ValidationError,
 )
-from app.core.redis import RedisKeys, redis_delete, redis_hset, redis_publish
+from app.core.pagination import apply_sort
+from app.core.redis import RedisKeys, redis_delete, redis_publish, redis_set
 from app.models.category import Category
 from app.models.source import Source, SourceHealth
 from app.models.tenant import Tenant
@@ -37,6 +38,9 @@ SOURCE_TYPE_CONFIG_RULES = {
     "web_scrape": {"required_fields": ["url", "selector"]},
     "social": {"required_fields": ["platform", "query"]},
 }
+
+# Whitelist of columns GET /sources may order by (see apply_sort).
+SOURCE_SORT_FIELDS = {"name", "created_at", "priority"}
 
 
 def _source_to_response(source: Source) -> SourceResponse:
@@ -119,14 +123,14 @@ class SourceService:
     def _check_collector_available(source_type: str, config: dict) -> None:
         # Pre-flight check before activating a source: without a resolvable collector
         # the source would sit in is_active=True forever without collecting anything
-        # (e.g. a bare web_scrape/social source with no config.library fallback).
+        # (e.g. an api/social source with no config.library override).
         if resolve_collector(source_type, config) is None:
             raise NoCollectorAvailable(
                 message=(
                     f"No collector available for source_type '{source_type}'. "
                     "Set config.library to a supported collector "
-                    "(yfinance, alpha_vantage, eastmoney, finnhub, rss, hackernews, arxiv) "
-                    "or keep the source inactive."
+                    "(yfinance, alpha_vantage, eastmoney, finnhub, iex_cloud, rss, "
+                    "hackernews, arxiv, reddit) or keep the source inactive."
                 )
             )
 
@@ -139,6 +143,8 @@ class SourceService:
         is_active: bool | None = None,
         page: int = 1,
         page_size: int = 20,
+        sort_by: str | None = None,
+        sort_order: str = "desc",
     ) -> PaginatedResponse[SourceResponse]:
         conditions = [
             or_(
@@ -168,7 +174,11 @@ class SourceService:
         stmt = select(Source).options(selectinload(Source.health), selectinload(Source.category))
         if health_join:
             stmt = stmt.join(SourceHealth, Source.id == SourceHealth.source_id)
-        stmt = stmt.where(and_(*conditions)).order_by(Source.priority.asc(), Source.name.asc())
+        stmt = stmt.where(and_(*conditions))
+        if sort_by is not None:
+            stmt = apply_sort(stmt, sort_by, SOURCE_SORT_FIELDS, Source, sort_order)
+        else:
+            stmt = stmt.order_by(Source.priority.asc(), Source.name.asc())
         stmt = stmt.offset((page - 1) * page_size).limit(page_size)
 
         sources = (await self.db.execute(stmt)).scalars().all()
@@ -275,13 +285,20 @@ class SourceService:
         await self.db.refresh(source)
 
         redis_key = RedisKeys.source_health_key(str(source.id))
-        await redis_hset(
+        # Same format and TTL as the collection path (collectors/base.py
+        # record_health): a JSON string with ex=300. Writing a TTL-less hash here
+        # mixed two formats for the same key, so readers (json.loads) could not
+        # parse the create-time value and the key never expired.
+        await redis_set(
             redis_key,
-            mapping={
+            {
                 "status": "healthy",
-                "consecutive_failures": "0",
-                "avg_response_time_ms": "0",
+                "consecutive_failures": 0,
+                "total_fetches_24h": 0,
+                "success_count_24h": 0,
+                "avg_response_time_ms": 0,
             },
+            ex=300,
         )
         await redis_publish(
             RedisKeys.channel_key("dashboard"),
@@ -290,6 +307,24 @@ class SourceService:
                 "source_id": str(source.id),
                 "category_id": str(source.category_id),
                 "name": source.name,
+                # Full source payload (same shape as source_enabled) so the worker can
+                # schedule collection immediately without reading the DB — a DB read
+                # here would race the still-uncommitted create transaction. Without
+                # these fields the worker never picked the event up and freshly
+                # created active sources only started collecting after a restart.
+                "source": {
+                    "id": str(source.id),
+                    "tenant_id": str(source.tenant_id),
+                    "category_id": str(source.category_id),
+                    "category_slug": category.slug,
+                    "name": source.name,
+                    "source_type": source.source_type,
+                    "url": source.url,
+                    "config": source.config or {},
+                    "refresh_interval_seconds": source.refresh_interval_seconds,
+                    "is_active": source.is_active,
+                    "priority": source.priority,
+                },
             },
         )
 

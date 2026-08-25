@@ -381,7 +381,7 @@ class AsyncSchedulerManager:
                 # SSE routing forwards events only on exact tenant_id string match, so a
                 # non-UUID literal could never equal a registered connection's tenant_id.
                 # Unreachable in practice (Source.tenant_id is NOT NULL); contract:
-                # docs/design/data-flow.md §3.5.4.
+                # docs/dev-guide/design/data-flow.md §3.5.4.
                 tenant_id = str(source.tenant_id) if source.tenant_id else str(SYSTEM_TENANT_ID)
                 category_slug = _source_category_cache.get(str(source.id), "")
                 if not category_slug and source.category:
@@ -524,7 +524,7 @@ class AsyncSchedulerManager:
                     from app.services.sse import SSEService, build_source_health_update_payload
 
                     sse_service = SSEService()
-                    # Contract: docs/design/data-flow.md §3.5.4 — publish the full
+                    # Contract: docs/dev-guide/design/data-flow.md §3.5.4 — publish the full
                     # source_health row state so the dashboard health table can match the
                     # row by source_id and refresh status/times/latency in place.
                     # Tenant scoping: str(source.tenant_id) equals the admin JWT tenant
@@ -532,7 +532,7 @@ class AsyncSchedulerManager:
                     # Fallback must be str(SYSTEM_TENANT_ID), never a literal like
                     # "default": exact-string tenant routing would drop the event.
                     # Unreachable in practice (Source.tenant_id is NOT NULL); contract:
-                    # docs/design/data-flow.md §3.5.4.
+                    # docs/dev-guide/design/data-flow.md §3.5.4.
                     await sse_service.publish_source_health_update(
                         build_source_health_update_payload(source, health, previous_status),
                         tenant_id=str(source.tenant_id) if source.tenant_id else str(SYSTEM_TENANT_ID),

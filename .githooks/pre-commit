@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# InstantBoard pre-commit hook: lint staged files before each commit.
+#   backend  *.py                        -> ruff check + ruff format --check
+#   frontend src/**/*.{ts,vue}, tests/** -> eslint --max-warnings=0
+# Install with: make hooks
+set -o pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+STATUS=0
+
+mapfile -t BACKEND_STAGED < <(
+  git diff --cached --name-only --diff-filter=ACMR | grep '^backend/.*\.py$' || true
+)
+
+if [ "${#BACKEND_STAGED[@]}" -gt 0 ]; then
+  if [ -x "$REPO_ROOT/backend/.venv/bin/python" ]; then
+    BACKEND_FILES=("${BACKEND_STAGED[@]#backend/}")
+    echo "pre-commit: ruff check + format on ${#BACKEND_FILES[@]} staged python file(s)"
+    (cd "$REPO_ROOT/backend" && .venv/bin/python -m ruff check "${BACKEND_FILES[@]}") || STATUS=1
+    (cd "$REPO_ROOT/backend" && .venv/bin/python -m ruff format --check "${BACKEND_FILES[@]}") || STATUS=1
+  else
+    echo "pre-commit: WARNING: backend/.venv not found — skipping ruff checks" >&2
+  fi
+fi
+
+mapfile -t FRONTEND_STAGED < <(
+  git diff --cached --name-only --diff-filter=ACMR \
+    | grep -E '^frontend/(src/.*\.(ts|vue)|tests/.*)$' || true
+)
+
+if [ "${#FRONTEND_STAGED[@]}" -gt 0 ]; then
+  FRONTEND_FILES=("${FRONTEND_STAGED[@]#frontend/}")
+  echo "pre-commit: eslint on ${#FRONTEND_FILES[@]} staged frontend file(s)"
+  (cd "$REPO_ROOT/frontend" && npx eslint "${FRONTEND_FILES[@]}" --max-warnings=0) || STATUS=1
+fi
+
+exit "$STATUS"

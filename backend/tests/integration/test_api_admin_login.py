@@ -1,6 +1,6 @@
 """Integration tests for POST /api/v1/auth/admin/login and the local-admin kill-switch.
 
-The local admin identity model (docs/design/admin-login.md) isolates the admin record in
+The local admin identity model (docs/dev-guide/design/admin-login.md) isolates the admin record in
 the system tenant with provider='local' and never merges it with SSO users. These tests
 exercise the real AuthService against the test database, using a unique admin email per
 test so the shared module-scoped Redis/DB fixtures do not leak brute-force counters.

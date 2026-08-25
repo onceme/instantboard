@@ -11,7 +11,6 @@ def _clean_env(monkeypatch):
         "DATABASE_URL",
         "REDIS_URL",
         "JWT_SECRET",
-        "SECRET_KEY",
         "SCHEDULER_ENABLED",
         "ENABLED_SSO_PROVIDERS",
         "LOG_LEVEL",

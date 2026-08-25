@@ -1,0 +1,38 @@
+**InstantBoard**
+* [首页](Home)
+
+**用户手册**
+* [快速开始](user-guide-getting-started)
+* [配置说明](user-guide-configuration)
+* [生产部署](user-guide-deployment)
+* [财经模块](user-guide-features-finance)
+* [科技模块](user-guide-features-tech)
+* [监控仪表盘](user-guide-features-dashboard)
+* [认证与登录](user-guide-authentication)
+* [实时推送 SSE](user-guide-real-time-sse)
+* [API 速览](user-guide-api-reference)
+* [常用命令](user-guide-commands)
+* [数据源清单](user-guide-data-sources)
+* [多租户](user-guide-multi-tenant)
+* [常见问题](user-guide-faq)
+
+**开发者手册**
+* [架构与代码导读](dev-guide-architecture-overview)
+* [开发指南](dev-guide-development)
+* [CI/CD](dev-guide-cicd)
+* 设计文档
+  * [总体架构](dev-guide-design-architecture)
+  * [API 设计](dev-guide-design-api)
+  * [数据库设计](dev-guide-design-database)
+  * [数据流与 SSE](dev-guide-design-data-flow)
+  * [内容分类](dev-guide-design-content-categories)
+  * [数据源采集](dev-guide-design-data-sources)
+  * [前端设计](dev-guide-design-frontend)
+  * [财经设计](dev-guide-design-finance-tab)
+  * [科技设计](dev-guide-design-tech-tab)
+  * [Dashboard 设计](dev-guide-design-dashboard-tab)
+  * [安全设计](dev-guide-design-security)
+  * [管理员登录](dev-guide-design-admin-login)
+  * [基础设施](dev-guide-design-infrastructure)
+  * [Mermaid 图示规范](dev-guide-design-mermaid-style)
+  * [文档/Wiki 架构](dev-guide-design-docs-wiki-architecture)

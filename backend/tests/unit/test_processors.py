@@ -15,6 +15,7 @@ from app.processors import (
     create_default_processor_chain,
 )
 from app.processors.categorizer import KEYWORD_TO_TAG, TechTopicExtractor
+from app.processors.dedup import DEDUP_TTL_SECONDS
 from app.processors.filter import BLACKLIST_KEYWORDS, MIN_TITLE_LENGTH
 
 
@@ -267,11 +268,17 @@ class TestDedupProcessor:
         source = _make_source()
         with (
             patch("app.processors.dedup.redis_sismember", new_callable=AsyncMock, return_value=False),
-            patch("app.processors.dedup.redis_sadd", new_callable=AsyncMock),
+            patch("app.processors.dedup.redis_sadd", new_callable=AsyncMock) as mock_sadd,
         ):
             result = await c.process(item, source)
         assert result is not None
         assert "_dedup_hash" in result
+        # Dedup sets must carry a 24h TTL so memory stays bounded.
+        mock_sadd.assert_awaited_once()
+        assert mock_sadd.await_args.kwargs.get("ttl") == DEDUP_TTL_SECONDS
+
+    async def test_dedup_ttl_constant(self):
+        assert DEDUP_TTL_SECONDS == 86400
 
     async def test_process_duplicate_item(self):
         c = DedupProcessor()

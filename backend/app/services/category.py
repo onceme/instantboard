@@ -11,6 +11,7 @@ from sqlalchemy.orm import selectinload
 # constant from core.constants (keeping the original exported name).
 from app.core.constants import SYSTEM_TENANT_ID
 from app.core.exceptions import CategoryNotFound, DuplicateCategory, Forbidden, ValidationError
+from app.core.pagination import apply_sort
 from app.models.category import Category
 from app.models.item import Item
 from app.models.source import Source
@@ -59,6 +60,9 @@ SUBCATEGORY_LABEL_MAP = {
     "space-manufacturing": "太空制造与资源",
 }
 
+# Whitelist of columns GET /categories may order by (see apply_sort).
+CATEGORY_SORT_FIELDS = {"name", "created_at", "type"}
+
 
 def _slugify(name: str) -> str:
     slug = name.lower().strip()
@@ -96,6 +100,8 @@ class CategoryService:
         type_filter: str | None = None,
         page: int = 1,
         page_size: int = 20,
+        sort_by: str | None = None,
+        sort_order: str = "desc",
     ) -> PaginatedResponse[CategoryResponse]:
         conditions = [
             or_(
@@ -122,10 +128,12 @@ class CategoryService:
             select(Category, func.coalesce(source_count_sub.c.cnt, 0).label("source_count"))
             .outerjoin(source_count_sub, Category.id == source_count_sub.c.category_id)
             .where(and_(*conditions))
-            .order_by(Category.type.asc(), Category.name.asc())
-            .offset((page - 1) * page_size)
-            .limit(page_size)
         )
+        if sort_by is not None:
+            stmt = apply_sort(stmt, sort_by, CATEGORY_SORT_FIELDS, Category, sort_order)
+        else:
+            stmt = stmt.order_by(Category.type.asc(), Category.name.asc())
+        stmt = stmt.offset((page - 1) * page_size).limit(page_size)
         rows = (await self.db.execute(stmt)).all()
 
         categories = [_category_to_response(row[0], row[1]) for row in rows]
@@ -144,7 +152,10 @@ class CategoryService:
         if category is None:
             raise CategoryNotFound()
 
-        if category.tenant_id != tenant_id and category.tenant_id != SYSTEM_TENANT_ID:
+        # str() on both sides: category.tenant_id is a UUID ORM attribute, the JWT
+        # tenant id is a str — a direct comparison is always unequal and would 404
+        # every tenant-owned category.
+        if str(category.tenant_id) != tenant_id and category.tenant_id != SYSTEM_TENANT_ID:
             raise CategoryNotFound(message="Category not accessible for this tenant")
 
         source_count_stmt = select(func.count()).select_from(Source).where(Source.category_id == category_id)
@@ -324,7 +335,10 @@ class CategoryService:
         if category is None:
             raise CategoryNotFound()
 
-        if category.tenant_id != tenant_id and category.tenant_id != SYSTEM_TENANT_ID:
+        # str() on both sides: category.tenant_id is a UUID ORM attribute, the JWT
+        # tenant id is a str — a direct comparison is always unequal and would 404
+        # every tenant-owned category.
+        if str(category.tenant_id) != tenant_id and category.tenant_id != SYSTEM_TENANT_ID:
             raise CategoryNotFound(message="Category not accessible for this tenant")
 
         sources_stmt = (
@@ -384,7 +398,10 @@ class CategoryService:
         if category is None:
             raise CategoryNotFound()
 
-        if category.tenant_id != tenant_id and category.tenant_id != SYSTEM_TENANT_ID:
+        # str() on both sides: category.tenant_id is a UUID ORM attribute, the JWT
+        # tenant id is a str — a direct comparison is always unequal and would 404
+        # every tenant-owned category.
+        if str(category.tenant_id) != tenant_id and category.tenant_id != SYSTEM_TENANT_ID:
             raise CategoryNotFound(message="Category not accessible for this tenant")
 
         tag_count_stmt = (

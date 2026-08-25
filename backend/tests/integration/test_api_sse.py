@@ -64,6 +64,84 @@ class TestSSEStream:
         assert "text/event-stream" in resp.headers.get("content-type", "")
 
 
+class TestStreamChannelsParam:
+    """Multi-channel subscription via /stream/all?channels= (api.md §3.8)."""
+
+    @staticmethod
+    def _breaking_connection(mock_router):
+        """Wire event_router so the stream loop terminates after the connected event."""
+        mock_conn = MagicMock()
+
+        async def mock_get_that_breaks():
+            raise KeyError("stop")
+
+        mock_conn.queue = MagicMock()
+        mock_conn.queue.get = mock_get_that_breaks
+        mock_conn.events_sent_count = 0
+        mock_router.get_connection.return_value = mock_conn
+
+    @patch("app.api.v1.sse.sse_service")
+    @patch("app.api.v1.sse.event_router")
+    def test_stream_all_with_channels_subscribes_sorted_subset(self, mock_router, mock_svc, client):
+        token = _token()
+        self._breaking_connection(mock_router)
+        mock_svc.connect = AsyncMock()
+        mock_svc.disconnect = AsyncMock()
+
+        resp = client.get(
+            f"/api/v1/stream/all?channels=tech,finance&token={token}",
+            headers={"Accept": "text/event-stream"},
+        )
+        assert resp.status_code == 200
+        assert "text/event-stream" in resp.headers.get("content-type", "")
+        mock_svc.connect.assert_awaited_once()
+        assert mock_svc.connect.await_args.kwargs["categories"] == ["finance", "tech"]
+
+    def test_stream_all_with_unknown_channels_returns_validation_error(self, client):
+        token = _token()
+        resp = client.get(f"/api/v1/stream/all?channels=bogus&token={token}")
+        assert resp.status_code == 400
+        error = resp.json()["detail"]["error"]
+        assert error["code"] == "VALIDATION_ERROR"
+        assert {"field": "channels", "message": "unknown channel: bogus"} in error["details"]
+
+    def test_stream_all_with_empty_channels_returns_validation_error(self, client):
+        token = _token()
+        resp = client.get(f"/api/v1/stream/all?channels=&token={token}")
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["error"]["code"] == "VALIDATION_ERROR"
+
+    @patch("app.api.v1.sse.sse_service")
+    @patch("app.api.v1.sse.event_router")
+    def test_single_category_stream_ignores_channels_param(self, mock_router, mock_svc, client):
+        token = _token()
+        self._breaking_connection(mock_router)
+        mock_svc.connect = AsyncMock()
+        mock_svc.disconnect = AsyncMock()
+
+        resp = client.get(
+            f"/api/v1/stream/finance?channels=tech&token={token}",
+            headers={"Accept": "text/event-stream"},
+        )
+        assert resp.status_code == 200
+        assert mock_svc.connect.await_args.kwargs["categories"] == ["finance"]
+
+    @patch("app.api.v1.sse.sse_service")
+    @patch("app.api.v1.sse.event_router")
+    def test_stream_all_without_channels_keeps_aggregate(self, mock_router, mock_svc, client):
+        token = _token()
+        self._breaking_connection(mock_router)
+        mock_svc.connect = AsyncMock()
+        mock_svc.disconnect = AsyncMock()
+
+        resp = client.get(
+            f"/api/v1/stream/all?token={token}",
+            headers={"Accept": "text/event-stream"},
+        )
+        assert resp.status_code == 200
+        assert mock_svc.connect.await_args.kwargs["categories"] == ["all"]
+
+
 class TestSSEStatus:
     def test_status_no_token_returns_empty(self, client):
         resp = client.get("/api/v1/stream/status")

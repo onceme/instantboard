@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 def build_source_health_update_payload(source: Source | Any, health: SourceHealth | Any, previous_status: str) -> dict:
     """Build the canonical source_health_update SSE payload.
 
-    Contract: docs/design/data-flow.md §3.5.4. The payload carries the full
+    Contract: docs/dev-guide/design/data-flow.md §3.5.4. The payload carries the full
     source_health row state displayed by the dashboard's DataSourcesHealth table
     (read from the SourceHealth record plus the owning Source) so the frontend
     can match the table row by source_id and refresh it in place.
@@ -146,7 +146,7 @@ class SSEService:
     ) -> None:
         """Publish a source_health_update event on the dashboard channel.
 
-        Contract: docs/design/data-flow.md §3.5.4 — the payload must be the
+        Contract: docs/dev-guide/design/data-flow.md §3.5.4 — the payload must be the
         full row state built by build_source_health_update_payload() (keyed by
         source_id). Tenant routing: event_router only delivers the event to SSE
         connections registered with the same tenant_id; admin sessions belong to

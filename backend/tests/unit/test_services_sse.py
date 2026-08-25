@@ -204,7 +204,7 @@ def _make_health(**overrides) -> SourceHealth:
 
 
 class TestBuildSourceHealthUpdatePayload:
-    """Contract tests: docs/design/data-flow.md §3.5.4."""
+    """Contract tests: docs/dev-guide/design/data-flow.md §3.5.4."""
 
     def test_payload_carries_full_row_state(self):
         source = _make_source()

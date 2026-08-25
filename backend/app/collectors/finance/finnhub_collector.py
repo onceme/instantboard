@@ -8,6 +8,7 @@ import httpx
 
 from app.collectors.base import BaseCollector
 from app.config import settings
+from app.core.api_keys import AllKeysRateLimited, AllKeysUnavailable, APIKeyManager
 
 logger = logging.getLogger(__name__)
 
@@ -31,10 +32,13 @@ class FinnhubCollector(BaseCollector):
         "CL=F": {"name": "Crude Oil WTI", "unit": "USD/bbl"},
     }
 
-    def __init__(self) -> None:
+    def __init__(self, key_manager: APIKeyManager | None = None) -> None:
         super().__init__()
-        self._key_index: int = 0
         self._api_keys: list[str] = self._load_api_keys()
+        if key_manager is not None:
+            self._key_manager = key_manager
+        else:
+            self._key_manager = APIKeyManager("finnhub", self._api_keys)
 
     def _load_api_keys(self) -> list[str]:
         keys: list[str] = []
@@ -44,21 +48,21 @@ class FinnhubCollector(BaseCollector):
             keys.append(settings.finnhub_api_key)
         return keys
 
-    def _get_next_key(self) -> str | None:
-        if not self._api_keys:
+    async def _next_key_or_none(self) -> str | None:
+        """Return the next usable key, or None when the pool is exhausted/unavailable."""
+        try:
+            return await self._key_manager.get_key()
+        except (AllKeysRateLimited, AllKeysUnavailable):
             return None
-        key = self._api_keys[self._key_index % len(self._api_keys)]
-        self._key_index += 1
-        return key
 
     async def fetch_data(self, source: Any) -> Any:
         config = getattr(source, "config", {}) or {}
         data_type = config.get("data_type", "stock_quote")
         symbols = config.get("symbols", [])
 
-        api_key = self._get_next_key()
+        api_key = await self._next_key_or_none()
         if not api_key:
-            logger.error("Finnhub API key not configured")
+            logger.error("Finnhub API key not configured or no usable key available")
             return None
 
         match data_type:
@@ -82,26 +86,36 @@ class FinnhubCollector(BaseCollector):
             return []
 
         results = []
+        max_attempts = max(len(self._api_keys), 1) + 1
         for symbol in symbols:
-            try:
-                quote = await self._fetch_single_quote(symbol, api_key)
-                if quote:
-                    results.append(quote)
-                await asyncio.sleep(1.0)
-            except httpx.HTTPStatusError as e:
-                if e.response.status_code == 429:
-                    logger.warning(f"Finnhub rate limited for {symbol}, waiting 60s")
-                    await asyncio.sleep(60)
+            quote = None
+            for _ in range(max_attempts):
+                try:
                     quote = await self._fetch_single_quote(symbol, api_key)
-                    if quote:
-                        results.append(quote)
-                elif e.response.status_code in (401, 403):
-                    logger.error(f"Finnhub API key invalid or forbidden for {symbol}")
-                    return None
-                else:
-                    logger.warning(f"Finnhub HTTP error for {symbol}: {e}")
-            except Exception as e:
-                logger.warning(f"Finnhub fetch failed for {symbol}: {e}")
+                    break
+                except httpx.HTTPStatusError as e:
+                    status = e.response.status_code
+                    if status == 429:
+                        logger.warning(f"Finnhub rate limited for {symbol}, rotating API key")
+                        await self._key_manager.mark_rate_limited(api_key)
+                    elif status in (401, 403):
+                        logger.error(f"Finnhub API key invalid or forbidden for {symbol}")
+                        await self._key_manager.mark_invalid(api_key)
+                    else:
+                        logger.warning(f"Finnhub HTTP error for {symbol}: {e}")
+                        break
+                    next_key = await self._next_key_or_none()
+                    if next_key is None or (status in (401, 403) and next_key == api_key):
+                        # No other usable key: fail the fetch so the caller fails over,
+                        # matching the previous "bad key → collection fails" semantics.
+                        return None
+                    api_key = next_key
+                except Exception as e:
+                    logger.warning(f"Finnhub fetch failed for {symbol}: {e}")
+                    break
+            if quote:
+                results.append(quote)
+            await asyncio.sleep(1.0)
 
         return results
 
@@ -193,10 +207,19 @@ class FinnhubCollector(BaseCollector):
                     quote["type"] = "index"
                     results.append(quote)
                 await asyncio.sleep(1.0)
+            except httpx.HTTPStatusError as e:
+                await self._mark_key_error(api_key, e.response.status_code)
+                logger.warning(f"Finnhub market index fetch failed for {symbol}: {e}")
             except Exception as e:
                 logger.warning(f"Finnhub market index fetch failed for {symbol}: {e}")
 
         return results
+
+    async def _mark_key_error(self, api_key: str, status_code: int) -> None:
+        if status_code == 429:
+            await self._key_manager.mark_rate_limited(api_key)
+        elif status_code in (401, 403):
+            await self._key_manager.mark_invalid(api_key)
 
     async def _fetch_commodities(self, symbols: list[str], api_key: str) -> list[dict]:
         target_symbols = symbols if symbols else list(self.COMMODITY_SYMBOLS.keys())
@@ -215,6 +238,7 @@ class FinnhubCollector(BaseCollector):
                     logger.debug(f"Finnhub commodity {symbol} returned empty, trying fallback")
                 await asyncio.sleep(1.0)
             except httpx.HTTPStatusError as e:
+                await self._mark_key_error(api_key, e.response.status_code)
                 if e.response.status_code in (401, 403):
                     logger.error(f"Finnhub API key invalid for commodity {symbol}")
                 else:
@@ -249,6 +273,7 @@ class FinnhubCollector(BaseCollector):
                     for item in results
                 ]
             except httpx.HTTPStatusError as e:
+                await self._mark_key_error(api_key, e.response.status_code)
                 logger.warning(f"Finnhub search error: {e}")
                 return None
             except Exception as e:
@@ -263,6 +288,9 @@ class FinnhubCollector(BaseCollector):
                 if profile:
                     results.append(profile)
                 await asyncio.sleep(1.0)
+            except httpx.HTTPStatusError as e:
+                await self._mark_key_error(api_key, e.response.status_code)
+                logger.warning(f"Finnhub company profile failed for {symbol}: {e}")
             except Exception as e:
                 logger.warning(f"Finnhub company profile failed for {symbol}: {e}")
 

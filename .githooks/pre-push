@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# InstantBoard pre-push hook: run backend unit tests before pushing.
+# Install with: make hooks
+set -o pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+if [ ! -x "$REPO_ROOT/backend/.venv/bin/python" ]; then
+  echo "pre-push: WARNING: backend/.venv not found — skipping unit tests" >&2
+  exit 0
+fi
+
+echo "pre-push: running backend unit tests (this can take a few minutes)..."
+if (cd "$REPO_ROOT/backend" && .venv/bin/python -m pytest tests/unit -q); then
+  exit 0
+fi
+
+echo "pre-push: unit tests failed — push blocked" >&2
+exit 1

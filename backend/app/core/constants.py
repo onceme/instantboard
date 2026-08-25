@@ -10,7 +10,7 @@ SYSTEM_TENANT_ID: UUID = UUID("00000000-0000-0000-0000-000000000000")
 
 # Provider identifier for the local (non-SSO) admin login. Admin identities live in the
 # system tenant and are fully isolated from SSO users, even when the email matches
-# (see docs/design/admin-login.md).
+# (see docs/dev-guide/design/admin-login.md).
 LOCAL_SSO_PROVIDER = "local"
 
 # Brute-force protection for local admin login: fixed-window counters and locks.

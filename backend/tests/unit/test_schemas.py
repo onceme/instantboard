@@ -699,6 +699,20 @@ class TestWatchlistItemCreate:
         with pytest.raises(ValidationError):
             WatchlistItemCreate(symbol_id="s1", notes="x" * 201)
 
+    def test_symbol_only(self):
+        c = WatchlistItemCreate(symbol="AAPL")
+        assert c.symbol == "AAPL"
+        assert c.symbol_id is None
+
+    def test_both_symbol_and_symbol_id(self):
+        c = WatchlistItemCreate(symbol="AAPL", symbol_id="sym1")
+        assert c.symbol == "AAPL"
+        assert c.symbol_id == "sym1"
+
+    def test_missing_both_raises(self):
+        with pytest.raises(ValidationError):
+            WatchlistItemCreate()
+
 
 class TestWatchlistOrderUpdate:
     def test_valid(self):

@@ -32,14 +32,16 @@ logging.basicConfig(
 logger = logging.getLogger("instantboard.worker")
 
 # Source lifecycle events published by SourceService on the dashboard channel.
-# Other dashboard-channel events (source_created, source_health_update, ...) are
-# meant for SSE clients and are ignored here.
-SOURCE_EVENT_NAMES = {"source_enabled", "source_disabled", "source_deleted"}
+# Other dashboard-channel events (source_health_update, ...) are meant for SSE
+# clients and are ignored here. source_created is consumed like source_enabled:
+# creating an active source must start collection immediately, not only after
+# a worker restart.
+SOURCE_EVENT_NAMES = {"source_created", "source_enabled", "source_disabled", "source_deleted"}
 
 # Heartbeat cadence: the worker rewrites its heartbeat every 15s with a TTL of
 # 3x that interval (RedisKeys.WORKER_HEARTBEAT_TTL = 45s). The api side treats
 # a heartbeat younger than 45s as a live worker. Contract:
-# docs/design/infrastructure.md §3.5 "Worker 心跳机制".
+# docs/dev-guide/design/infrastructure.md §3.5 "Worker 心跳机制".
 HEARTBEAT_INTERVAL_SECONDS = 15
 
 # Mutable state shared with the source event listener: the heartbeat reports
@@ -77,17 +79,23 @@ async def handle_source_status_event(event_data: dict) -> None:
     """
     event = event_data.get("event")
 
-    if event == "source_enabled":
+    if event in ("source_enabled", "source_created"):
         source = event_data.get("source") or {}
         source_id = str(source.get("id") or event_data.get("source_id") or "")
         if not source_id:
-            logger.warning("source_enabled event without source id, ignoring")
+            logger.warning(f"{event} event without source id, ignoring")
             return
         if not source.get("id"):
+            # No embedded source dict: fall back to the DB (_load_source_payload
+            # filters out inactive sources, which also covers "created inactive").
             source = await _load_source_payload(source_id)
             if source is None:
-                logger.warning(f"source_enabled: source {source_id} not found or inactive in DB, ignoring")
+                logger.warning(f"{event}: source {source_id} not found or inactive in DB, ignoring")
                 return
+        elif not source.get("is_active", True):
+            # Created inactive: nothing to schedule until an explicit enable.
+            logger.info(f"{event}: source {source_id} is inactive, not scheduling")
+            return
         await scheduler_manager.add_source_job(source)
         logger.info(f"Runtime scheduling: added collection job for source {source_id}")
 

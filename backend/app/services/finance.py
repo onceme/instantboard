@@ -442,6 +442,19 @@ class FinanceService:
         return response
 
     async def add_to_watchlist(self, tenant_id: str, user_id: str, data: dict) -> dict:
+        symbol_id = data.get("symbol_id")
+        if not symbol_id:
+            symbol_text = (data.get("symbol") or "").strip()
+            stmt_lookup = select(FinanceSymbol).where(
+                FinanceSymbol.tenant_id == tenant_id,
+                func.upper(FinanceSymbol.symbol) == symbol_text.upper(),
+            )
+            lookup_result = await self.db.execute(stmt_lookup)
+            fin_symbol = lookup_result.scalar_one_or_none()
+            if not fin_symbol:
+                raise SymbolNotFound(message=f"Symbol not found: {symbol_text}")
+            symbol_id = str(fin_symbol.id)
+
         stmt_count = (
             select(func.count())
             .select_from(WatchlistItem)
@@ -462,11 +475,11 @@ class FinanceService:
         stmt_dup = select(WatchlistItem).where(
             WatchlistItem.tenant_id == tenant_id,
             WatchlistItem.user_id == user_id,
-            WatchlistItem.symbol_id == data["symbol_id"],
+            WatchlistItem.symbol_id == symbol_id,
         )
         dup_result = await self.db.execute(stmt_dup)
         if dup_result.scalar_one_or_none():
-            raise DuplicateWatchlistItem(message=f"Symbol {data['symbol_id']} already in watchlist")
+            raise DuplicateWatchlistItem(message=f"Symbol {symbol_id} already in watchlist")
 
         max_order_stmt = select(func.max(WatchlistItem.display_order)).where(
             WatchlistItem.tenant_id == tenant_id,
@@ -479,7 +492,7 @@ class FinanceService:
         new_item = WatchlistItem(
             tenant_id=tenant_id,
             user_id=user_id,
-            symbol_id=data["symbol_id"],
+            symbol_id=symbol_id,
             display_order=data.get("display_order", next_order),
             notes=data.get("notes"),
             alert_threshold_percent=data.get("alert_threshold_percent"),

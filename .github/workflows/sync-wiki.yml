@@ -1,0 +1,23 @@
+name: Sync Wiki
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync-wiki:
+    runs-on: ubuntu-latest
+    env:
+      WIKI_TOKEN: ${{ secrets.WIKI_SYNC_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Sync docs/ to GitHub Wiki
+        run: bash scripts/sync-wiki.sh

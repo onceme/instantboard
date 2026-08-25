@@ -3,7 +3,7 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_current_tenant, get_db, get_redis
-from app.schemas.base import PaginatedResponse, SuccessResponse
+from app.schemas.base import PaginatedResponse, PaginationParams, SuccessResponse
 from app.schemas.source import (
     SourceCreate,
     SourceHealthResponse,
@@ -25,8 +25,7 @@ async def list_sources(
     source_type: str | None = Query(default=None),
     status: str | None = Query(default=None, description="Filter by health status: healthy/degraded/down"),
     is_active: bool | None = Query(default=None),
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=1, le=100),
+    pagination: PaginationParams = Depends(),
     db: AsyncSession = Depends(get_db),
     redis: Redis = Depends(get_redis),
     tenant_id: str = Depends(get_current_tenant),
@@ -38,8 +37,10 @@ async def list_sources(
         source_type=source_type,
         status_filter=status,
         is_active=is_active,
-        page=page,
-        page_size=page_size,
+        page=pagination.page,
+        page_size=pagination.page_size,
+        sort_by=pagination.sort_by,
+        sort_order=pagination.sort_order,
     )
     return result
 

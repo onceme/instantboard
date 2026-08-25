@@ -28,12 +28,14 @@ dependencies = [
     "asyncpg>=0.29.0,<0.32",
     "beautifulsoup4>=4.12.0",
     "lxml>=4.9.0",
+    # web_scrape collector parses scraped dates with dateutil; kept below 3 to avoid
+    # cross-environment version drift (previously only a transitive dependency).
+    "python-dateutil>=2.8.2,<3",
     "python-multipart>=0.0.6",
     # Pinned below 5: passlib 1.7.4 is incompatible with bcrypt>=5 (its backend self-check
     # probes with a >72-byte password, which bcrypt 5 rejects with ValueError instead of
     # truncating), breaking hash_password/verify_password at runtime.
     "bcrypt>=4.1.0,<5",
-    "yfinance>=0.2.31",
 ]
 
 [project.optional-dependencies]
@@ -71,6 +73,7 @@ ignore = [
 "app/models/__init__.py" = ["F401"]
 "app/schemas/__init__.py" = ["F401"]
 "app/api/v1/__init__.py" = ["F401"]
+"app/core/api_keys.py" = ["N818"]
 "tests/**" = ["F401", "F811"]
 
 [tool.ruff.lint.isort]

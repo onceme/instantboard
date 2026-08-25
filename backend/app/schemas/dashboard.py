@@ -22,6 +22,8 @@ class NetworkInfo(BaseModel):
     bytes_recv: int | None = None
     packets_sent: int | None = None
     packets_recv: int | None = None
+    network_in_kbps: float | None = None
+    network_out_kbps: float | None = None
 
 
 class DatabaseStatus(BaseModel):
@@ -47,6 +49,8 @@ class SystemInfoResponse(BaseModel):
     memory_used_mb: int | None = None
     disk_total_gb: float | None = None
     disk_used_gb: float | None = None
+    network_in_kbps: float | None = None
+    network_out_kbps: float | None = None
 
 
 class ServiceHealthResponse(BaseModel):
@@ -146,6 +150,8 @@ class SystemMetricUpdate(BaseModel):
     cpu_usage_percent: float | None = None
     memory_usage_percent: float | None = None
     disk_usage_percent: float | None = None
+    network_in_kbps: float | None = None
+    network_out_kbps: float | None = None
     network_bytes_sent: int | None = None
     network_bytes_recv: int | None = None
     timestamp: str | None = None

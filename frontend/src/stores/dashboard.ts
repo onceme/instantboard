@@ -76,7 +76,7 @@ export const useDashboardStore = defineStore("dashboard", () => {
   }
 
   function updateSourceHealthFromSSE(data: SourceHealthUpdateEvent) {
-    // Contract: docs/design/data-flow.md §3.5.4. The backend publishes the
+    // Contract: docs/dev-guide/design/data-flow.md §3.5.4. The backend publishes the
     // full source_health row keyed by source_id (the old payload only had
     // source_id/status and this code matched on data.id, so rows never
     // refreshed). Merge the mutable health fields into the existing row and

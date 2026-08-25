@@ -1,4 +1,4 @@
-"""Unit tests for local admin login configuration (docs/design/admin-login.md)."""
+"""Unit tests for local admin login configuration (docs/dev-guide/design/admin-login.md)."""
 
 import pytest
 

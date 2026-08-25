@@ -181,7 +181,23 @@ export const useFinanceStore = defineStore("finance", () => {
     }
   }
 
-  function updateMarketIndexFromSSE(data: MarketIndex) {
+  // The backend pushes market_index_update / commodity_update as the WHOLE list
+  // (services/finance.py push_event(formatted)), but single-object payloads are
+  // accepted too for forward compatibility.
+  function updateMarketIndexFromSSE(data: MarketIndex | MarketIndex[]) {
+    if (Array.isArray(data)) {
+      marketIndices.value = data.map((item) => ({
+        symbol: item.symbol,
+        name: item.name,
+        value: item.value,
+        change: item.change,
+        change_percent: item.change_percent,
+        market_status: item.market_status,
+        region: item.region,
+        timestamp: item.timestamp,
+      }));
+      return;
+    }
     const index = marketIndices.value.findIndex(
       (i) => i.symbol === data.symbol,
     );
@@ -192,7 +208,20 @@ export const useFinanceStore = defineStore("finance", () => {
     }
   }
 
-  function updateCommodityFromSSE(data: Commodity) {
+  function updateCommodityFromSSE(data: Commodity | Commodity[]) {
+    if (Array.isArray(data)) {
+      commodities.value = data.map((item) => ({
+        symbol: item.symbol,
+        name: item.name,
+        value: item.value,
+        change: item.change,
+        change_percent: item.change_percent,
+        unit: item.unit,
+        category: item.category,
+        timestamp: item.timestamp,
+      }));
+      return;
+    }
     const index = commodities.value.findIndex((c) => c.symbol === data.symbol);
     if (index >= 0) {
       commodities.value[index] = data;
@@ -277,6 +306,8 @@ export const useFinanceStore = defineStore("finance", () => {
     addToWatchlist,
     removeFromWatchlist,
     reorderWatchlist,
+    updateMarketIndexFromSSE,
+    updateCommodityFromSSE,
     connectSSE,
     disconnectSSE,
     init,

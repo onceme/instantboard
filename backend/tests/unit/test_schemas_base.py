@@ -142,7 +142,8 @@ class TestPaginationParams:
         params = PaginationParams()
         assert params.page == 1
         assert params.page_size == 20
-        assert params.sort_by == "created_at"
+        # sort_by defaults to None so each endpoint keeps its own default ordering
+        assert params.sort_by is None
         assert params.sort_order == "desc"
 
     def test_custom_values(self):
@@ -167,3 +168,16 @@ class TestPaginationParams:
     def test_invalid_sort_order(self):
         with pytest.raises(ValidationError):
             PaginationParams(sort_order="invalid")
+
+    def test_sort_by_none_allowed(self):
+        params = PaginationParams(sort_by=None)
+        assert params.sort_by is None
+
+    def test_invalid_sort_by_identifier(self):
+        # Anything that is not a plain identifier is rejected before the per-endpoint
+        # whitelist check (apply_sort) even runs.
+        with pytest.raises(ValidationError):
+            PaginationParams(sort_by="name; DROP TABLE categories")
+
+        with pytest.raises(ValidationError):
+            PaginationParams(sort_by="1name")

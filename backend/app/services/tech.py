@@ -369,7 +369,13 @@ class TechService:
         if not item.published_at:
             return float(item.priority or 5)
 
-        age_seconds = (now - item.published_at).total_seconds()
+        published_at = item.published_at
+        # Backends without timestamptz (e.g. the SQLite test database) hand back
+        # naive datetimes; the stored values are UTC.
+        if published_at.tzinfo is None:
+            published_at = published_at.replace(tzinfo=UTC)
+
+        age_seconds = (now - published_at).total_seconds()
         if age_seconds < 0:
             age_seconds = 0
 

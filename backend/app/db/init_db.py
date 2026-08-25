@@ -28,19 +28,21 @@ async def create_tables():
         await _engine.dispose()
 
 
-# Sources with is_active=False are disabled because no collector can run for them yet
-# (missing web_scrape/social collector, or — for api sources — no config.library wiring
-# and/or required API keys). They are kept as templates for future development.
-# Sources whose collector resolves via app.collectors.resolve_collector (source_type
-# match or config.library fallback) are active by default.
+# Sources with is_active=False are disabled because no collector can run for them
+# yet, or the collected data has no consumption chain yet (e.g. 天天基金: the generic
+# web_scrape collector exists, but the fund-NAV pipeline is a follow-up feature).
+# They are kept as templates for future development. Sources whose collector resolves
+# via app.collectors.resolve_collector (source_type match or config.library override)
+# are active by default.
 
 FINANCE_SOURCES = [
     {
         "name": "东方财富-A股实时",
         "source_type": "web_scrape",
         "url": "https://push2.eastmoney.com/api/qt/stock/get",
-        # EastMoneyCollector is implemented and registered as "eastmoney"; the scheduler
-        # resolves it through the config.library fallback (source_type has none).
+        # EastMoneyCollector is registered as "eastmoney"; the explicit config.library
+        # overrides source_type=web_scrape (which would otherwise resolve to the generic
+        # WebScrapeCollector) — see app.collectors.resolve_collector.
         "config": {"library": "eastmoney", "data_type": "cn_indices"},
         "refresh_interval_seconds": 15,
         "priority": 1,
@@ -87,12 +89,23 @@ FINANCE_SOURCES = [
         "is_active": False,
     },
     {
+        "name": "IEX Cloud-美股行情(可选)",
+        "source_type": "api",
+        "url": "https://cloud.iexapis.com/stable/stock/AAPL/quote",
+        "config": {"library": "iex_cloud", "data_type": "stock_quote", "symbols": ["AAPL", "MSFT", "GOOGL"]},
+        "refresh_interval_seconds": 30,
+        "priority": 5,
+        # Collector is registered (config.library=iex_cloud) but the source is optional
+        # and needs IEX_CLOUD_API_KEY; kept disabled as an activation template.
+        "is_active": False,
+    },
+    {
         "name": "yfinance-大宗商品",
         "source_type": "api",
         "url": "https://query1.finance.yahoo.com/v7/finance/chart/GC=F",
         "config": {
             "library": "yfinance",
-            "symbols": ["GC=F", "SI=F", "CL=F", "NG=F", "HG=F", "ZS=F", "ZC=F"],
+            "symbols": ["GC=F", "SI=F", "CL=F", "BZ=F", "NG=F", "HG=F", "ZS=F"],
             "history_period": "5d",
         },
         "refresh_interval_seconds": 60,
@@ -107,7 +120,10 @@ FINANCE_SOURCES = [
         "config": {"selector": "table", "url_pattern": "fund.eastmoney.com"},
         "refresh_interval_seconds": 86400,
         "priority": 1,
-        "is_active": False,  # No web_scrape collector
+        # The generic web_scrape collector exists now, but the fund-NAV consumption
+        # chain (get_fund_nav / display pipeline) is a follow-up feature; activating
+        # this source earlier would only collect data nothing consumes.
+        "is_active": False,
     },
 ]
 
@@ -121,10 +137,13 @@ TECH_AI_SOURCES = [
         "priority": 3,
     },
     {
+        # Firebase API via HackerNewsCollector (source_type matches COLLECTOR_REGISTRY):
+        # unlike the hnrss.org RSS feed it fills extra_data.hn_score, so the tech
+        # hot_score HN weighting (services/tech.py) actually receives real scores.
         "name": "HackerNews-AI/ML",
-        "source_type": "rss",
-        "url": "https://hnrss.org/newest?q=AI+machine+learning+LLM",
-        "config": {"parse_rules": {"summary": "comments_text", "extra": {"hn_votes": "score"}}},
+        "source_type": "hackernews",
+        "url": "https://hacker-news.firebaseio.com/v0/newstories.json",
+        "config": {"story_type": "newstories", "query": "AI machine learning LLM"},
         "refresh_interval_seconds": 120,
         "priority": 2,
     },
@@ -140,10 +159,25 @@ TECH_AI_SOURCES = [
         "name": "OpenAI Blog",
         "source_type": "web_scrape",
         "url": "https://openai.com/blog",
-        "config": {"selector": "article", "parse_rules": {"title": "h2", "summary": "p.excerpt"}},
+        # Generic WebScrapeCollector (CSS parse_rules); selectors are deliberately
+        # permissive — a site redesign yields empty results, never a crash.
+        # NOTE (2026-08-25): openai.com blocks plain HTTP clients with a 403
+        # (anti-bot), regardless of User-Agent. fetch_data maps 403/429 to a
+        # graceful empty result (no collector failure), so the seed stays active
+        # as a template that starts producing data once the block is lifted.
+        "config": {
+            "selector": "article",
+            "parse_rules": {
+                "item_selector": "article, ul li",
+                "title_selector": "h2, h3, h4",
+                "link_selector": "a[href]",
+                "summary_selector": "p",
+                "limit": 20,
+            },
+        },
         "refresh_interval_seconds": 1800,
         "priority": 3,
-        "is_active": False,  # No web_scrape collector
+        "is_active": True,
     },
     {
         "name": "The Batch (deeplearning.ai)",
@@ -157,10 +191,11 @@ TECH_AI_SOURCES = [
 
 TECH_ROBOTICS_SOURCES = [
     {
+        # Firebase API via HackerNewsCollector; see HackerNews-AI/ML seed for rationale.
         "name": "HackerNews-Robotics",
-        "source_type": "rss",
-        "url": "https://hnrss.org/newest?q=robot+robotics+drones",
-        "config": {"parse_rules": {"summary": "comments_text"}},
+        "source_type": "hackernews",
+        "url": "https://hacker-news.firebaseio.com/v0/newstories.json",
+        "config": {"story_type": "newstories", "query": "robot robotics drones"},
         "refresh_interval_seconds": 120,
         "priority": 2,
     },
@@ -192,10 +227,25 @@ TECH_ROBOTICS_SOURCES = [
         "name": "Automotive News",
         "source_type": "web_scrape",
         "url": "https://www.autonews.com",
-        "config": {"selector": "article", "parse_rules": {"title": "h2.article-title", "summary": "p.excerpt"}},
+        # Generic WebScrapeCollector (CSS parse_rules). A live DOM probe was not
+        # possible: autonews.com answers 403 to plain HTTP clients even with a
+        # browser User-Agent (anti-bot), so these are deliberately permissive,
+        # generic-newsroom selectors (h2/[class*=title] structure assumed).
+        # While the site blocks us, fetch_data maps the 403 to a graceful empty
+        # result anyway; the rules kick in once the block is lifted.
+        "config": {
+            "selector": "article",
+            "parse_rules": {
+                "item_selector": "article, [class*=story], [class*=teaser], h2, h3",
+                "title_selector": "h2 a, h3 a, [class*=title] a, a[href]",
+                "link_selector": "h2 a, h3 a, [class*=title] a, a[href]",
+                "summary_selector": "p.excerpt, p",
+                "limit": 20,
+            },
+        },
         "refresh_interval_seconds": 86400,
         "priority": 5,
-        "is_active": False,  # No web_scrape collector
+        "is_active": True,
     },
 ]
 
@@ -220,10 +270,25 @@ TECH_EMBEDDED_SOURCES = [
         "name": "RISC-V International Blog",
         "source_type": "web_scrape",
         "url": "https://riscv.org/blog/",
-        "config": {"selector": "article", "parse_rules": {"title": "h2.post-title", "summary": "p"}},
+        # Generic WebScrapeCollector (CSS parse_rules). Selectors tuned against
+        # the live DOM (2026-08-25): WordPress/Salient theme, blog grid cards are
+        # <div class="... grid-design recent-posts"> containing <a class="... title"
+        # href=...>, <p class="... excerpt"> and <span class="publish-date">.
+        # Plain fallbacks (article/h2/time) cover a future redesign.
+        "config": {
+            "selector": "article",
+            "parse_rules": {
+                "item_selector": "div.recent-posts, article",
+                "title_selector": "a.title, h2",
+                "link_selector": "a.title, a[href]",
+                "summary_selector": "p.excerpt, p",
+                "date_selector": "span.publish-date, time",
+                "limit": 20,
+            },
+        },
         "refresh_interval_seconds": 1800,
         "priority": 4,
-        "is_active": False,  # No web_scrape collector
+        "is_active": True,
     },
     {
         "name": "EE Times",
@@ -264,10 +329,27 @@ TECH_SPACE_SOURCES = [
         "name": "SpaceX Updates",
         "source_type": "web_scrape",
         "url": "https://www.spacex.com/updates/",
-        "config": {"selector": "article", "parse_rules": {"title": "h3.update-title", "summary": "p"}},
+        # Generic WebScrapeCollector (CSS parse_rules); spacex.com/updates is a
+        # JS-heavy timeline, so these selectors are permissive — an SPA-rendered
+        # page simply yields an empty result rather than an error.
+        # NOTE (2026-08-25): spacex.com blocks plain HTTP clients with a 403
+        # (anti-bot), regardless of User-Agent. fetch_data maps 403/429 to a
+        # graceful empty result (no collector failure), so the seed stays active
+        # as a template that starts producing data once the block is lifted.
+        "config": {
+            "selector": "article",
+            "parse_rules": {
+                "item_selector": "article, section[class*=update], div[class*=update]",
+                "title_selector": "h1, h2, h3, [class*=title]",
+                "link_selector": "a[href]",
+                "summary_selector": "p",
+                "date_selector": "time, [class*=date]",
+                "limit": 20,
+            },
+        },
         "refresh_interval_seconds": 1800,
         "priority": 3,
-        "is_active": False,  # No web_scrape collector
+        "is_active": True,
     },
     {
         "name": "ESA News",
@@ -295,7 +377,7 @@ TECH_CROSS_DOMAIN_SOURCES = [
         "config": {"platform": "reddit", "query": "r/artificial+robotics+embedded+space", "parse_rules": {}},
         "refresh_interval_seconds": 600,
         "priority": 4,
-        "is_active": False,  # No social collector
+        "is_active": False,  # RedditCollector exists (library=reddit); seed subreddits config is a follow-up
     },
     {
         "name": "Google News Tech",

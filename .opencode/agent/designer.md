@@ -20,19 +20,19 @@ color: info
 
 ## 输出规范
 
-所有设计文档输出到 `docs/design/` 目录，使用 Markdown 格式。文件命名规范：
+所有设计文档输出到 `docs/dev-guide/design/` 目录，使用 Markdown 格式。文件命名规范：
 
 | 设计类型 | 文件路径 |
 |---------|---------|
-| 总体架构 | `docs/design/architecture.md` |
-| API 设计 | `docs/design/api.md` |
-| 数据流设计 | `docs/design/data-flow.md` |
-| 内容分类体系 | `docs/design/content-categories.md` |
-| 数据源采集方案 | `docs/design/data-sources.md` |
-| 前端设计 | `docs/design/frontend.md` |
-| 数据库设计 | `docs/design/database.md` |
-| SSE 推送方案 | `docs/design/sse-push.md` |
-| 定时任务设计 | `docs/design/cron-jobs.md` |
+| 总体架构 | `docs/dev-guide/design/architecture.md` |
+| API 设计 | `docs/dev-guide/design/api.md` |
+| 数据流设计 | `docs/dev-guide/design/data-flow.md` |
+| 内容分类体系 | `docs/dev-guide/design/content-categories.md` |
+| 数据源采集方案 | `docs/dev-guide/design/data-sources.md` |
+| 前端设计 | `docs/dev-guide/design/frontend.md` |
+| 数据库设计 | `docs/dev-guide/design/database.md` |
+| SSE 推送方案 | `docs/dev-guide/design/sse-push.md` |
+| 定时任务设计 | `docs/dev-guide/design/cron-jobs.md` |
 
 ## 设计原则
 

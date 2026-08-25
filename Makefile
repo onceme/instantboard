@@ -1,6 +1,6 @@
 .PHONY: help dev up down logs logs-api logs-worker \
        test test-unit test-integration test-e2e test-backend test-frontend \
-       lint lint-fix format \
+       lint lint-fix format hooks \
        build build-api build-frontend \
        migrate makemigration seed \
        clean clean-data reset-db \
@@ -112,6 +112,11 @@ format:         ## Format code (ruff format + prettier)
 	cd backend && ruff format app/ tests/
 	cd frontend && npx prettier --write src/
 
+hooks:          ## Install git hooks (pre-commit lint + pre-push unit tests)
+	git config core.hooksPath .githooks
+	@echo "Git hooks installed from .githooks/ (pre-commit: ruff + eslint, pre-push: backend unit tests)."
+	@echo "Disable with: git config --unset core.hooksPath"
+
 # ========================================
 # Building
 # ========================================
@@ -133,12 +138,12 @@ build-prod:     ## Build the production images
 # ========================================
 
 migrate:        ## Run database migrations
-	$(COMPOSE) exec api alembic upgrade head || \
-	cd backend && alembic upgrade head
+	$(COMPOSE) exec api alembic -c app/alembic/alembic.ini upgrade head || \
+	cd backend && alembic -c app/alembic/alembic.ini upgrade head
 
 makemigration:  ## Generate a migration file (requires msg="description")
-	$(COMPOSE) exec api alembic revision --autogenerate -m "$(msg)" || \
-	cd backend && alembic revision --autogenerate -m "$(msg)"
+	$(COMPOSE) exec api alembic -c app/alembic/alembic.ini revision --autogenerate -m "$(msg)" || \
+	cd backend && alembic -c app/alembic/alembic.ini revision --autogenerate -m "$(msg)"
 
 seed:           ## Run seed data initialization
 	$(COMPOSE) exec api python -c "from app.db.init_db import init_db; import asyncio; asyncio.run(init_db())" || \

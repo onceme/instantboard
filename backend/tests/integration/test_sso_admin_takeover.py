@@ -5,7 +5,7 @@ email, which let an SSO login take over the local admin record (sso_provider='lo
 system tenant, role='admin') and accounts of other tenants. Post-fix semantics:
 
 - provider='local' records are never matched (admin identities are isolated per
-  docs/design/admin-login.md; SSO with the admin email provisions a fresh member user);
+  docs/dev-guide/design/admin-login.md; SSO with the admin email provisions a fresh member user);
 - matching is scoped to the default tenant (where new SSO users are provisioned);
 - the main path (same provider + provider_id) still refreshes the profile as before.
 

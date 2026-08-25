@@ -183,6 +183,16 @@ class TestRedisOperations:
             result = await redis_sadd("key1", "member1", "member2")
             assert result == 2
             mock_client.sadd.assert_called_once_with("key1", "member1", "member2")
+            mock_client.expire.assert_not_called()
+
+    async def test_redis_sadd_with_ttl_sets_expire(self):
+        mock_client = AsyncMock()
+        mock_client.sadd.return_value = 1
+        with patch("app.core.redis.get_redis_client", return_value=mock_client):
+            result = await redis_sadd("key1", "member1", ttl=86400)
+            assert result == 1
+            mock_client.sadd.assert_called_once_with("key1", "member1")
+            mock_client.expire.assert_awaited_once_with("key1", 86400)
 
     async def test_redis_sismember(self):
         mock_client = AsyncMock()

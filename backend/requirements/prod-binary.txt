@@ -1,0 +1,85 @@
+# prod-binary.txt — arm/v7 可用的生产依赖闭包子集（混合交叉构建用）
+#
+# 用途：供 docker build 的 wheel-fetcher 阶段在原生构建平台（amd64）上预下载
+# arm/v7 目标平台的 wheel（pip download --only-binary=:all: --platform ...），
+# 使 builder 阶段在 arm/v7（QEMU 模拟）下安装时免逐包网络下载。
+# 设计见 docs/dev-guide/design/cd-workflow-optimization.md §5.3。
+#
+# 生成/更新方法（requirements/base.txt 或 prod.txt 依赖变更时重新生成）：
+#   1. python3.11 -m venv /tmp/ib-probe
+#      /tmp/ib-probe/bin/pip install -r backend/requirements/prod.txt
+#      /tmp/ib-probe/bin/pip freeze        # 得到生产闭包的实际解析版本
+#   2. 对每个包查 https://pypi.org/pypi/<pkg>/<version>/json 的分发文件，保留存在
+#      cp311 兼容的 armv7l wheel（manylinux*_armv7l，含 abi3）或纯 Python 通用
+#      wheel（py3-none-any）的包；以 == 锁定解析版本写入本文件（必须含二级及以下
+#      传递依赖，不只一级包）。
+#   3. 验证：pip download --no-deps --dest /tmp/x --platform manylinux2014_armv7l
+#      --platform manylinux_2_17_armv7l --platform manylinux_2_28_armv7l
+#      --platform manylinux_2_31_armv7l --python-version 311 --implementation cp
+#      --abi cp311 --only-binary=:all: -r prod-binary.txt 必须全部下载成功。
+#
+# 下载使用 --no-deps：本清单已是校验过的完整闭包（含全部二级及以下依赖）。
+# 被排除的 cffi 恰是清单内 cryptography 的强依赖（非 extra），若做完整依赖
+# 解析必然失败，故逐包精确下载。
+#
+# 失败语义：清单中任何一条在 PyPI 找不到匹配 wheel 时，wheel-fetcher 阶段
+# 当轮构建立即失败（fail-fast，避免静默装错）。若 prod.txt 依赖图变化而本清单
+# 未同步，多出的包不会在此失败，而是退回 builder 阶段从 PyPI 现下/现编译
+# （行为正确，仅损失本优化）；此时应按上述步骤重新生成本清单。
+#
+# 排除的包（经逐一查证，PyPI 全历史均无 armv7l wheel，由 builder 在 arm/v7 上源码编译）：
+#   - uvloop      11.6min（uvicorn[standard] extra；用户决策保留，见设计 §5.1/§9-①）
+#   - asyncpg      5.7min（base.txt 刻意锁 <0.32，任何版本均无 wheel）
+#   - cffi         ~47s （python-jose[cryptography] 引入）
+#   - greenlet     ~41s （sqlalchemy[asyncio] 引入）
+#   - httptools    秒级 （uvicorn[standard] extra；全历史无 armv7l wheel）
+#   - psutil       秒级 （全历史无 armv7l wheel）
+#   - markupsafe   秒级 （全历史无 armv7l wheel；mako 引入）
+#   - pyyaml       秒级 （全历史无 armv7l wheel；uvicorn[standard] extra 引入）
+# 其余包（含上面被排除包的可二进制依赖，如 pycparser/six）全部收录于下方。
+
+alembic==1.19.1
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.14.2
+apscheduler==3.11.3
+bcrypt==4.3.0
+beautifulsoup4==4.15.0
+certifi==2026.7.22
+click==8.4.2
+cryptography==50.0.0
+dnspython==2.8.0
+ecdsa==0.19.2
+email-validator==2.3.0
+fastapi==0.141.1
+feedparser==6.0.14
+feedparser-sgmllib==2.1.0
+gunicorn==26.2.0
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+idna==3.19
+lxml==6.1.2
+mako==1.4.1
+passlib==1.7.4
+pyasn1==0.6.4
+pycparser==3.0
+pydantic==2.13.4
+pydantic-core==2.46.4
+pydantic-settings==2.15.0
+python-dateutil==2.9.0.post0
+python-dotenv==1.2.3
+python-jose==3.5.0
+python-multipart==0.0.32
+redis==8.1.0
+rsa==4.9.1
+six==1.17.0
+soupsieve==2.9.2
+sqlalchemy==2.0.52
+starlette==1.6.0
+typing-extensions==4.16.0
+typing-inspection==0.4.4
+tzlocal==5.4.4
+uvicorn==0.52.4
+watchfiles==1.2.0
+websockets==17.0.1

@@ -1,9 +1,12 @@
 import json
+import logging
 from typing import Any
 
 from redis.asyncio import ConnectionPool, Redis
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 _pool: ConnectionPool | None = None
 _client: Redis | None = None
@@ -58,8 +61,14 @@ class RedisKeys:
     ADMIN_LOGIN_FAIL_IP = "admin_login:fail_ip:{ip}"
     ADMIN_LOGIN_LOCK_IP = "admin_login:lock_ip:{ip}"
     WORKER_HEARTBEAT = "scheduler:worker:heartbeat"
+    STREAM_HISTORY = "stream:history:{category}"
+    APIKEY_ROTATION = "apikey:rotation:{service}"
+    APIKEY_LIMITED = "apikey:limited:{service}:{key_hash}"
+    APIKEY_INVALID = "apikey:invalid:{service}:{key_hash}"
 
     SEARCH_TTL = 300
+    STREAM_HISTORY_LIMIT = 500
+    STREAM_HISTORY_TTL = 1800
     # Worker heartbeat TTL: 3x the 15s write interval (app/scheduler/worker.py).
     # Also used by the api side as the freshness threshold when judging worker
     # health from the heartbeat (app/services/dashboard.py).
@@ -133,6 +142,10 @@ class RedisKeys:
     def worker_heartbeat_key() -> str:
         return RedisKeys.WORKER_HEARTBEAT
 
+    @staticmethod
+    def stream_history_key(category: str) -> str:
+        return RedisKeys.STREAM_HISTORY.format(category=category)
+
 
 async def redis_get(key: str) -> str | None:
     client = await get_redis_client()
@@ -166,11 +179,44 @@ async def redis_hgetall(key: str) -> dict:
     return await client.hgetall(key)
 
 
-async def redis_sadd(key: str, *members: str) -> int:
+async def redis_sadd(key: str, *members: str, ttl: int | None = None) -> int:
     client = await get_redis_client()
-    return await client.sadd(key, *members)
+    added = await client.sadd(key, *members)
+    if ttl is not None:
+        # Refresh on every write so an active set never expires mid-stream while
+        # an abandoned one is reclaimed automatically.
+        await client.expire(key, ttl)
+    return added
 
 
 async def redis_sismember(key: str, member: str) -> bool:
     client = await get_redis_client()
     return await client.sismember(key, member)
+
+
+async def redis_push_history(key: str, value: Any, max_len: int, ttl: int | None = None) -> None:
+    """Append an event to a capped list (newest first). Never raises: failures
+    are logged so a broken Redis cannot interrupt the live publish path."""
+    try:
+        client = await get_redis_client()
+        if isinstance(value, (dict, list)):
+            value = json.dumps(value)
+        pipe = client.pipeline(transaction=False)
+        pipe.lpush(key, value)
+        pipe.ltrim(key, 0, max_len - 1)
+        if ttl is not None:
+            pipe.expire(key, ttl)
+        await pipe.execute()
+    except Exception as e:
+        logger.warning(f"Redis history push failed for {key}: {e}")
+
+
+async def redis_lrange(key: str, start: int = 0, end: int = -1) -> list[str]:
+    """Read a slice of a list without raising: errors are logged and an empty
+    list is returned so callers can degrade to "nothing to replay"."""
+    try:
+        client = await get_redis_client()
+        return await client.lrange(key, start, end)
+    except Exception as e:
+        logger.warning(f"Redis lrange failed for {key}: {e}")
+        return []

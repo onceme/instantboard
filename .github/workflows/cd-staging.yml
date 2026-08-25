@@ -49,8 +49,8 @@ jobs:
           tags: |
             ghcr.io/${{ env.IMAGE_PREFIX }}-api:staging-latest
             ghcr.io/${{ env.IMAGE_PREFIX }}-api:staging-${{ steps.meta.outputs.sha_short }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=staging-backend
+          cache-to: type=gha,scope=staging-backend,mode=max
 
       - name: Build and push frontend image
         uses: docker/build-push-action@v7
@@ -63,8 +63,8 @@ jobs:
           tags: |
             ghcr.io/${{ env.IMAGE_PREFIX }}-frontend:staging-latest
             ghcr.io/${{ env.IMAGE_PREFIX }}-frontend:staging-${{ steps.meta.outputs.sha_short }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=staging-frontend
+          cache-to: type=gha,scope=staging-frontend,mode=max
 
   deploy:
     name: Deploy to Staging

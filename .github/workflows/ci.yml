@@ -200,8 +200,8 @@ jobs:
           file: backend/Dockerfile
           target: production
           push: false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=staging-backend
+          # Read-only mirror of staging scope: CI is a validation build, not a cache writer (see cd-workflow-optimization.md §4.1)
 
       - name: Build frontend Docker image
         uses: docker/build-push-action@v7
@@ -210,5 +210,5 @@ jobs:
           file: frontend/Dockerfile
           target: prod
           push: false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=staging-frontend
+          # Read-only mirror of staging scope: CI is a validation build, not a cache writer (see cd-workflow-optimization.md §4.1)

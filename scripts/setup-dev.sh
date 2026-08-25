@@ -35,6 +35,14 @@ else
     echo ".env already exists, skipping."
 fi
 
+echo "Installing git hooks..."
+if command -v make >/dev/null 2>&1; then
+    make hooks
+else
+    git config core.hooksPath .githooks
+    echo "Git hooks installed from .githooks/"
+fi
+
 echo "Building and starting development environment..."
 cd "$PROJECT_ROOT/docker" && $DOCKER_COMPOSE up -d --build
 

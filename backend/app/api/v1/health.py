@@ -5,7 +5,7 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.dependencies import get_db, get_redis
+from app.dependencies import get_db, get_redis, require_admin
 
 router = APIRouter()
 
@@ -21,6 +21,9 @@ async def health_check():
 
 @router.get("/health/detail")
 async def health_detail(
+    # Admin-only: exposes PostgreSQL/Redis internals and the environment name.
+    # /health (above) stays public for CD smoke tests.
+    user: dict = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
     redis_client: Redis = Depends(get_redis),
 ):

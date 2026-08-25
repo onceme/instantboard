@@ -574,6 +574,59 @@ class TestAddToWatchlist:
         with pytest.raises(DuplicateWatchlistItem):
             await service.add_to_watchlist("tenant-1", "user-1", {"symbol_id": str(uuid.uuid4())})
 
+    @patch("app.services.finance.redis_delete", new_callable=AsyncMock)
+    async def test_add_success_with_symbol_only(self, mock_redis_del):
+        db, mock_result = _mock_db()
+        redis = _mock_redis()
+
+        sym = _make_finance_symbol(symbol="AAPL")
+
+        new_item = MagicMock()
+        new_item.id = uuid.uuid4()
+        new_item.symbol_id = sym.id
+        new_item.display_order = 0
+        new_item.notes = None
+        new_item.alert_threshold_percent = None
+
+        call_count = 0
+
+        async def execute_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            mock_r = MagicMock()
+            if call_count == 1:
+                mock_r.scalar_one_or_none.return_value = sym
+            elif call_count == 2:
+                mock_r.scalar.return_value = 0
+            elif call_count == 3:
+                mock_r.scalar_one_or_none.return_value = None
+            elif call_count == 4:
+                mock_r.scalar.return_value = -1
+            elif call_count == 5:
+                mock_r.scalar_one_or_none.return_value = sym
+            return mock_r
+
+        db.execute = execute_side_effect
+
+        with patch.object(FinanceService, "_get_cached_quote", new_callable=AsyncMock, return_value=None):
+            service = FinanceService(db, redis)
+            result = await service.add_to_watchlist("tenant-1", "user-1", {"symbol": "aapl"})
+            assert result["symbol_id"] == str(sym.id)
+            assert result["symbol"] == "AAPL"
+        db.add.assert_called_once()
+        added = db.add.call_args.args[0]
+        assert added.symbol_id == str(sym.id)
+
+    async def test_add_symbol_only_not_found(self):
+        db, mock_result = _mock_db()
+        redis = _mock_redis()
+
+        mock_result.scalar_one_or_none.return_value = None
+
+        service = FinanceService(db, redis)
+        with pytest.raises(SymbolNotFound, match="Symbol not found"):
+            await service.add_to_watchlist("tenant-1", "user-1", {"symbol": "NOPE"})
+
 
 class TestRemoveFromWatchlist:
     @patch("app.services.finance.redis_delete", new_callable=AsyncMock)

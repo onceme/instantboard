@@ -290,6 +290,24 @@ class SourceService:
                 "source_id": str(source.id),
                 "category_id": str(source.category_id),
                 "name": source.name,
+                # Full source payload (same shape as source_enabled) so the worker can
+                # schedule collection immediately without reading the DB — a DB read
+                # here would race the still-uncommitted create transaction. Without
+                # these fields the worker never picked the event up and freshly
+                # created active sources only started collecting after a restart.
+                "source": {
+                    "id": str(source.id),
+                    "tenant_id": str(source.tenant_id),
+                    "category_id": str(source.category_id),
+                    "category_slug": category.slug,
+                    "name": source.name,
+                    "source_type": source.source_type,
+                    "url": source.url,
+                    "config": source.config or {},
+                    "refresh_interval_seconds": source.refresh_interval_seconds,
+                    "is_active": source.is_active,
+                    "priority": source.priority,
+                },
             },
         )
 

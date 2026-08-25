@@ -37,6 +37,15 @@ def _enabled_event(source_id=None, interval=120):
     }
 
 
+def _created_event(source_id=None, interval=120, is_active=True):
+    event = _enabled_event(source_id, interval)
+    event["event"] = "source_created"
+    event["category_id"] = event["source"]["category_id"]
+    event["name"] = event["source"]["name"]
+    event["source"]["is_active"] = is_active
+    return event
+
+
 class TestHandleSourceStatusEvent:
     async def test_enabled_adds_job_from_payload(self):
         event = _enabled_event()
@@ -81,6 +90,49 @@ class TestHandleSourceStatusEvent:
             await worker_mod.handle_source_status_event({"event": "source_enabled"})
             mock_mgr.add_source_job.assert_not_awaited()
             mock_load.assert_not_awaited()
+
+    async def test_created_adds_job_from_payload(self):
+        """A freshly created active source must start collecting immediately
+        (same add_job path as source_enabled)."""
+        assert "source_created" in worker_mod.SOURCE_EVENT_NAMES
+        event = _created_event()
+        with patch.object(worker_mod, "scheduler_manager") as mock_mgr:
+            mock_mgr.add_source_job = AsyncMock()
+            mock_mgr.remove_source_job = AsyncMock()
+            await worker_mod.handle_source_status_event(event)
+            mock_mgr.add_source_job.assert_awaited_once_with(event["source"])
+            mock_mgr.remove_source_job.assert_not_awaited()
+
+    async def test_created_inactive_not_scheduled(self):
+        event = _created_event(is_active=False)
+        with patch.object(worker_mod, "scheduler_manager") as mock_mgr:
+            mock_mgr.add_source_job = AsyncMock()
+            await worker_mod.handle_source_status_event(event)
+            mock_mgr.add_source_job.assert_not_awaited()
+
+    async def test_created_without_payload_falls_back_to_db(self):
+        sid = str(uuid.uuid4())
+        db_payload = {"id": sid, "category_slug": "tech", "refresh_interval_seconds": 60, "source_type": "rss"}
+        with (
+            patch.object(worker_mod, "scheduler_manager") as mock_mgr,
+            patch.object(worker_mod, "_load_source_payload", new_callable=AsyncMock) as mock_load,
+        ):
+            mock_mgr.add_source_job = AsyncMock()
+            mock_load.return_value = db_payload
+            await worker_mod.handle_source_status_event({"event": "source_created", "source_id": sid})
+            mock_load.assert_awaited_once_with(sid)
+            mock_mgr.add_source_job.assert_awaited_once_with(db_payload)
+
+    async def test_created_db_fallback_inactive_skips(self):
+        """_load_source_payload returns None for inactive sources -> nothing scheduled."""
+        with (
+            patch.object(worker_mod, "scheduler_manager") as mock_mgr,
+            patch.object(worker_mod, "_load_source_payload", new_callable=AsyncMock) as mock_load,
+        ):
+            mock_mgr.add_source_job = AsyncMock()
+            mock_load.return_value = None
+            await worker_mod.handle_source_status_event({"event": "source_created", "source_id": "new-src"})
+            mock_mgr.add_source_job.assert_not_awaited()
 
     async def test_disabled_removes_job(self):
         sid = str(uuid.uuid4())
@@ -146,6 +198,23 @@ class TestSourceEventListener:
             mock_mgr.add_source_job.assert_awaited_once_with(enabled["source"])
             pubsub.unsubscribe.assert_awaited_once_with("channel:dashboard")
             pubsub.aclose.assert_awaited_once()
+
+    async def test_listener_dispatches_source_created(self):
+        """source_created must not be filtered out by the pub/sub loop anymore."""
+        created = _created_event()
+        messages = [{"type": "message", "data": json.dumps(created)}]
+        pubsub = _mock_pubsub(messages)
+        redis_client = MagicMock()
+        redis_client.pubsub.return_value = pubsub
+
+        with (
+            patch.object(worker_mod, "get_redis_client", new_callable=AsyncMock) as mock_get,
+            patch.object(worker_mod, "scheduler_manager") as mock_mgr,
+        ):
+            mock_get.return_value = redis_client
+            mock_mgr.add_source_job = AsyncMock()
+            await worker_mod.source_event_listener()
+            mock_mgr.add_source_job.assert_awaited_once_with(created["source"])
 
     async def test_listener_sets_subscribed_after_subscribe(self):
         pubsub = _mock_pubsub([])
@@ -255,3 +324,89 @@ class TestServiceToWorkerProtocol:
         assert message["source"]["refresh_interval_seconds"] == 120
         assert message["source"]["source_type"] == "rss"
         assert message["source"]["category_slug"] == "finance"
+
+    async def test_create_source_payload_drives_worker_add_job(self):
+        """Regression: source_created used to carry only id/name, so the worker
+        ignored it and freshly created active sources never started collecting.
+        The published payload must now be consumable by handle_source_status_event."""
+        from app.schemas.source import SourceCreate
+        from app.services.source import SourceService
+
+        tenant = MagicMock()
+        tenant.id = "tenant-1"
+        tenant.max_sources = 50
+
+        category = MagicMock()
+        category.id = uuid.uuid4()
+        category.tenant_id = "tenant-1"
+        category.slug = "finance"
+        category.refresh_interval_seconds = 300
+
+        db = AsyncMock()
+        db.flush = AsyncMock()
+        db.refresh = AsyncMock()
+        db.add = MagicMock()
+
+        refetched = MagicMock()
+        refetched.id = uuid.uuid4()
+        refetched.category_id = category.id
+        refetched.name = "Test RSS"
+        refetched.source_type = "rss"
+        refetched.url = "https://example.com/rss"
+        refetched.config = {}
+        refetched.refresh_interval_seconds = 300
+        refetched.is_active = True
+        refetched.priority = 5
+        refetched.health = None
+        refetched.category = category
+        refetched.created_at = datetime.now(UTC)
+        refetched.updated_at = datetime.now(UTC)
+
+        call_count = 0
+
+        async def execute_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            mock_r = MagicMock()
+            if call_count == 1:
+                mock_r.scalar_one_or_none.return_value = tenant
+            elif call_count == 2:
+                mock_r.scalar.return_value = 0
+            elif call_count == 3:
+                mock_r.scalar_one_or_none.return_value = category
+            else:
+                mock_r.scalar_one.return_value = refetched
+            return mock_r
+
+        db.execute = execute_side_effect
+
+        with (
+            patch("app.services.source.redis_publish", new_callable=AsyncMock) as mock_publish,
+            patch("app.services.source.redis_hset", new_callable=AsyncMock),
+        ):
+            service = SourceService(db, AsyncMock())
+            await service.create_source(
+                SourceCreate(
+                    name="Test RSS",
+                    category_id=str(category.id),
+                    source_type="rss",
+                    url="https://example.com/rss",
+                ),
+                "tenant-1",
+            )
+
+        assert mock_publish.await_count == 1
+        channel, message = mock_publish.call_args.args
+        assert channel == "channel:dashboard"
+        assert message["event"] == "source_created"
+
+        with patch.object(worker_mod, "scheduler_manager") as mock_mgr:
+            mock_mgr.add_source_job = AsyncMock()
+            await worker_mod.handle_source_status_event(message)
+            mock_mgr.add_source_job.assert_awaited_once_with(message["source"])
+
+        # Fields the worker's add_source_job strictly needs:
+        assert message["source"]["refresh_interval_seconds"] == 300
+        assert message["source"]["source_type"] == "rss"
+        assert message["source"]["category_slug"] == "finance"
+        assert message["source"]["is_active"] is True

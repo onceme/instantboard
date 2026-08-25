@@ -91,9 +91,7 @@ def sample_network_rates() -> dict:
     if net and _last_net_sample:
         elapsed = now - _last_net_sample["timestamp"]
         if elapsed > 0:
-            data["network_in_kbps"] = round(
-                max(net.bytes_recv - _last_net_sample["bytes_recv"], 0) / elapsed / 1024, 2
-            )
+            data["network_in_kbps"] = round(max(net.bytes_recv - _last_net_sample["bytes_recv"], 0) / elapsed / 1024, 2)
             data["network_out_kbps"] = round(
                 max(net.bytes_sent - _last_net_sample["bytes_sent"], 0) / elapsed / 1024, 2
             )

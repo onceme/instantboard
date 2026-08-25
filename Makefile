@@ -133,12 +133,12 @@ build-prod:     ## Build the production images
 # ========================================
 
 migrate:        ## Run database migrations
-	$(COMPOSE) exec api alembic upgrade head || \
-	cd backend && alembic upgrade head
+	$(COMPOSE) exec api alembic -c app/alembic/alembic.ini upgrade head || \
+	cd backend && alembic -c app/alembic/alembic.ini upgrade head
 
 makemigration:  ## Generate a migration file (requires msg="description")
-	$(COMPOSE) exec api alembic revision --autogenerate -m "$(msg)" || \
-	cd backend && alembic revision --autogenerate -m "$(msg)"
+	$(COMPOSE) exec api alembic -c app/alembic/alembic.ini revision --autogenerate -m "$(msg)" || \
+	cd backend && alembic -c app/alembic/alembic.ini revision --autogenerate -m "$(msg)"
 
 seed:           ## Run seed data initialization
 	$(COMPOSE) exec api python -c "from app.db.init_db import init_db; import asyncio; asyncio.run(init_db())" || \

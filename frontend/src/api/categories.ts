@@ -1,5 +1,5 @@
 import { apiGet, apiPost, apiPut, apiDelete } from "@/utils/api";
-import type { Category, TechNewsItem } from "@/types";
+import type { Category, ReclassifyResult, TechNewsItem } from "@/types";
 
 export const categoriesApi = {
   list: (params?: Record<string, unknown>) =>
@@ -14,4 +14,8 @@ export const categoriesApi = {
   update: (id: string, data: Record<string, unknown>) =>
     apiPut<Category>(`/categories/${id}`, data),
   delete: (id: string) => apiDelete(`/categories/${id}`),
+  // Rebuild topic_tags for every stored item of the category with the current
+  // classifier rules (POST /categories/{id}/reclassify)
+  reclassify: (categoryId: string) =>
+    apiPost<ReclassifyResult>(`/categories/${categoryId}/reclassify`),
 };

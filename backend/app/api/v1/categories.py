@@ -10,6 +10,7 @@ from app.schemas.category import (
     CategoryResponse,
     CategoryUpdate,
     CategoryWithSourcesResponse,
+    ReclassifyResponse,
     SubCategoryResponse,
 )
 from app.schemas.tech import TechNewsResponse
@@ -107,6 +108,22 @@ async def delete_category(
     await service.delete_category(category_id=category_id, tenant_id=tenant_id)
     await db.commit()
     return Response(status_code=204)
+
+
+@router.post("/{category_id}/reclassify", response_model=SuccessResponse[ReclassifyResponse])
+async def reclassify_category(
+    category_id: str,
+    db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+    tenant_id: str = Depends(get_current_tenant),
+):
+    service = _get_category_service(db, redis)
+    result = await service.reclassify_category_items(
+        category_id=category_id,
+        tenant_id=tenant_id,
+    )
+    await db.commit()
+    return result
 
 
 @router.get("/{category_id}/sources", response_model=SuccessResponse[CategoryWithSourcesResponse])

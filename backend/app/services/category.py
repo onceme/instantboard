@@ -16,17 +16,26 @@ from app.models.category import Category
 from app.models.item import Item
 from app.models.source import Source
 from app.models.tenant import Tenant
+
+# Bulk re-tagging must apply exactly the same rules as the collection pipeline, so
+# reuse its processors instead of duplicating the keyword tables here.
+from app.processors.categorizer import CategorizerProcessor, TechTopicExtractor
 from app.schemas.base import PaginatedMeta, PaginatedResponse, SuccessResponse
 from app.schemas.category import (
     CategoryCreate,
     CategoryResponse,
     CategoryUpdate,
     CategoryWithSourcesResponse,
+    ReclassifyResponse,
     SubCategoryResponse,
 )
 from app.services.tech import TechService
 
 logger = logging.getLogger(__name__)
+
+RECLASSIFY_BATCH_SIZE = 500
+_topic_extractor = TechTopicExtractor()
+_categorizer = CategorizerProcessor()
 
 SUBCATEGORY_LABEL_MAP = {
     "china-stock": "A股行情",
@@ -301,6 +310,90 @@ class CategoryService:
 
         await self.db.delete(category)
         await self.db.flush()
+
+    async def reclassify_category_items(
+        self,
+        category_id: str,
+        tenant_id: str,
+        batch_size: int = RECLASSIFY_BATCH_SIZE,
+    ) -> SuccessResponse[ReclassifyResponse]:
+        """Recompute topic_tags for all tenant-owned items of a category.
+
+        Tags are rebuilt with the same entry point as the collection pipeline
+        (TechTopicExtractor for type=tech, CategorizerProcessor finance rules for
+        type=finance, plain category slug otherwise), so a KEYWORD_TO_TAG update
+        can be applied to already-stored items. Rows whose tags are unchanged are
+        left untouched; the dedup key (url etc.) is never modified.
+        """
+        stmt = select(Category).where(Category.id == category_id)
+        result = await self.db.execute(stmt)
+        category = result.scalar_one_or_none()
+
+        if category is None:
+            raise CategoryNotFound()
+
+        # Cross-tenant access is reported as 404 (not 403) to avoid leaking the
+        # existence of other tenants' categories — same rule as get_category.
+        # str() on both sides: category.tenant_id is a UUID ORM attribute, the JWT
+        # tenant id is a str.
+        if str(category.tenant_id) != tenant_id and category.tenant_id != SYSTEM_TENANT_ID:
+            raise CategoryNotFound(message="Category not accessible for this tenant")
+
+        scanned = 0
+        updated = 0
+        offset = 0
+        while True:
+            batch_stmt = (
+                select(Item)
+                .where(Item.category_id == category.id, Item.tenant_id == tenant_id)
+                .order_by(Item.id)
+                .offset(offset)
+                .limit(batch_size)
+            )
+            batch = list((await self.db.execute(batch_stmt)).scalars().all())
+            if not batch:
+                break
+
+            for item in batch:
+                new_tags = self._recompute_item_tags(item, category)
+                scanned += 1
+                # Order-sensitive comparison: extraction output is deterministically
+                # sorted, so equal lists mean identical stored tags — skip the write.
+                if new_tags != list(item.topic_tags or []):
+                    item.topic_tags = new_tags
+                    updated += 1
+
+            await self.db.flush()
+            if len(batch) < batch_size:
+                break
+            offset += batch_size
+
+        logger.info(
+            f"Reclassified category {category.slug} for tenant {tenant_id}: scanned={scanned}, updated={updated}"
+        )
+
+        return SuccessResponse(
+            success=True,
+            data=ReclassifyResponse(scanned=scanned, updated=updated),
+        )
+
+    @staticmethod
+    def _recompute_item_tags(item: Item, category: Category) -> list[str]:
+        """Rebuild one item's tags exactly like CategorizerProcessor.process would
+        (level-1 tag stays the category slug, as set at collection time)."""
+        text = f"{item.title or ''} {item.summary or ''}"
+        if category.type == "tech":
+            return _topic_extractor.extract_with_level1(text, category.slug)
+        if category.type == "finance":
+            finance_tags = _categorizer._determine_finance_tags(
+                {
+                    "title": item.title or "",
+                    "summary": item.summary or "",
+                    "extra_data": item.extra_data or {},
+                }
+            )
+            return ["finance"] + finance_tags
+        return [category.slug]
 
     async def get_predefined_categories(self, tenant_id: str) -> SuccessResponse[list[CategoryResponse]]:
         stmt = select(Category).where(Category.tenant_id == SYSTEM_TENANT_ID).order_by(Category.name.asc())

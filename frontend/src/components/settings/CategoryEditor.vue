@@ -9,9 +9,11 @@ import {
   apiDelete,
   getApiErrorMessage,
 } from "@/utils/api";
-import { Plus, Pencil, Trash2 } from "lucide-vue-next";
+import { categoriesApi } from "@/api/categories";
+import { Plus, Pencil, Trash2, RefreshCw } from "lucide-vue-next";
 import EmptyState from "@/components/common/EmptyState.vue";
 import ErrorAlert from "@/components/common/ErrorAlert.vue";
+import ConfirmationDialog from "@/components/common/ConfirmationDialog.vue";
 
 const categories = ref<Category[]>([]);
 const loading = ref(false);
@@ -26,6 +28,15 @@ const editError = ref("");
 const deleteError = ref("");
 // Bumped on every new delete error so a dismissed ErrorAlert remounts and shows again
 const deleteErrorKey = ref(0);
+
+// Bulk re-tagging ("reclassify"): confirmation dialog → POST → result echo.
+// Predefined (system) categories are exempt in the UI — their tagging rules are
+// deployed system-wide — so the button only renders on custom rows.
+const reclassifyTarget = ref<Category | null>(null);
+const reclassifying = ref(false);
+const reclassifyMessage = ref("");
+const reclassifyError = ref("");
+const reclassifyErrorKey = ref(0);
 
 const customCategories = computed(() =>
   categories.value.filter((c) => c.type === "custom"),
@@ -120,6 +131,31 @@ function cancelEdit() {
   editError.value = "";
 }
 
+function openReclassify(category: Category) {
+  reclassifyTarget.value = category;
+}
+
+async function confirmReclassify() {
+  const target = reclassifyTarget.value;
+  reclassifyTarget.value = null;
+  if (!target) return;
+  reclassifying.value = true;
+  reclassifyMessage.value = "";
+  reclassifyError.value = "";
+  try {
+    const response = await categoriesApi.reclassify(target.id);
+    reclassifyMessage.value = `已扫描 ${response.data.scanned} 条，更新 ${response.data.updated} 条`;
+  } catch (err) {
+    reclassifyError.value = getApiErrorMessage(
+      err,
+      categoryFallback(err, "重新分类"),
+    );
+    reclassifyErrorKey.value += 1;
+  } finally {
+    reclassifying.value = false;
+  }
+}
+
 fetchCategories();
 </script>
 
@@ -153,6 +189,15 @@ fetchCategories();
       v-if="deleteError"
       :key="deleteErrorKey"
       :message="deleteError"
+    />
+
+    <p v-if="reclassifyMessage" class="reclassify-message">
+      {{ reclassifyMessage }}
+    </p>
+    <ErrorAlert
+      v-if="reclassifyError"
+      :key="`reclassify-${reclassifyErrorKey}`"
+      :message="reclassifyError"
     />
 
     <div class="category-list">
@@ -193,6 +238,15 @@ fetchCategories();
         <div v-else class="display-row">
           <span class="cat-name">{{ cat.name }}</span>
           <span class="cat-desc">{{ cat.description }}</span>
+          <button
+            class="reclassify-btn"
+            title="按最新的分类规则重建该分类下所有条目的标签"
+            :disabled="reclassifying"
+            @click="openReclassify(cat)"
+          >
+            <RefreshCw :size="14" :class="{ spinning: reclassifying }" />
+            重新分类
+          </button>
           <button class="edit-btn" @click="startEdit(cat)">
             <Pencil :size="14" />
           </button>
@@ -202,6 +256,19 @@ fetchCategories();
         </div>
       </div>
     </div>
+
+    <ConfirmationDialog
+      :visible="reclassifyTarget !== null"
+      title="重新分类"
+      :message="
+        reclassifyTarget
+          ? `将按最新的分类规则重建「${reclassifyTarget.name}」分类下所有条目的标签，是否继续？`
+          : ''
+      "
+      confirm-text="重新分类"
+      @confirm="confirmReclassify"
+      @cancel="reclassifyTarget = null"
+    />
   </div>
 </template>
 
@@ -363,5 +430,48 @@ fetchCategories();
 .delete-btn:hover {
   color: var(--danger);
   background-color: rgba(239, 68, 68, 0.1);
+}
+
+.reclassify-btn {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+  background-color: transparent;
+  transition: all var(--transition-fast);
+}
+
+.reclassify-btn:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.reclassify-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.reclassify-message {
+  margin: 0;
+  font-size: 13px;
+  color: var(--success);
+}
+
+.spinning {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 </style>

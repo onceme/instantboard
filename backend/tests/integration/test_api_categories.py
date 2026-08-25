@@ -166,6 +166,44 @@ class TestDeleteCategory:
         assert resp.status_code == 204
 
 
+class TestReclassifyCategory:
+    @patch("app.api.v1.categories._get_category_service")
+    def test_reclassify_success(self, mock_svc_fn, client):
+        tenant_id = str(uuid.uuid4())
+        headers = {"Authorization": f"Bearer {_token(tenant_id)}"}
+        cid = str(uuid.uuid4())
+        mock_svc = AsyncMock()
+        mock_svc.reclassify_category_items.return_value = {
+            "success": True,
+            "data": {"scanned": 1200, "updated": 37},
+        }
+        mock_svc_fn.return_value = mock_svc
+
+        resp = client.post(f"/api/v1/categories/{cid}/reclassify", headers=headers)
+        assert resp.status_code == 200
+        assert resp.json()["data"] == {"scanned": 1200, "updated": 37}
+        mock_svc.reclassify_category_items.assert_awaited_once_with(
+            category_id=cid,
+            tenant_id=tenant_id,
+        )
+
+    @patch("app.api.v1.categories._get_category_service")
+    def test_reclassify_not_found(self, mock_svc_fn, client):
+        headers = {"Authorization": f"Bearer {_token()}"}
+        from app.core.exceptions import CategoryNotFound
+
+        mock_svc = AsyncMock()
+        mock_svc.reclassify_category_items.side_effect = CategoryNotFound()
+        mock_svc_fn.return_value = mock_svc
+
+        resp = client.post(f"/api/v1/categories/{uuid.uuid4()}/reclassify", headers=headers)
+        assert resp.status_code == 404
+
+    def test_reclassify_requires_auth(self, client):
+        resp = client.post(f"/api/v1/categories/{uuid.uuid4()}/reclassify")
+        assert resp.status_code == 401
+
+
 class TestCategoryWithSources:
     @patch("app.api.v1.categories._get_category_service")
     def test_get_category_with_sources(self, mock_svc_fn, client):

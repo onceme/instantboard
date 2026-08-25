@@ -428,6 +428,7 @@ SQL查询逻辑:
 | `/api/v1/categories/{id}/sources` | GET | 分类详情 + 全部数据源列表（含 health_status / priority / refresh_interval_seconds） | `get_category_with_sources` |
 | `/api/v1/categories/{id}/subcategories` | GET | 二级子分类动态统计：按 `items.topic_tags` 聚合计数；财经/科技按固定二级 slug 白名单过滤，自定义分类返回全部标签 | `list_subcategories`（:375-460） |
 | `/api/v1/categories/{id}/items` | GET | 通用分类条目流：分页（`page`/`page_size`，PaginationParams）+ `since`（ISO-8601 下界）+ `sort`（time 默认/hot/relevance）；响应复用 TechNewsResponse schema；分类不存在或跨租户 → 404 `CATEGORY_NOT_FOUND` | `services/category.py::list_category_items`（查询复用 `TechService.list_category_items`），映射复用 `api/v1/tech.py::build_news_response` |
+| `/api/v1/categories/{id}/reclassify` | POST | 批量重打标：为该分类下**租户自有**条目（`items.tenant_id` 匹配，系统租户共享条目不重写）分批（500/批）重算 `topic_tags`——tech 走 `TechTopicExtractor`、finance 复用 `_determine_finance_tags`、其他类型回退 `[slug]`；一级标签保持 category slug 语义、仅写入标签有变化的条目、去重键不动；返回 `{scanned, updated}`；分类不存在或跨租户 → 404 `CATEGORY_NOT_FOUND` | `services/category.py::reclassify_category_items` |
 
 > 数据模型补充：categories 表另含 `priority_sort`（Boolean，默认 false）与 `is_active` 字段（`models/category.py:24-25`）；`CategoryUpdate` 支持 `priority_sort` / `is_active` 的部分更新。
 
@@ -767,7 +768,7 @@ SSE推送: ⚠️ 未实现——后端不存在 `topic_stats_update` 事件;
 - **数据源达到上限**: tenants.max_sources=50 → 同上，限制数据源数量
 - **预定义分类 slug 冲突**: 租户创建 slug="finance" 的自定义分类 → 被系统预定义 slug 占用 → UNIQUE(tenant_id, slug) 约束阻止，API 返回 `DUPLICATE_CATEGORY`
 - **自定义分类删除限制**: 分类下仍有数据源时 `ValidationError` 直接拒绝删除（需先删源，`services/category.py:282-288`）；**不存在 `category_deleted` SSE 事件**；原表述"CASCADE级联删除 + 二次确认弹窗"与实现不符
-- **Categorizer 关键词映射表更新**: `KEYWORD_TO_TAG` 为代码级常量，修改需重新发布才生效；已入库的新闻不会重新分类，仅新采集的新闻生效；⚠️ **未实现**："重新分类"按钮不存在，无批量重打标手段
+- **Categorizer 关键词映射表更新**: `KEYWORD_TO_TAG` 为代码级常量，修改需重新发布才生效；新采集的新闻自动适用新规则，已入库条目可经批量重打标刷新：`POST /api/v1/categories/{id}/reclassify` 重算该分类下租户自有条目的 `topic_tags`（见 §3.4.5）；前端 设置 → 分类管理 面板为每个自定义分类提供「重新分类」按钮（ConfirmationDialog 确认后执行，回显「已扫描 X 条，更新 Y 条」，`CategoryEditor.vue`）
 - **财经与科技混合标签**: 财经新闻如果也有 tech 标签（如"科技公司财报"）→ 允许混合标签，但财经新闻主分类是 finance，tech 标签仅作为辅助过滤
 - **空分类无数据**: 新创建的分类未添加数据源 → SSE 频道推送 heartbeat 但无 item_update → 前端显示空状态"添加数据源以获取内容"
 - **标签查询性能**: items 表百万级时 topic_tags GIN 查询 → PostgreSQL GIN 索引高效，但需定期 VACUUM 维护索引健康

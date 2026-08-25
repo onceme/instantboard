@@ -894,3 +894,153 @@ class TestListCategoryItems:
 
         assert result == envelope
         mock_tech_cls.return_value.list_category_items.assert_awaited_once()
+
+
+def _make_item(title="GPT news", summary="", topic_tags=None, extra_data=None):
+    item = MagicMock()
+    item.id = uuid.uuid4()
+    item.title = title
+    item.summary = summary
+    item.topic_tags = topic_tags if topic_tags is not None else []
+    item.extra_data = dict(extra_data) if extra_data is not None else {}
+    return item
+
+
+class TestReclassifyCategoryItems:
+    @staticmethod
+    def _execute_sequence(category, batches):
+        """First execute fetches the category; each following call pops the next batch.
+        The wrapper exposes .calls so tests can assert the number of queries issued."""
+        state = {"calls": 0}
+
+        async def execute_side_effect(*args, **kwargs):
+            state["calls"] += 1
+            mock_r = MagicMock()
+            if state["calls"] == 1:
+                mock_r.scalar_one_or_none.return_value = category
+            else:
+                scalars = MagicMock()
+                scalars.all.return_value = batches[state["calls"] - 2] if state["calls"] - 2 < len(batches) else []
+                mock_r.scalars.return_value = scalars
+            return mock_r
+
+        execute_side_effect.calls = state
+        return execute_side_effect
+
+    async def test_tech_recompute_overwrites_stale_tags(self):
+        db, _ = _mock_db()
+        redis = _mock_redis()
+
+        cat = _make_category(tenant_id="tenant-1", slug="tech", type_="tech")
+        item = _make_item(title="GPT update", topic_tags=["tech", "obsolete-tag"])
+        db.execute = self._execute_sequence(cat, [[item]])
+
+        service = CategoryService(db, redis)
+        result = await service.reclassify_category_items(str(cat.id), "tenant-1")
+
+        assert result.success is True
+        assert result.data.scanned == 1
+        assert result.data.updated == 1
+        assert item.topic_tags == ["tech", "ai", "llm"]
+
+    async def test_unchanged_tags_skip_write(self):
+        db, _ = _mock_db()
+        redis = _mock_redis()
+
+        cat = _make_category(tenant_id="tenant-1", slug="tech", type_="tech")
+        original_tags = ["tech", "ai", "llm"]
+        item = _make_item(title="GPT update", topic_tags=original_tags)
+        db.execute = self._execute_sequence(cat, [[item]])
+
+        service = CategoryService(db, redis)
+        result = await service.reclassify_category_items(str(cat.id), "tenant-1")
+
+        assert result.data.scanned == 1
+        assert result.data.updated == 0
+        # Identity check: the attribute was never reassigned, so SQLAlchemy has
+        # nothing to flush for this row (no spurious UPDATE)
+        assert item.topic_tags is original_tags
+
+    async def test_finance_rules_reused(self):
+        db, _ = _mock_db()
+        redis = _mock_redis()
+
+        cat = _make_category(tenant_id="tenant-1", slug="finance", type_="finance")
+        item = _make_item(title="黄金价格创新高", topic_tags=["finance", "china-stock"])
+        db.execute = self._execute_sequence(cat, [[item]])
+
+        service = CategoryService(db, redis)
+        result = await service.reclassify_category_items(str(cat.id), "tenant-1")
+
+        assert result.data.updated == 1
+        assert item.topic_tags == ["finance", "commodities"]
+
+    async def test_custom_category_falls_back_to_slug(self):
+        db, _ = _mock_db()
+        redis = _mock_redis()
+
+        cat = _make_category(tenant_id="tenant-1", slug="sports", type_="custom")
+        item = _make_item(title="Match tonight", topic_tags=["stale"])
+        db.execute = self._execute_sequence(cat, [[item]])
+
+        service = CategoryService(db, redis)
+        result = await service.reclassify_category_items(str(cat.id), "tenant-1")
+
+        assert result.data.updated == 1
+        assert item.topic_tags == ["sports"]
+
+    async def test_batching_scans_every_item(self):
+        db, _ = _mock_db()
+        redis = _mock_redis()
+
+        cat = _make_category(tenant_id="tenant-1", slug="tech", type_="tech")
+        items = [_make_item(title=f"GPT item {i}", topic_tags=["stale"]) for i in range(3)]
+        execute_seq = self._execute_sequence(cat, [items[:2], items[2:]])
+        db.execute = execute_seq
+
+        service = CategoryService(db, redis)
+        result = await service.reclassify_category_items(str(cat.id), "tenant-1", batch_size=2)
+
+        assert result.data.scanned == 3
+        assert result.data.updated == 3
+        for item in items:
+            assert item.topic_tags == ["tech", "ai", "llm"]
+        # 1 category fetch + 2 batch queries (stops at the short batch, no empty probe)
+        assert execute_seq.calls["calls"] == 3
+        assert db.flush.await_count == 2
+
+    async def test_missing_category_raises_not_found(self):
+        db, mock_result = _mock_db()
+        redis = _mock_redis()
+        mock_result.scalar_one_or_none.return_value = None
+
+        service = CategoryService(db, redis)
+        with pytest.raises(CategoryNotFound):
+            await service.reclassify_category_items(str(uuid.uuid4()), "tenant-1")
+
+    async def test_cross_tenant_raises_not_found(self):
+        db, mock_result = _mock_db()
+        redis = _mock_redis()
+
+        cat = _make_category(tenant_id=uuid.uuid4())
+        mock_result.scalar_one_or_none.return_value = cat
+
+        service = CategoryService(db, redis)
+        with pytest.raises(CategoryNotFound, match="not accessible"):
+            await service.reclassify_category_items(str(cat.id), "tenant-1")
+        db.flush.assert_not_awaited()
+
+    async def test_system_category_is_accessible(self):
+        db, _ = _mock_db()
+        redis = _mock_redis()
+
+        cat = _make_category(tenant_id=SYSTEM_TENANT_ID, slug="tech", type_="tech")
+        item = _make_item(title="Starlink launch", topic_tags=["stale"])
+        db.execute = self._execute_sequence(cat, [[item]])
+
+        service = CategoryService(db, redis)
+        result = await service.reclassify_category_items(str(cat.id), "tenant-1")
+
+        assert result.success is True
+        assert result.data.scanned == 1
+        assert item.topic_tags == ["tech", "space", "satellite-internet"]

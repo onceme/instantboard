@@ -69,3 +69,8 @@ class CategoryListParams(BaseModel):
     type: str | None = Field(default=None, pattern="^(finance|tech|news|custom)$")
     page: int = Field(default=1, ge=1)
     page_size: int = Field(default=20, ge=1, le=100)
+
+
+class ReclassifyResponse(BaseModel):
+    scanned: int
+    updated: int

@@ -362,6 +362,12 @@ export interface Category {
   updated_at: string;
 }
 
+// Bulk re-tagging result for POST /categories/{id}/reclassify
+export interface ReclassifyResult {
+  scanned: number;
+  updated: number;
+}
+
 export interface Source {
   id: string;
   name: string;

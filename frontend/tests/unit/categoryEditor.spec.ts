@@ -213,3 +213,140 @@ describe("delete error path", () => {
     expect(wrapper.text()).toContain("机器人");
   });
 });
+
+function overlay(): HTMLElement | null {
+  return document.body.querySelector(".dialog-overlay");
+}
+
+describe("reclassify action", () => {
+  // ConfirmationDialog teleports into <body>; keep it out of other specs
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("renders the button on custom rows only, never on predefined ones", async () => {
+    apiClient.defaults.adapter = async (config) => {
+      if (method(config) === "get" && config.url === "/categories") {
+        return okResponse(config, {
+          success: true,
+          data: [
+            makeCategory({
+              id: "cat-fin",
+              name: "财经",
+              slug: "finance",
+              type: "finance",
+            }),
+            makeCategory(),
+          ],
+        });
+      }
+      throw errorResponse(500, config, {});
+    };
+
+    const wrapper = mount(CategoryEditor);
+    await flushPromises();
+
+    expect(wrapper.find(".category-item.custom .reclassify-btn").exists()).toBe(
+      true,
+    );
+    expect(
+      wrapper.find(".category-item.predefined .reclassify-btn").exists(),
+    ).toBe(false);
+  });
+
+  it("opens the confirmation dialog; cancelling sends no request", async () => {
+    const requests: Array<{ method: string; url: string }> = [];
+    apiClient.defaults.adapter = async (config) => {
+      requests.push({ method: method(config), url: config.url ?? "" });
+      if (method(config) === "get" && config.url === "/categories") {
+        return okResponse(config, { success: true, data: [makeCategory()] });
+      }
+      throw errorResponse(500, config, {});
+    };
+
+    const wrapper = mount(CategoryEditor);
+    await flushPromises();
+
+    await wrapper.find(".reclassify-btn").trigger("click");
+    await flushPromises();
+
+    const root = overlay();
+    expect(root).not.toBeNull();
+    expect(root!.textContent).toContain("重新分类");
+    expect(root!.textContent).toContain("机器人");
+
+    (document.body.querySelector(".btn-cancel") as HTMLButtonElement).click();
+    await flushPromises();
+
+    // Only the initial GET happened — the reclassify POST was never sent
+    expect(requests.some((r) => r.method === "post")).toBe(false);
+  });
+
+  it("confirm posts to /categories/{id}/reclassify and echoes the counts", async () => {
+    let reclassifyCalls = 0;
+    apiClient.defaults.adapter = async (config) => {
+      if (method(config) === "get" && config.url === "/categories") {
+        return okResponse(config, { success: true, data: [makeCategory()] });
+      }
+      if (
+        method(config) === "post" &&
+        config.url === "/categories/cat-1/reclassify"
+      ) {
+        reclassifyCalls += 1;
+        return okResponse(config, {
+          success: true,
+          data: { scanned: 42, updated: 7 },
+        });
+      }
+      throw errorResponse(500, config, {});
+    };
+
+    const wrapper = mount(CategoryEditor);
+    await flushPromises();
+
+    await wrapper.find(".reclassify-btn").trigger("click");
+    await flushPromises();
+    (document.body.querySelector(".btn-confirm") as HTMLButtonElement).click();
+    await flushPromises();
+
+    expect(reclassifyCalls).toBe(1);
+    expect(wrapper.find(".reclassify-message").text()).toBe(
+      "已扫描 42 条，更新 7 条",
+    );
+  });
+
+  it("surfaces reclassify failures via the error alert", async () => {
+    apiClient.defaults.adapter = async (config) => {
+      if (method(config) === "get" && config.url === "/categories") {
+        return okResponse(config, { success: true, data: [makeCategory()] });
+      }
+      if (
+        method(config) === "post" &&
+        config.url === "/categories/cat-1/reclassify"
+      ) {
+        throw errorResponse(500, config, {
+          detail: {
+            error: {
+              code: "INTERNAL_ERROR",
+              message: "重打标失败，请稍后重试",
+            },
+          },
+        });
+      }
+      throw errorResponse(500, config, {});
+    };
+
+    const wrapper = mount(CategoryEditor);
+    await flushPromises();
+
+    await wrapper.find(".reclassify-btn").trigger("click");
+    await flushPromises();
+    (document.body.querySelector(".btn-confirm") as HTMLButtonElement).click();
+    await flushPromises();
+
+    expect(wrapper.find(".error-alert").text()).toContain(
+      "重打标失败，请稍后重试",
+    );
+    expect(wrapper.find(".reclassify-message").exists()).toBe(false);
+  });
+});

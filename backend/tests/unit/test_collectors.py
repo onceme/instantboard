@@ -1581,11 +1581,12 @@ class TestFinnhubCollectorExtended:
         data = {"c": 100, "pc": 99, "d": 1, "dp": 1.01, "o": 99, "h": 101, "l": 98, "t": 0}
         normalized = c._normalize_quote("TEST", data)
         assert isinstance(normalized["timestamp"], str)
-        # Should contain current date
-        import datetime
+        # Fallback uses time.gmtime() (UTC clock); compare against parsed UTC "now"
+        # instead of the local date, which differs from UTC date near local midnight.
+        from datetime import UTC, datetime, timedelta
 
-        today = datetime.date.today().isoformat()
-        assert today in normalized["timestamp"]
+        parsed = datetime.strptime(normalized["timestamp"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+        assert abs(datetime.now(UTC) - parsed) < timedelta(minutes=5)
 
     async def test_search_symbols_error(self):
         """Lines 251-256: search HTTP error and generic error."""

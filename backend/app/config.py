@@ -114,6 +114,10 @@ class Settings(BaseSettings):
     alpha_vantage_api_keys: str | None = Field(default=None, alias="ALPHA_VANTAGE_API_KEYS")
     finnhub_api_key: str = Field(default="", alias="FINNHUB_API_KEY")
     finnhub_api_keys: Annotated[list[str], NoDecode] = Field(default=[], alias="FINNHUB_API_KEYS")
+    # IEX Cloud is an optional US-stock source; the collector stays dormant without a key.
+    iex_cloud_api_key: str | None = Field(default=None, alias="IEX_CLOUD_API_KEY")
+    # Override to point at a sandbox/test deployment (e.g. https://sandbox.iexapis.com/stable).
+    iex_cloud_base_url: str = Field(default="https://cloud.iexapis.com/stable", alias="IEX_CLOUD_BASE_URL")
 
     # CORS
     cors_origins: Annotated[list[str], NoDecode] = Field(

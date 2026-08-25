@@ -41,7 +41,7 @@ cross_refs: [architecture.md, api.md, database.md, data-flow.md, finance-tab.md,
 | 2 | Alpha Vantage | REST API | alphavantage.co | 按需 | JSON | 免费(限量)/付费 | 财经 | ✅ 采集器已实现; 种子为未激活模板 |
 | 3 | 东方财富 | 公开数据接口 | push2.eastmoney.com | 15s + failover按需 | JSON | 免费 | 财经 | ✅ 活跃种子 + 指数failover第一顺位 |
 | 4 | Finnhub | REST API | finnhub.io | 按需 (failover链内) | JSON | 免费(限量)/付费 | 财经 | ✅ 采集器已实现; 无定时种子源 |
-| 5 | IEX Cloud | REST API | iexcloud.io | - | JSON | 免费(限量)/付费 | 财经 | ⚠️ 未实现 |
+| 5 | IEX Cloud | REST API | iexcloud.io | - | JSON | 免费(限量)/付费 | 财经 | ✅ 采集器已实现; 种子为未激活可选模板 |
 | 6 | 天天基金 | Web抓取 | fund.eastmoney.com | 每日 | HTML→JSON | 免费 | 财经 | ⚠️ 未激活种子 (无web_scrape采集器) |
 | 7 | MIT Tech Review | RSS | technologyreview.com/feed | 5min | RSS XML | 免费 | 科技-AI | ✅ 活跃 |
 | 8 | HackerNews | RSS | hnrss.org | 2min | RSS/JSON | 免费 | 科技-全领域 | ✅ 活跃 |
@@ -61,10 +61,10 @@ cross_refs: [architecture.md, api.md, database.md, data-flow.md, finance-tab.md,
 | 22 | ESA News | RSS | esa.int/RSS | 30min | RSS XML | 免费 | 科技-太空 | ✅ 活跃 |
 
 > ⚠️ **种子与采集器现状**（以 `app/db/init_db.py` 与 `app/collectors/__init__.py` 为准）：
-> - 已注册采集器仅 7 个：`yfinance` / `alpha_vantage` / `eastmoney` / `finnhub` / `rss` / `hackernews` / `arxiv`（`COLLECTOR_REGISTRY`）。
+> - 已注册采集器共 8 个：`yfinance` / `alpha_vantage` / `eastmoney` / `finnhub` / `iex_cloud` / `rss` / `hackernews` / `arxiv`（`COLLECTOR_REGISTRY`）。
 > - **无 `web_scrape` / `social` 采集器**：此类种子源（#6/#10/#15/#18，另含机器人领域 Automotive News 与 #20 Reddit）一律 `is_active=False`，仅作为未来开发模板保留；`beautifulsoup4`/`lxml` 依赖已声明但无任何 HTML 抓取代码。
-> - **IEX Cloud** 完全未实现（无采集器/配置/种子）；**Twitter/X** 完全缺失。
-> - Finnhub 无定时采集种子源（种子财经源共 6 条，不含 Finnhub），仅在财经 failover 链内按需调用（见 §3.5）。
+> - **IEX Cloud** 采集器已实现（可选启用），种子为未激活模板；**Twitter/X** 完全缺失。
+> - Finnhub 无定时采集种子源（种子财经源共 7 条，不含 Finnhub），仅在财经 failover 链内按需调用（见 §3.5）。
 > - source_type 为 api/web_scrape 的源通过 `config.library` 回退解析采集器（见 §3.5.1）；解析失败时 `collector_available=false`，且激活会被拒绝。
 
 ### 3.2 财经数据源详细列表
@@ -203,12 +203,26 @@ cross_refs: [architecture.md, api.md, database.md, data-flow.md, finance-tab.md,
 |------|-----|
 | **类型** | REST API |
 | **覆盖范围** | 美股为主 |
+| **Base URL** | `https://cloud.iexapis.com/stable`（可用 `IEX_CLOUD_BASE_URL` 覆盖，如指向 sandbox） |
 | **URL** | `https://cloud.iexapis.com/stable/stock/AAPL/quote?token={KEY}` |
 | **数据格式** | JSON |
-| **费用** | 免费(限量) / 付费 |
-| **优先级** | **可选** (美股深度数据需求时启用) |
+| **费用** | 免费(限量)/付费 |
+| **API Key** | 需要 (`IEX_CLOUD_API_KEY`)，统一 `APIKeyManager`（service=`iex_cloud`）管理 |
+| **优先级** | **可选** (美股深度数据需求时启用；可作为美股行情 failover 备选) |
+| **采集器** | `IEXCloudCollector` (`app/collectors/finance/iex_cloud_collector.py`) |
 
-> ⚠️ **未实现**：无采集器、无配置字段、无种子源。
+> ✅ **采集器已实现、可选启用**：`IEXCloudCollector` 已注册于 `COLLECTOR_REGISTRY`（`iex_cloud`），source_type=api 的源经 `config.library=iex_cloud` 回退解析（见 §3.5.1）。Key 管理接入统一 `APIKeyManager`：429→标记限流并轮换、401/403→标记失效（见 §3.6.2）；无 Key 或全部不可用时返回 None，保持"采集失败→上层 failover"语义。种子源为未激活可选模板（"IEX Cloud-美股行情(可选)"，`is_active=False`，需配置 `IEX_CLOUD_API_KEY` 后启用）。
+
+**关键配置** (`sources.config` JSONB):
+```json
+{
+  "library": "iex_cloud",
+  "data_type": "stock_quote",
+  "symbols": ["AAPL", "MSFT", "GOOGL"]
+}
+```
+
+支持的 `data_type` 值: `stock_quote`（`/stock/{symbol}/quote`，字段映射与 Finnhub/yfinance 行情条目格式一致；`changePercent` 为小数需 ×100）、`search`（`/search/{q}`）
 
 ### 3.3 科技数据源详细列表
 
@@ -380,7 +394,7 @@ commodities:
 **采集器解析机制**（`app/collectors/__init__.py::resolve_collector`）：
 
 1. 先按 `source_type` 查 `COLLECTOR_REGISTRY`（rss / hackernews / arxiv）；
-2. source_type 无对应采集器时（api / web_scrape），按 `config.library` 回退解析：yfinance / alpha_vantage / eastmoney / finnhub / rss / hackernews / arxiv；
+2. source_type 无对应采集器时（api / web_scrape），按 `config.library` 回退解析：yfinance / alpha_vantage / eastmoney / finnhub / iex_cloud / rss / hackernews / arxiv；
 3. 仍无法解析返回 `None` → 该源尚不可采集：响应字段 `collector_available` 向前端暴露此状态；创建/更新激活前经 `_check_collector_available` 前置校验（`services/source.py:118-131`）抛出 `NoCollectorAvailable`（`exceptions.py:31-41`），防止源处于"永久激活却从不采集"的状态。
 
 #### 3.5.2 自动Failover流程
@@ -466,7 +480,7 @@ class APIKeyManager:
 | Yahoo Finance | `YAHOO_FINANCE_API_KEY` ⚠️死配置 | 否 | - | - | httpx直连、无需Key；字段已定义但无使用方 |
 | Alpha Vantage | `ALPHA_VANTAGE_API_KEY` / `ALPHA_VANTAGE_API_KEYS` | 推荐(备用源) | 5/min | $49/月 600/min | 支持多Key列表（逗号分隔，统一APIKeyManager轮换/限流标记/失效检测，见§3.6.2），`ALPHA_VANTAGE_API_KEYS` 优先于单Key |
 | Finnhub | `FINNHUB_API_KEY` / `FINNHUB_API_KEYS` | 可选 | 60/min | $29/月 | 支持多Key列表（统一APIKeyManager轮换/限流标记/失效检测，见§3.6.2） |
-| IEX Cloud | ⚠️ 未实现 | 可选 | 限量 | $9/月起 | 无采集器/配置/种子 |
+| IEX Cloud | `IEX_CLOUD_API_KEY` | 可选 | 限量 | $9/月起 | 采集器已实现（可选启用，统一APIKeyManager轮换/限流标记/失效检测，见§3.6.2）；`IEX_CLOUD_BASE_URL` 可覆盖base URL（如指向sandbox） |
 | 东方财富 | 无 | 否 | - | - | 无需Key, 控制频率即可 |
 | Reddit | ⚠️ 未实现 | 可选 | 限量 | - | 无 `REDDIT_CLIENT_ID` 配置、无 social 采集器 |
 

@@ -87,6 +87,17 @@ FINANCE_SOURCES = [
         "is_active": False,
     },
     {
+        "name": "IEX Cloud-美股行情(可选)",
+        "source_type": "api",
+        "url": "https://cloud.iexapis.com/stable/stock/AAPL/quote",
+        "config": {"library": "iex_cloud", "data_type": "stock_quote", "symbols": ["AAPL", "MSFT", "GOOGL"]},
+        "refresh_interval_seconds": 30,
+        "priority": 5,
+        # Collector is registered (config.library=iex_cloud) but the source is optional
+        # and needs IEX_CLOUD_API_KEY; kept disabled as an activation template.
+        "is_active": False,
+    },
+    {
         "name": "yfinance-大宗商品",
         "source_type": "api",
         "url": "https://query1.finance.yahoo.com/v7/finance/chart/GC=F",

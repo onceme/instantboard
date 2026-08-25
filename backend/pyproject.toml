@@ -33,7 +33,6 @@ dependencies = [
     # probes with a >72-byte password, which bcrypt 5 rejects with ValueError instead of
     # truncating), breaking hash_password/verify_password at runtime.
     "bcrypt>=4.1.0,<5",
-    "yfinance>=0.2.31",
 ]
 
 [project.optional-dependencies]

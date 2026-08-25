@@ -29,6 +29,7 @@ frontend/src/
 │   ├── categories.ts
 │   ├── dashboard.ts
 │   ├── finance.ts
+│   ├── items.ts            # 条目手动打标: addItemTag / removeItemTag
 │   ├── sources.ts
 │   └── tech.ts
 ├── router/                 # 路由: / → Finance, /tech, /c/:slug, /dashboard, /settings, /login, /auth/callback, /ibadmin
@@ -58,6 +59,7 @@ frontend/src/
 │   │   #   NAVCalculator / MarketIndexCard / CommodityCard / FinanceSearch / QuoteChart
 │   ├── tech/               # TopicFilter.vue / NewsFeed.vue / NewsCard.vue / TopicTag.vue /
 │   │   │                   # CategoryPanel.vue / TechSubNav.vue（补充）
+│   │   │                   # NewsCard: 标签行"+"内联打标、TopicTag"×"移除（乐观+回滚）
 │   │   # ⚠️ 未实现: TrendChart（话题热度图）
 │   ├── dashboard/          # 实际 6 个:
 │   │   ├── HealthPanel.vue / SystemStatus.vue / ServicesHealth.vue
@@ -122,7 +124,7 @@ graph TD
 各视图布局摘要:
 
 - **FinanceView**: FinanceSubNav + FinanceGrid；右栏（≥1440px）WatchlistMini + FundNAV；Overview 面板目前只渲染 MarketIndices（见 [finance-tab.md](finance-tab.md)）
-- **TechView**: TechSubNav + TopicFilter + CategoryPanel×4 / NewsFeed 双视图（见 [tech-tab.md](tech-tab.md)）
+- **TechView**: TechSubNav + TopicFilter + CategoryPanel×4 / NewsFeed 双视图（见 [tech-tab.md](tech-tab.md)）；其中 NewsCard 支持三级标签手动标注——标签行"+"内联输入框打标、标签上"×"移除（乐观移除失败回滚，见 [content-categories.md](content-categories.md) §3.6.1）
 - **CategoryView**: /c/:slug 自定义分类通用信息流 — 按 slug 解析自定义分类（未命中显示 EmptyState），GET /categories/{id}/items 分页拉取（useInfiniteScroll 无限滚动，复用 NewsCard）；加载/错误/重试与 FinanceView 模式一致（见 [content-categories.md](content-categories.md) §3.3.1 Step 6）
 - **DashboardView**: HealthPanel + 双列 flex（左 SystemStatus/DataSourcesHealth，右 ServicesHealth/SSEStats）（见 [dashboard-tab.md](dashboard-tab.md)）
 - **SettingsView**: CategoryEditor / SourceEditor / ProfileSettings / ThemeToggle；CategoryEditor 为自定义分类行提供「重新分类」按钮（ConfirmationDialog 确认 → POST /categories/{id}/reclassify → 回显扫描/更新计数，失败走 ErrorAlert）

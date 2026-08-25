@@ -175,7 +175,8 @@ graph TD
     subgraph Meta["辅助信息元素"]
         NR["来源名称"]
         NP["发布时间 (相对时间)"]
-        NTag["TopicTag × N"]
+        NTag["TopicTag × N (最多显示3个)"]
+        NTagEdit["手动打标: 标签行 + 内联输入 / TopicTag × 移除"]
         NH["热度指示 (hn_score, 如有)"]
     end
     NC --> Main
@@ -190,6 +191,8 @@ graph TD
 | 蓝 | AI (ai) |
 | 橙 | 嵌入式 (embedded) |
 | 绿 | 太空 (space) |
+
+**三级标签手动标注（已实现）**：标签行（`.card-tags`）中每个 TopicTag 内含"×"，点击经 `DELETE /api/v1/items/{item_id}/tags/{tag}` 乐观移除（失败回滚并内联提示）；标签行尾"+"按钮展开内联输入框（Enter/确认提交），经 `POST /api/v1/items/{item_id}/tags` 打标，客户端按 `^[a-z0-9-]{1,32}$` 预校验，成功后以服务端返回的 `topic_tags` 覆盖本地。卡片最多显示 3 个标签（`visibleTags` slice），超出部分仍可经服务端持有。详见 [content-categories.md](content-categories.md) §3.6.1 与 [api.md](api.md) 条目手动打标 API。
 
 > ⚠️ **未实现**：图片缩略图 — `/tech/news` 响应包含 `image_url`，但 `NewsCard.vue` 不渲染（桌面/移动端均无图）。
 

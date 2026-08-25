@@ -51,7 +51,7 @@ graph TD
     subgraph level3["三级话题标签 — 动态过滤"]
         gpt4["GPT-4 — 从新闻内容自动提取"]
         starlink["Starlink — 从新闻内容自动提取"]
-        custom["手动标注 (API/UI未实现)"]
+        custom["手动标注 (已实现: POST/DELETE /items/{id}/tags + NewsCard 内联编辑)"]
     end
     finance --> cn_stock
     tech --> ai
@@ -60,9 +60,9 @@ graph TD
     ai --> custom
 ```
 
-一级分类 (Category) 对应侧边导航项和 SSE 频道，图标/颜色/频道等属性见 §3.5.6 预定义一级分类总览表；二级子分类 (SubCategory) 对应前端面板，刷新频率继承一级或自定义，各挂数据源列表 Source[]；三级话题标签 (TopicTag) 用于过滤和排序，从新闻内容自动提取，手动标注未实现。
+一级分类 (Category) 对应侧边导航项和 SSE 频道，图标/颜色/频道等属性见 §3.5.6 预定义一级分类总览表；二级子分类 (SubCategory) 对应前端面板，刷新频率继承一级或自定义，各挂数据源列表 Source[]；三级话题标签 (TopicTag) 用于过滤和排序，从新闻内容自动提取，亦可由用户手动标注（见 §3.6.1）。
 
-> ⚠️ **未实现**：三级标签用户手动标注——无打标/取消打标 API，亦无 UI。
+> ✅ **手动标注已实现**：三级标签支持用户打标/取消打标——`POST /api/v1/items/{item_id}/tags` 与 `DELETE /api/v1/items/{item_id}/tags/{tag}`（`api/v1/items.py` + `services/item.py`），前端 `NewsCard.vue` 提供标签行 "+" 内联添加与 "×" 移除（详见 §3.6.1）。
 
 #### 3.1.2 数据模型映射
 
@@ -520,9 +520,9 @@ graph TD
         direction LR
         l2_fin["finance ×6"] ~~~ l2_rob["robotics ×6"] ~~~ l2_ai["ai ×6"] ~~~ l2_emb["embedded ×6"] ~~~ l2_sp["space ×6"]
     end
-    subgraph level3_tags["三级标签 — 话题级, 动态, 无上限"]
+    subgraph level3_tags["三级标签 — 话题级, 动态"]
         direction LR
-        l3_auto["自动提取 (关键词匹配)<br/>gpt-4 / starlink / optimus ..."] ~~~ l3_manual["手动标注 (未实现)"]
+        l3_auto["自动提取 (关键词匹配)<br/>gpt-4 / starlink / optimus ..."] ~~~ l3_manual["手动标注 (已实现: /items/{id}/tags + NewsCard)"]
     end
     t_finance --> l2_fin
     t_robotics --> l2_rob
@@ -533,9 +533,14 @@ graph TD
     level2_tags --> l3_manual
 ```
 
-二级标签完整清单（财经 6 + 科技四领域 ×6 = 30 个 slug）由 §3.5.1-3.5.5 各表承载，不再进图；robotics / ai / embedded / space 在科技域兼具一级标签与二级分组依据的双重身份；三级标签目前均来自采集时的关键词匹配（§3.6.3），手动标注未实现。
+二级标签完整清单（财经 6 + 科技四领域 ×6 = 30 个 slug）由 §3.5.1-3.5.5 各表承载，不再进图；robotics / ai / embedded / space 在科技域兼具一级标签与二级分组依据的双重身份；三级标签来自采集时的关键词匹配（§3.6.3）或用户手动标注（见下）。
 
-> ⚠️ **未实现**：三级标签用户手动标注——无打标/取消打标 API；NewsCard 无标签编辑 UI；三级标签目前仅来自采集时的关键词匹配。
+> ✅ **手动标注已实现**（`POST/DELETE /api/v1/items/{item_id}/tags`，`api/v1/items.py` + `services/item.py` + `NewsCard.vue`）：
+>
+> - **打标** `POST /api/v1/items/{item_id}/tags`（body `{tag}`）：读-改-写 `items.topic_tags` JSONB，保持原层级顺序（系统标签在前、新标签追加在后），去重（已存在则幂等返回），仅租户自有条目可写（不存在/跨租户/系统共享条目一律 404 `ITEM_NOT_FOUND`）；标签格式 `^[a-z0-9-]{1,32}$`（小写字母/数字/连字符，不合法 → 400 `VALIDATION_ERROR`）；每条目达 20 个标签（`MAX_ITEM_TAGS`）后拒绝新增（400 `VALIDATION_ERROR`）。
+> - **取消打标** `DELETE /api/v1/items/{item_id}/tags/{tag}`：移除单个标签并保持其余顺序；条目 404 `ITEM_NOT_FOUND`，标签不在列表中 → 400 `VALIDATION_ERROR`。
+> - **UI**：`NewsCard.vue` 标签行"+"按钮内联输入框（Enter/确认提交，客户端同规则预校验），标签上"×"乐观移除（失败回滚）；成功后以服务端返回的 `topic_tags` 为准本地更新，失败行内提示（`getApiErrorMessage`）。
+> - ⚠️ 遗留：批量重打标（`POST /categories/{id}/reclassify`）会重算租户自有条目的全部 `topic_tags`，手动标签随之被覆盖（无独立的用户标签存储）。
 
 #### 3.6.2 标签存储与索引
 
@@ -715,7 +720,7 @@ graph TD
 **图 (b) FinanceSubNav / NewsCard 要点**：
 
 - **FinanceSubNav 组件（FinanceView 顶部）**：Overview / Watchlist / Search / Indices / Commodities 共 5 个入口；财经二级标签对应子面板切换（不走 topic_tags 过滤）。
-- **NewsCard 组件（卡片上的标签）**：领域色块标识（左边缘 4px 色条）；TopicTag ×2-3（如 AI、大语言模型）；移动端最多显示 TopicTag ×1。
+- **NewsCard 组件（卡片上的标签）**：领域色块标识（左边缘 4px 色条）；TopicTag ×2-3（如 AI、大语言模型）；移动端最多显示 TopicTag ×1；标签可手动编辑——标签行"+"内联输入框打标（`POST /items/{item_id}/tags`），TopicTag 内"×"移除（`DELETE /items/{item_id}/tags/{tag}`，乐观移除失败回滚），详见 §3.6.1。
 
 #### 3.6.5 标签统计与热度
 

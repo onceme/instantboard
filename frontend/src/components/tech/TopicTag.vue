@@ -2,13 +2,19 @@
 import { DOMAIN_CONFIG } from "@/types";
 import { computed } from "vue";
 
-const props = defineProps<{
-  tag: string;
-  domain: string;
-}>();
+const props = withDefaults(
+  defineProps<{
+    tag: string;
+    domain: string;
+    // When set, renders a small × to remove the tag (emits "remove")
+    removable?: boolean;
+  }>(),
+  { removable: false },
+);
 
 const emit = defineEmits<{
   click: [tag: string];
+  remove: [tag: string];
 }>();
 
 const domainColorVar = computed(() => {
@@ -26,6 +32,14 @@ const domainColorVar = computed(() => {
     @click="emit('click', props.tag)"
   >
     {{ tag }}
+    <span
+      v-if="removable"
+      class="tag-remove"
+      role="button"
+      :aria-label="`移除标签 ${tag}`"
+      @click.stop.prevent="emit('remove', props.tag)"
+      >×</span
+    >
   </button>
 </template>
 
@@ -46,5 +60,15 @@ const domainColorVar = computed(() => {
   background-color: var(--tag-color);
   color: white;
   border-color: var(--tag-color);
+}
+
+.tag-remove {
+  margin-left: 4px;
+  opacity: 0.6;
+  font-weight: 700;
+}
+
+.tag-remove:hover {
+  opacity: 1;
 }
 </style>

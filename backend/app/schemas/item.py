@@ -3,6 +3,15 @@ from datetime import datetime
 from pydantic import BaseModel
 
 
+class TagUpdateRequest(BaseModel):
+    tag: str
+
+
+class ItemTagsResponse(BaseModel):
+    item_id: str
+    topic_tags: list[str]
+
+
 class ItemResponse(BaseModel):
     id: str
     title: str

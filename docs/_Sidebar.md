@@ -34,5 +34,3 @@
   * [安全设计](dev-guide-design-security)
   * [管理员登录](dev-guide-design-admin-login)
   * [基础设施](dev-guide-design-infrastructure)
-  * [Mermaid 图示规范](dev-guide-design-mermaid-style)
-  * [文档/Wiki 架构](dev-guide-design-docs-wiki-architecture)

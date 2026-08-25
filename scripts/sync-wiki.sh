@@ -17,7 +17,7 @@
 # 前置条件：目标仓库的 Wiki 必须已初始化（在网页端 Wiki 页签创建过任意一页），
 # 否则 .wiki.git 仓库不存在，克隆会失败。
 #
-# 转换规则（与 docs/dev-guide/design/docs-wiki-architecture.md §3.5 一致）：
+# 转换规则：
 #   1. 页名 = docs/ 相对路径去 .md、/ → -（Home/_Sidebar/_Footer 保留原名）；
 #   2. 剥离文件首部 YAML frontmatter（无 frontmatter 的文件直接跳过）；
 #   3. 站内相对链接重写为扁平页名（锚点保留）；已写成的扁平页名原样通过；

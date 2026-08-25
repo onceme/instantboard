@@ -86,7 +86,7 @@ bash scripts/setup-dev.sh
 | [架构与代码导读](docs/dev-guide/architecture-overview.md) | 技术栈全表 + 架构图 + 项目结构 |
 | [开发指南](docs/dev-guide/development.md) | 新采集器 / 新端点 / 新组件 + 测试 |
 | [CI/CD](docs/dev-guide/cicd.md) | GitHub Actions 工作流与分支策略 |
-| [设计文档](docs/dev-guide/design/) | 16 份设计文档（总体架构 / API / 数据库 / 数据流 / 安全等） |
+| [设计文档](docs/dev-guide/design/) | 14 份设计文档（总体架构 / API / 数据库 / 数据流 / 安全等） |
 
 ## 许可证
 

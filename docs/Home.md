@@ -32,4 +32,4 @@ InstantBoard 是一个**实时信息聚合消息板**服务，采用前后端分
 | [开发指南](dev-guide/development.md) | 新采集器 / 新端点 / 新组件 + 测试 |
 | [CI/CD](dev-guide/cicd.md) | GitHub Actions 工作流与分支策略 |
 
-设计文档共 16 份，位于 `dev-guide/design/`（wiki 页名前缀 `dev-guide-design-`），完整清单见侧边栏**设计文档**分组；建议从[总体架构](dev-guide/design/architecture.md)读起。
+设计文档共 14 份，位于 `dev-guide/design/`（wiki 页名前缀 `dev-guide-design-`），完整清单见侧边栏**设计文档**分组；建议从[总体架构](dev-guide/design/architecture.md)读起。

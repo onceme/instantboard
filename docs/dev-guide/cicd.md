@@ -16,6 +16,6 @@
 
 ## Wiki 同步说明
 
-`docs/` 是 GitHub Wiki 的单一事实来源，由 `sync-wiki.yml` 在合入 `main` 后自动同步（压平页名、剥离 frontmatter、重写站内链接）。同步依赖 `WIKI_SYNC_TOKEN` secret（具备 wiki 写权限的 PAT 或部署密钥）。架构方案见 [文档/Wiki 架构设计](design/docs-wiki-architecture.md)。
+`docs/` 是 GitHub Wiki 的单一事实来源，由 `sync-wiki.yml` 在合入 `main` 后自动同步（压平页名、剥离 frontmatter、重写站内链接）。同步依赖 `WIKI_SYNC_TOKEN` secret（具备 wiki 写权限的 PAT 或部署密钥）。
 
 完整的 Docker 编排、部署流程与 CI/CD 细则见 [基础设施设计](design/infrastructure.md)。

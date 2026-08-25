@@ -118,7 +118,7 @@ instantboard/
 │   ├── _Sidebar.md           # wiki 侧边栏（特殊文件）
 │   ├── _Footer.md            # wiki 页脚（特殊文件）
 │   ├── user-guide/           # 用户手册 13 页
-│   └── dev-guide/            # 开发者手册 3 页 + design/ 设计文档 16 份
+│   └── dev-guide/            # 开发者手册 3 页 + design/ 设计文档 14 份
 │
 ├── scripts/                  # 运维脚本
 │   ├── setup-dev.sh          # 一键初始化开发环境

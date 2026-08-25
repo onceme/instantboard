@@ -1,4 +1,5 @@
 import logging
+import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -68,9 +69,28 @@ class HackerNewsCollector(BaseCollector):
 
         return items
 
+    @staticmethod
+    def _query_keywords(source: Any) -> list[str]:
+        config = getattr(source, "config", {}) or {}
+        raw = str(config.get("query", "") or "").strip()
+        if not raw:
+            return []
+        # hnrss-style query strings survive as-is ("AI+machine+learning"); split on
+        # whitespace/plus/comma into individual keywords.
+        return [kw.lower() for kw in raw.replace("+", " ").replace(",", " ").split() if kw]
+
+    @staticmethod
+    def _matches_keywords(title: str, keywords: list[str]) -> bool:
+        if not keywords:
+            return True
+        lowered = title.lower()
+        return any(re.search(rf"(?<![a-z0-9]){re.escape(kw)}(?![a-z0-9])", lowered) for kw in keywords)
+
     async def parse_data(self, raw_data: Any, source: Any) -> list[dict]:
         if not raw_data or not isinstance(raw_data, list):
             return []
+
+        keywords = self._query_keywords(source)
 
         items = []
         for hn_item in raw_data:
@@ -78,6 +98,8 @@ class HackerNewsCollector(BaseCollector):
                 continue
 
             title = hn_item.get("title", "")
+            if keywords and not self._matches_keywords(title, keywords):
+                continue
             url = hn_item.get("url", "")
             if not url:
                 url = f"https://news.ycombinator.com/item?id={hn_item.get('id', '')}"

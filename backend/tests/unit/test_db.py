@@ -67,6 +67,22 @@ class TestInitDBModule:
         config_symbols = {item["symbol"] for item in COMMODITIES_CONFIG}
         assert seed_symbols == config_symbols
 
+    def test_hackernews_seeds_resolve_to_hackernews_collector(self):
+        """Regression: HN seeds must use the Firebase API collector (fills
+        extra_data.hn_score, so tech hot_score HN weighting works) instead of
+        hnrss.org RSS feeds (no score field, weighting stuck at 0)."""
+        from app.collectors import resolve_collector
+        from app.collectors.tech.hackernews_collector import HackerNewsCollector
+        from app.db.init_db import TECH_AI_SOURCES, TECH_ROBOTICS_SOURCES
+
+        hn_sources = [src for src in TECH_AI_SOURCES + TECH_ROBOTICS_SOURCES if src["name"].startswith("HackerNews")]
+        assert len(hn_sources) == 2
+        for src in hn_sources:
+            assert resolve_collector(src["source_type"], src.get("config")) is HackerNewsCollector
+            assert src["refresh_interval_seconds"] == 120
+            assert src.get("is_active", True) is True
+            assert src["config"].get("query")
+
     def test_tech_sources_constants(self):
         from app.db.init_db import TECH_AI_SOURCES, TECH_EMBEDDED_SOURCES, TECH_ROBOTICS_SOURCES, TECH_SPACE_SOURCES
 

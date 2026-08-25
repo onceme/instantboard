@@ -121,10 +121,13 @@ TECH_AI_SOURCES = [
         "priority": 3,
     },
     {
+        # Firebase API via HackerNewsCollector (source_type matches COLLECTOR_REGISTRY):
+        # unlike the hnrss.org RSS feed it fills extra_data.hn_score, so the tech
+        # hot_score HN weighting (services/tech.py) actually receives real scores.
         "name": "HackerNews-AI/ML",
-        "source_type": "rss",
-        "url": "https://hnrss.org/newest?q=AI+machine+learning+LLM",
-        "config": {"parse_rules": {"summary": "comments_text", "extra": {"hn_votes": "score"}}},
+        "source_type": "hackernews",
+        "url": "https://hacker-news.firebaseio.com/v0/newstories.json",
+        "config": {"story_type": "newstories", "query": "AI machine learning LLM"},
         "refresh_interval_seconds": 120,
         "priority": 2,
     },
@@ -157,10 +160,11 @@ TECH_AI_SOURCES = [
 
 TECH_ROBOTICS_SOURCES = [
     {
+        # Firebase API via HackerNewsCollector; see HackerNews-AI/ML seed for rationale.
         "name": "HackerNews-Robotics",
-        "source_type": "rss",
-        "url": "https://hnrss.org/newest?q=robot+robotics+drones",
-        "config": {"parse_rules": {"summary": "comments_text"}},
+        "source_type": "hackernews",
+        "url": "https://hacker-news.firebaseio.com/v0/newstories.json",
+        "config": {"story_type": "newstories", "query": "robot robotics drones"},
         "refresh_interval_seconds": 120,
         "priority": 2,
     },

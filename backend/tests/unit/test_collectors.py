@@ -1009,6 +1009,73 @@ class TestHackerNewsCollector:
         assert await c.parse_data([], _make_source()) == []
         assert await c.parse_data("not list", _make_source()) == []
 
+    async def test_parse_data_query_filter_keeps_matching_stories(self):
+        c = HackerNewsCollector()
+        source = _make_source(config={"story_type": "newstories", "query": "AI machine learning LLM"})
+        raw_data = [
+            {
+                "id": 1,
+                "type": "story",
+                "title": "New LLM beats benchmarks",
+                "url": "http://a.com",
+                "score": 90,
+                "time": 1700000000,
+            },
+            {
+                "id": 2,
+                "type": "story",
+                "title": "Email maintenance window",
+                "url": "http://b.com",
+                "score": 40,
+                "time": 1700000000,
+            },
+            {
+                "id": 3,
+                "type": "story",
+                "title": "Show HN: machine learning toolkit",
+                "url": "http://c.com",
+                "score": 25,
+                "time": 1700000000,
+            },
+        ]
+        result = await c.parse_data(raw_data, source)
+        # "ai" must match whole words only (not inside "email"/"maintenance")
+        assert [item["extra_data"]["hn_id"] for item in result] == [1, 3]
+
+    async def test_parse_data_query_filter_case_insensitive(self):
+        c = HackerNewsCollector()
+        source = _make_source(config={"query": "robot"})
+        raw_data = [
+            {
+                "id": 1,
+                "type": "story",
+                "title": "ROBOT deliveries expand",
+                "url": "http://a.com",
+                "score": 5,
+                "time": 1700000000,
+            },
+            {
+                "id": 2,
+                "type": "story",
+                "title": "A robotics startup",
+                "url": "http://b.com",
+                "score": 5,
+                "time": 1700000000,
+            },
+            {"id": 3, "type": "story", "title": "Cooking tips", "url": "http://c.com", "score": 5, "time": 1700000000},
+        ]
+        result = await c.parse_data(raw_data, source)
+        assert [item["extra_data"]["hn_id"] for item in result] == [1]
+
+    async def test_parse_data_no_query_no_filter(self):
+        c = HackerNewsCollector()
+        raw_data = [
+            {"id": 1, "type": "story", "title": "Anything", "url": "http://a.com", "score": 5, "time": 1700000000},
+            {"id": 2, "type": "story", "title": "Else", "url": "http://b.com", "score": 5, "time": 1700000000},
+        ]
+        result = await c.parse_data(raw_data, _make_source())
+        assert len(result) == 2
+
 
 # ── ArxivCollector ───────────────────────────────────────────────
 class TestArxivCollector:

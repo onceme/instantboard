@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onMounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { TrendingUp, Code, Activity, Settings, LogOut } from "lucide-vue-next";
 import { useAuthStore } from "@/stores/auth";
+import { useSettingsStore } from "@/stores/settings";
+import { resolveCategoryIcon } from "@/utils/categoryIcons";
 import ThemeToggle from "@/components/common/ThemeToggle.vue";
 
 const props = defineProps<{
@@ -16,6 +18,7 @@ const emit = defineEmits<{
 const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
+const settingsStore = useSettingsStore();
 
 // SSO-entry sessions keep the full front-end navigation
 const FRONT_NAV_ITEMS = [
@@ -40,6 +43,29 @@ const navItems = computed(() => {
   return FRONT_NAV_ITEMS.filter(
     (item) => item.path !== "/dashboard" || authStore.isAdmin,
   );
+});
+
+// Tenant custom categories render as extra nav entries below the fixed ones,
+// each linking to the generic /c/:slug feed view. Admin-entry sessions keep
+// the back-office menu only.
+const customNavItems = computed(() => {
+  if (authStore.sessionEntry === "admin") return [];
+  return settingsStore.categories
+    .filter((category) => category.type === "custom" && category.is_active)
+    .map((category) => ({
+      path: `/c/${category.slug}`,
+      name: category.name,
+      icon: resolveCategoryIcon(category.icon),
+    }));
+});
+
+onMounted(() => {
+  // The sidebar only mounts on authenticated pages, but re-check the token so a
+  // stale render (e.g. during the redirect to /login) never fires the request.
+  // Reuse already-loaded categories; a failed fetch only hides the extra entries.
+  if (!authStore.token) return;
+  if (settingsStore.categories.length > 0) return;
+  settingsStore.fetchCategories().catch(() => {});
 });
 
 // Labels/user section are visible when the sidebar is expanded OR when the
@@ -87,6 +113,25 @@ const userName = computed(() => authStore.user?.name || "用户");
         <component :is="item.icon" class="nav-icon" :size="20" />
         <span v-if="showLabels" class="nav-label">{{ item.name }}</span>
       </router-link>
+
+      <template v-if="customNavItems.length > 0">
+        <div v-if="showLabels" class="nav-section-label">自定义分类</div>
+        <router-link
+          v-for="item in customNavItems"
+          :key="item.path"
+          :to="item.path"
+          class="nav-item"
+          :class="{
+            active:
+              currentPath === item.path ||
+              currentPath.startsWith(item.path + '/'),
+          }"
+          @click="emit('close')"
+        >
+          <component :is="item.icon" class="nav-icon" :size="20" />
+          <span v-if="showLabels" class="nav-label">{{ item.name }}</span>
+        </router-link>
+      </template>
     </nav>
 
     <div class="sidebar-footer">
@@ -183,6 +228,13 @@ const userName = computed(() => authStore.user?.name || "用户");
 .nav-item.active {
   background-color: var(--sidebar-active-bg);
   color: var(--sidebar-active-text);
+}
+
+.nav-section-label {
+  padding: 8px 12px 2px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.45);
+  white-space: nowrap;
 }
 
 .nav-icon {

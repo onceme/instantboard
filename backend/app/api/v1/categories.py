@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, Query, Response
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.v1.tech import build_news_response
 from app.dependencies import get_current_tenant, get_db, get_redis
 from app.schemas.base import PaginatedResponse, PaginationParams, SuccessResponse
 from app.schemas.category import (
@@ -9,8 +10,10 @@ from app.schemas.category import (
     CategoryResponse,
     CategoryUpdate,
     CategoryWithSourcesResponse,
+    ReclassifyResponse,
     SubCategoryResponse,
 )
+from app.schemas.tech import TechNewsResponse
 from app.services.category import CategoryService
 
 router = APIRouter()
@@ -107,6 +110,22 @@ async def delete_category(
     return Response(status_code=204)
 
 
+@router.post("/{category_id}/reclassify", response_model=SuccessResponse[ReclassifyResponse])
+async def reclassify_category(
+    category_id: str,
+    db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+    tenant_id: str = Depends(get_current_tenant),
+):
+    service = _get_category_service(db, redis)
+    result = await service.reclassify_category_items(
+        category_id=category_id,
+        tenant_id=tenant_id,
+    )
+    await db.commit()
+    return result
+
+
 @router.get("/{category_id}/sources", response_model=SuccessResponse[CategoryWithSourcesResponse])
 async def get_category_with_sources(
     category_id: str,
@@ -135,3 +154,25 @@ async def list_subcategories(
         tenant_id=tenant_id,
     )
     return result
+
+
+@router.get("/{category_id}/items", response_model=PaginatedResponse[TechNewsResponse])
+async def list_category_items(
+    category_id: str,
+    since: str | None = Query(default=None, description="ISO-8601 lower bound on published_at"),
+    sort: str = Query(default="time", pattern="^(hot|time|relevance)$"),
+    pagination: PaginationParams = Depends(),
+    db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+    tenant_id: str = Depends(get_current_tenant),
+):
+    service = _get_category_service(db, redis)
+    result = await service.list_category_items(
+        category_id=category_id,
+        tenant_id=tenant_id,
+        sort=sort,
+        page=pagination.page,
+        page_size=pagination.page_size,
+        since=since,
+    )
+    return build_news_response(result)

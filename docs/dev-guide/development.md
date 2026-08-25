@@ -21,7 +21,7 @@
 
 ## 设计文档
 
-详细设计文档位于 `docs/dev-guide/design/`（wiki 页名前缀 `dev-guide-design-`），共 16 份，完整清单见侧边栏**设计文档**分组；建议从 [总体架构](design/architecture.md) 读起。
+详细设计文档位于 `docs/dev-guide/design/`（wiki 页名前缀 `dev-guide-design-`），共 14 份，完整清单见侧边栏**设计文档**分组；建议从 [总体架构](design/architecture.md) 读起。
 
 ## 测试
 

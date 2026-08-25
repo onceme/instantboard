@@ -604,6 +604,49 @@ Response 200:
   }
 ```
 
+#### 条目手动打标 API（items）
+
+用户手动标注/取消三级话题标签，读写 `items.topic_tags` JSONB（实现：`api/v1/items.py` + `services/item.py`）。两端口仅对**当前租户自有条目**生效；系统租户共享条目与其他租户条目一律视为不存在。
+
+```
+认证: 需要 (Bearer JWT)，tenant_id 从 JWT claims 注入
+```
+
+#### POST `/api/v1/items/{item_id}/tags` — 给条目添加标签
+
+```
+Path:    item_id: uuid — 条目 ID
+Body:    { "tag": str }   # 格式 ^[a-z0-9-]{1,32}$（小写字母/数字/连字符）
+
+行为:
+  - 读-改-写 topic_tags JSONB，保持原有序层级顺序（系统标签在前，新标签追加在后）
+  - 已存在 → 幂等去重（不重复添加，仍返回成功）
+  - 不修改其他字段
+
+Response 200:
+  { "success": true, "data": { "item_id": "uuid", "topic_tags": ["tech", "ai", "llm", "my-tag"] } }
+
+Errors:
+  400 VALIDATION_ERROR — tag 格式非法，或条目已达标签上限 (20, MAX_ITEM_TAGS)
+  404 ITEM_NOT_FOUND   — 条目不存在 / 属其他租户 / 属系统租户共享 / item_id 非法
+```
+
+#### DELETE `/api/v1/items/{item_id}/tags/{tag}` — 移除条目标签
+
+```
+Path:    item_id: uuid — 条目 ID
+         tag: str      — 待移除的标签
+
+行为: 从 topic_tags 中移除该标签（保持其余顺序），不修改其他字段
+
+Response 200:
+  { "success": true, "data": { "item_id": "uuid", "topic_tags": ["tech", "llm"] } }
+
+Errors:
+  400 VALIDATION_ERROR — tag 不在该条目的 topic_tags 中
+  404 ITEM_NOT_FOUND   — 条目不存在 / 属其他租户 / 属系统租户共享 / item_id 非法
+```
+
 ### 3.7 Dashboard API
 
 > **权限**: 本节全部端点需要 **admin 角色**（`require_admin`），member/viewer 返回 403 `FORBIDDEN`。

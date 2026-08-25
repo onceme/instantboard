@@ -38,7 +38,7 @@ cross_refs: [architecture.md, api.md, database.md, data-flow.md, finance-tab.md,
 #### 3.1.1 层级定义
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
+%%{init: {"theme": "base", "themeVariables": {"primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#767676", "lineColor": "#767676", "arrowheadColor": "#767676", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#767676", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#767676", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#767676", "clusterBkg": "#ffffff", "clusterBdr": "#767676", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
 graph TD
     subgraph level1["一级分类 — 顶层功能区"]
         finance["财经<br/>slug: finance<br/>刷新频率: 30s"]
@@ -51,7 +51,7 @@ graph TD
     subgraph level3["三级话题标签 — 动态过滤"]
         gpt4["GPT-4 — 从新闻内容自动提取"]
         starlink["Starlink — 从新闻内容自动提取"]
-        custom["手动标注 (API/UI未实现)"]
+        custom["手动标注 (已实现: POST/DELETE /items/{id}/tags + NewsCard 内联编辑)"]
     end
     finance --> cn_stock
     tech --> ai
@@ -60,14 +60,14 @@ graph TD
     ai --> custom
 ```
 
-一级分类 (Category) 对应侧边导航项和 SSE 频道，图标/颜色/频道等属性见 §3.5.6 预定义一级分类总览表；二级子分类 (SubCategory) 对应前端面板，刷新频率继承一级或自定义，各挂数据源列表 Source[]；三级话题标签 (TopicTag) 用于过滤和排序，从新闻内容自动提取，手动标注未实现。
+一级分类 (Category) 对应侧边导航项和 SSE 频道，图标/颜色/频道等属性见 §3.5.6 预定义一级分类总览表；二级子分类 (SubCategory) 对应前端面板，刷新频率继承一级或自定义，各挂数据源列表 Source[]；三级话题标签 (TopicTag) 用于过滤和排序，从新闻内容自动提取，亦可由用户手动标注（见 §3.6.1）。
 
-> ⚠️ **未实现**：三级标签用户手动标注——无打标/取消打标 API，亦无 UI。
+> ✅ **手动标注已实现**：三级标签支持用户打标/取消打标——`POST /api/v1/items/{item_id}/tags` 与 `DELETE /api/v1/items/{item_id}/tags/{tag}`（`api/v1/items.py` + `services/item.py`），前端 `NewsCard.vue` 提供标签行 "+" 内联添加与 "×" 移除（详见 §3.6.1）。
 
 #### 3.1.2 数据模型映射
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
+%%{init: {"theme": "base", "themeVariables": {"primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#767676", "lineColor": "#767676", "arrowheadColor": "#767676", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#767676", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#767676", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#767676", "clusterBkg": "#ffffff", "clusterBdr": "#767676", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
 graph TD
     cat["一级分类<br/>categories 表"]
     subcat["二级子分类 (虚拟)<br/>items.topic_tags 前缀标签"]
@@ -229,14 +229,14 @@ graph TD
 #### 3.3.1 添加新分类的完整流程
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
+%%{init: {"theme": "base", "themeVariables": {"primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#767676", "lineColor": "#767676", "arrowheadColor": "#767676", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#767676", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#767676", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#767676", "clusterBkg": "#ffffff", "clusterBdr": "#767676", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
 graph TD
     step1["Step 1 前端操作<br/>仅提交名称+描述"]
     step2["Step 2 API 层<br/>校验与注入租户后写库"]
     step3["Step 3 数据库<br/>写入 categories 行 (默认值补齐)"]
     step4["Step 4 添加数据源<br/>写入 sources / source_health"]
     step5["Step 5 采集器启动<br/>worker 仅消费启用/删除事件"]
-    step6["Step 6 SSE 推送生效<br/>频道通用, 前端待接线"]
+    step6["Step 6 前台视图接线完成<br/>REST 泛型流 (/c/:slug), SSE 频道仍未订阅"]
     step1 --> step2 --> step3 --> step4 --> step5 --> step6
 ```
 
@@ -247,12 +247,13 @@ graph TD
 3. **Step 3 数据库 — categories 表**：INSERT categories：id = gen_random_uuid()，tenant_id = {current_tenant}，示例 name = 体育、slug = sports，icon = folder (默认)，color = #3B82F6 (默认)，type = custom，refresh_interval_seconds = 300 (默认)，is_active = true。
 4. **Step 4 添加数据源 — 数据源管理面板**：POST /api/v1/sources：name / category_id / source_type / url / refresh_interval_seconds / config.library → collector_available 校验 (resolve_collector) → INSERT INTO sources + source_health → 发布 source_created 事件 (channel:dashboard⚠️)。
 5. **Step 5 采集器启动 — worker 事件消费 (现状说明)**：worker 仅消费 SOURCE_EVENT_NAMES = {source_enabled, source_disabled, source_deleted}；source_created 被 worker 忽略 ⚠️ → 新源需 worker 重启或后续启用操作 (source_enabled → add_job) 才开始采集；启动后：Collector采集 → Processor处理 → Store存储 → SSE推送。
-6. **Step 6 SSE 推送生效 — 后端通用, 前端待接线 (说明)**：后端 /api/v1/stream/{category} 频道通用，可 EventSource(/api/v1/stream/sports) 订阅 ⚠️；前端侧边栏目前固定 4 项：财经/科技/仪表盘/设置 (Sidebar.vue) → 自定义分类不会自动生成导航条目与视图；stream/{category} 目前仅被前端订阅 finance/tech/dashboard。
+6. **Step 6 前台视图接线完成 — REST 泛型流已接线, SSE 频道仍未订阅 (现状)**：新建自定义分类后，前端侧边栏在固定 4 项（财经/科技/仪表盘/设置）之下动态渲染该分类条目（`type=custom` 且 `is_active`，`Sidebar.vue`），点击路由到 `/c/{slug}` 通用信息流视图（`CategoryView.vue`，复用 NewsCard + useInfiniteScroll 无限滚动）；条目经 `GET /api/v1/categories/{id}/items` 拉取（分页 + `since` + `sort`（time 默认/hot/relevance），响应复用 TechNewsResponse schema）。⚠️ 实时推送仍待接线：后端 /api/v1/stream/{category} 频道通用，可 EventSource(/api/v1/stream/sports) 订阅，但 stream/{category} 目前仍仅被前端订阅 finance/tech/dashboard，自定义分类视图不订阅其 SSE 频道。
 
-> ⚠️ **三处未实现（潜在体验问题）**：
+> ⚠️ **两处未实现（潜在体验问题）**：
 > 1. **前端表单不完整**：`CategoryEditor.vue:63-78` 只提交 name+description（type 固定为 custom），后端支持的 slug/icon/color/刷新频率/关键词过滤均无 UI 控件；
-> 2. **新建源不会自动开始采集**：`source_created` 发布在 **channel:dashboard**（`services/source.py:286-294`），worker 忽略该事件（`scheduler/worker.py:35-37`），需 worker 重启或后续启用操作；
-> 3. **自定义分类无前台视图**：侧边导航写死（`Sidebar.vue:21-32`），无 SportsView/sportsStore，后端 SSE 频道虽通用但前端未订阅。
+> 2. **新建源不会自动开始采集**：`source_created` 发布在 **channel:dashboard**（`services/source.py:286-294`），worker 忽略该事件（`scheduler/worker.py:35-37`），需 worker 重启或后续启用操作。
+>
+> ✅ 原第 3 条"自定义分类无前台视图"已实现：`Sidebar.vue` 在固定导航项之下动态渲染自定义分类条目（lucide 图标名映射 + Folder 兜底），路由到 `/c/:slug` 的 `CategoryView.vue` 通用信息流视图（无需逐分类建 SportsView/sportsStore），条目经 `GET /api/v1/categories/{id}/items` 拉取（见 §3.4.5）；仍遗留：前端未订阅自定义分类的 SSE 频道（见 Step 6）。
 
 #### 3.3.2 修改分类的流程
 
@@ -321,7 +322,7 @@ graph TD
 #### 3.4.1 多租户分类架构
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
+%%{init: {"theme": "base", "themeVariables": {"primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#767676", "lineColor": "#767676", "arrowheadColor": "#767676", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#767676", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#767676", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#767676", "clusterBkg": "#ffffff", "clusterBdr": "#767676", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
 graph TD
     subgraph system["预定义分类 — 系统级, 所有租户共享"]
         sys_finance["chart-line 财经 finance<br/>type=finance<br/>tenant_id=system"]
@@ -360,8 +361,11 @@ SQL查询逻辑:
 
 结果: 租户看到 = 预定义分类(不可删/不可改) + 自定义分类(可删/可改)
 前端: 分类管理在 SettingsView → CategoryEditor 面板;
-     ⚠️ 侧边导航目前固定4项 财经/科技/仪表盘/设置 (Sidebar.vue:21-32),
-     不随分类列表动态扩展
+     侧边导航固定项为 财经/科技/仪表盘/设置 (Sidebar.vue)，
+     其下动态渲染当前租户的自定义分类条目 (type=custom 且
+     is_active，lucide 图标名映射 + Folder 兜底)，点击路由到
+     /c/{slug} 通用信息流视图 CategoryView；
+     预定义分类仍走各自专属视图，不进入 /c/{slug}
 
 数据隔离:
   - 租户 A 看不到租户 B 的自定义分类 (WHERE tenant_id隔离)
@@ -423,6 +427,8 @@ SQL查询逻辑:
 | `/api/v1/categories/predefined` | GET | 系统预定义分类列表（含 source_count，按 name 升序） | `services/category.py::get_predefined_categories` |
 | `/api/v1/categories/{id}/sources` | GET | 分类详情 + 全部数据源列表（含 health_status / priority / refresh_interval_seconds） | `get_category_with_sources` |
 | `/api/v1/categories/{id}/subcategories` | GET | 二级子分类动态统计：按 `items.topic_tags` 聚合计数；财经/科技按固定二级 slug 白名单过滤，自定义分类返回全部标签 | `list_subcategories`（:375-460） |
+| `/api/v1/categories/{id}/items` | GET | 通用分类条目流：分页（`page`/`page_size`，PaginationParams）+ `since`（ISO-8601 下界）+ `sort`（time 默认/hot/relevance）；响应复用 TechNewsResponse schema；分类不存在或跨租户 → 404 `CATEGORY_NOT_FOUND` | `services/category.py::list_category_items`（查询复用 `TechService.list_category_items`），映射复用 `api/v1/tech.py::build_news_response` |
+| `/api/v1/categories/{id}/reclassify` | POST | 批量重打标：为该分类下**租户自有**条目（`items.tenant_id` 匹配，系统租户共享条目不重写）分批（500/批）重算 `topic_tags`——tech 走 `TechTopicExtractor`、finance 复用 `_determine_finance_tags`、其他类型回退 `[slug]`；一级标签保持 category slug 语义、仅写入标签有变化的条目、去重键不动；返回 `{scanned, updated}`；分类不存在或跨租户 → 404 `CATEGORY_NOT_FOUND` | `services/category.py::reclassify_category_items` |
 
 > 数据模型补充：categories 表另含 `priority_sort`（Boolean，默认 false）与 `is_active` 字段（`models/category.py:24-25`）；`CategoryUpdate` 支持 `priority_sort` / `is_active` 的部分更新。
 
@@ -501,7 +507,7 @@ SQL查询逻辑:
 #### 3.6.1 三级标签层级定义
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
+%%{init: {"theme": "base", "themeVariables": {"primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#767676", "lineColor": "#767676", "arrowheadColor": "#767676", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#767676", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#767676", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#767676", "clusterBkg": "#ffffff", "clusterBdr": "#767676", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
 graph TD
     subgraph level1_tags["一级标签 — 领域级, 固定, 6个"]
         t_finance["finance 财经"] ~~~ t_tech["tech 科技"]
@@ -514,9 +520,9 @@ graph TD
         direction LR
         l2_fin["finance ×6"] ~~~ l2_rob["robotics ×6"] ~~~ l2_ai["ai ×6"] ~~~ l2_emb["embedded ×6"] ~~~ l2_sp["space ×6"]
     end
-    subgraph level3_tags["三级标签 — 话题级, 动态, 无上限"]
+    subgraph level3_tags["三级标签 — 话题级, 动态"]
         direction LR
-        l3_auto["自动提取 (关键词匹配)<br/>gpt-4 / starlink / optimus ..."] ~~~ l3_manual["手动标注 (未实现)"]
+        l3_auto["自动提取 (关键词匹配)<br/>gpt-4 / starlink / optimus ..."] ~~~ l3_manual["手动标注 (已实现: /items/{id}/tags + NewsCard)"]
     end
     t_finance --> l2_fin
     t_robotics --> l2_rob
@@ -527,9 +533,14 @@ graph TD
     level2_tags --> l3_manual
 ```
 
-二级标签完整清单（财经 6 + 科技四领域 ×6 = 30 个 slug）由 §3.5.1-3.5.5 各表承载，不再进图；robotics / ai / embedded / space 在科技域兼具一级标签与二级分组依据的双重身份；三级标签目前均来自采集时的关键词匹配（§3.6.3），手动标注未实现。
+二级标签完整清单（财经 6 + 科技四领域 ×6 = 30 个 slug）由 §3.5.1-3.5.5 各表承载，不再进图；robotics / ai / embedded / space 在科技域兼具一级标签与二级分组依据的双重身份；三级标签来自采集时的关键词匹配（§3.6.3）或用户手动标注（见下）。
 
-> ⚠️ **未实现**：三级标签用户手动标注——无打标/取消打标 API；NewsCard 无标签编辑 UI；三级标签目前仅来自采集时的关键词匹配。
+> ✅ **手动标注已实现**（`POST/DELETE /api/v1/items/{item_id}/tags`，`api/v1/items.py` + `services/item.py` + `NewsCard.vue`）：
+>
+> - **打标** `POST /api/v1/items/{item_id}/tags`（body `{tag}`）：读-改-写 `items.topic_tags` JSONB，保持原层级顺序（系统标签在前、新标签追加在后），去重（已存在则幂等返回），仅租户自有条目可写（不存在/跨租户/系统共享条目一律 404 `ITEM_NOT_FOUND`）；标签格式 `^[a-z0-9-]{1,32}$`（小写字母/数字/连字符，不合法 → 400 `VALIDATION_ERROR`）；每条目达 20 个标签（`MAX_ITEM_TAGS`）后拒绝新增（400 `VALIDATION_ERROR`）。
+> - **取消打标** `DELETE /api/v1/items/{item_id}/tags/{tag}`：移除单个标签并保持其余顺序；条目 404 `ITEM_NOT_FOUND`，标签不在列表中 → 400 `VALIDATION_ERROR`。
+> - **UI**：`NewsCard.vue` 标签行"+"按钮内联输入框（Enter/确认提交，客户端同规则预校验），标签上"×"乐观移除（失败回滚）；成功后以服务端返回的 `topic_tags` 为准本地更新，失败行内提示（`getApiErrorMessage`）。
+> - ⚠️ 遗留：批量重打标（`POST /categories/{id}/reclassify`）会重算租户自有条目的全部 `topic_tags`，手动标签随之被覆盖（无独立的用户标签存储）。
 
 #### 3.6.2 标签存储与索引
 
@@ -672,7 +683,7 @@ class TechTopicExtractor:
 #### 3.6.4 标签与前端组件映射
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
+%%{init: {"theme": "base", "themeVariables": {"primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#767676", "lineColor": "#767676", "arrowheadColor": "#767676", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#767676", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#767676", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#767676", "clusterBkg": "#ffffff", "clusterBdr": "#767676", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
 graph TD
     subgraph tf_l1["一级标签 — 固定"]
         direction LR
@@ -709,7 +720,7 @@ graph TD
 **图 (b) FinanceSubNav / NewsCard 要点**：
 
 - **FinanceSubNav 组件（FinanceView 顶部）**：Overview / Watchlist / Search / Indices / Commodities 共 5 个入口；财经二级标签对应子面板切换（不走 topic_tags 过滤）。
-- **NewsCard 组件（卡片上的标签）**：领域色块标识（左边缘 4px 色条）；TopicTag ×2-3（如 AI、大语言模型）；移动端最多显示 TopicTag ×1。
+- **NewsCard 组件（卡片上的标签）**：领域色块标识（左边缘 4px 色条）；TopicTag ×2-3（如 AI、大语言模型）；移动端最多显示 TopicTag ×1；标签可手动编辑——标签行"+"内联输入框打标（`POST /items/{item_id}/tags`），TopicTag 内"×"移除（`DELETE /items/{item_id}/tags/{tag}`，乐观移除失败回滚），详见 §3.6.1。
 
 #### 3.6.5 标签统计与热度
 
@@ -762,7 +773,7 @@ SSE推送: ⚠️ 未实现——后端不存在 `topic_stats_update` 事件;
 - **数据源达到上限**: tenants.max_sources=50 → 同上，限制数据源数量
 - **预定义分类 slug 冲突**: 租户创建 slug="finance" 的自定义分类 → 被系统预定义 slug 占用 → UNIQUE(tenant_id, slug) 约束阻止，API 返回 `DUPLICATE_CATEGORY`
 - **自定义分类删除限制**: 分类下仍有数据源时 `ValidationError` 直接拒绝删除（需先删源，`services/category.py:282-288`）；**不存在 `category_deleted` SSE 事件**；原表述"CASCADE级联删除 + 二次确认弹窗"与实现不符
-- **Categorizer 关键词映射表更新**: `KEYWORD_TO_TAG` 为代码级常量，修改需重新发布才生效；已入库的新闻不会重新分类，仅新采集的新闻生效；⚠️ **未实现**："重新分类"按钮不存在，无批量重打标手段
+- **Categorizer 关键词映射表更新**: `KEYWORD_TO_TAG` 为代码级常量，修改需重新发布才生效；新采集的新闻自动适用新规则，已入库条目可经批量重打标刷新：`POST /api/v1/categories/{id}/reclassify` 重算该分类下租户自有条目的 `topic_tags`（见 §3.4.5）；前端 设置 → 分类管理 面板为每个自定义分类提供「重新分类」按钮（ConfirmationDialog 确认后执行，回显「已扫描 X 条，更新 Y 条」，`CategoryEditor.vue`）
 - **财经与科技混合标签**: 财经新闻如果也有 tech 标签（如"科技公司财报"）→ 允许混合标签，但财经新闻主分类是 finance，tech 标签仅作为辅助过滤
 - **空分类无数据**: 新创建的分类未添加数据源 → SSE 频道推送 heartbeat 但无 item_update → 前端显示空状态"添加数据源以获取内容"
 - **标签查询性能**: items 表百万级时 topic_tags GIN 查询 → PostgreSQL GIN 索引高效，但需定期 VACUUM 维护索引健康

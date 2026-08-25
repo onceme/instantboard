@@ -1,14 +1,20 @@
 <script setup lang="ts">
 import type { TechNewsItem } from "@/types";
 import { DOMAIN_CONFIG } from "@/types";
+import { itemsApi } from "@/api/items";
+import { getApiErrorMessage } from "@/utils/api";
 import { formatRelativeTime } from "@/utils/format";
-import { computed } from "vue";
+import { computed, nextTick, ref } from "vue";
 import TopicTag from "./TopicTag.vue";
-import { ExternalLink } from "lucide-vue-next";
+import { Check, ExternalLink, Plus, X } from "lucide-vue-next";
 
 const props = defineProps<{
   item: TechNewsItem;
 }>();
+
+// Backend UserTagRule (services/item.py USER_TAG_PATTERN): lowercase letters,
+// digits and hyphens, 1-32 chars. Checked client-side to avoid a round-trip.
+const USER_TAG_PATTERN = /^[a-z0-9-]{1,32}$/;
 
 const primaryDomain = computed(() => {
   for (const tag of props.item.topic_tags) {
@@ -25,6 +31,79 @@ const domainColorVar = computed(() => {
 });
 
 const visibleTags = computed(() => props.item.topic_tags.slice(0, 3));
+
+const tagInputOpen = ref(false);
+const tagInput = ref("");
+const tagBusy = ref(false);
+const tagError = ref("");
+const tagInputRef = ref<HTMLInputElement | null>(null);
+
+function openTagInput() {
+  tagError.value = "";
+  tagInput.value = "";
+  tagInputOpen.value = true;
+  nextTick(() => tagInputRef.value?.focus());
+}
+
+function closeTagInput() {
+  tagInputOpen.value = false;
+  tagInput.value = "";
+}
+
+// The item is a shared reactive record from the feed (tech store / category
+// feed array); updating its tags in place keeps the client-side tag filters
+// (NewsFeed, TopicFilter) consistent with what the card shows. Scoped
+// exception to vue/no-mutating-props: the parent never overwrites this field.
+function applyTags(tags: string[]) {
+  // eslint-disable-next-line vue/no-mutating-props
+  props.item.topic_tags = tags;
+}
+
+async function submitTag() {
+  const tag = tagInput.value.trim();
+  if (!USER_TAG_PATTERN.test(tag)) {
+    tagError.value = "标签仅限小写字母、数字、连字符（1-32 位）";
+    return;
+  }
+  tagBusy.value = true;
+  try {
+    const res = await itemsApi.addItemTag(props.item.id, tag);
+    // Server list is authoritative: it dedupes and preserves hierarchy order
+    applyTags(res.data.topic_tags);
+    tagError.value = "";
+    closeTagInput();
+  } catch (err) {
+    tagError.value = getApiErrorMessage(err, "添加标签失败");
+  } finally {
+    tagBusy.value = false;
+  }
+}
+
+function onTagInputKeydown(event: KeyboardEvent) {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    void submitTag();
+  } else if (event.key === "Escape") {
+    closeTagInput();
+  }
+}
+
+async function removeTag(tag: string) {
+  // Optimistic removal with rollback on failure
+  const previous = [...props.item.topic_tags];
+  applyTags(previous.filter((t) => t !== tag));
+  tagBusy.value = true;
+  try {
+    const res = await itemsApi.removeItemTag(props.item.id, tag);
+    applyTags(res.data.topic_tags);
+    tagError.value = "";
+  } catch (err) {
+    applyTags(previous);
+    tagError.value = getApiErrorMessage(err, "移除标签失败");
+  } finally {
+    tagBusy.value = false;
+  }
+}
 </script>
 
 <template>
@@ -61,8 +140,57 @@ const visibleTags = computed(() => props.item.topic_tags.slice(0, 3));
           :key="tag"
           :tag="tag"
           :domain="primaryDomain"
+          removable
+          :disabled="tagBusy"
+          @remove="removeTag"
         />
+
+        <form
+          v-if="tagInputOpen"
+          class="tag-input-group"
+          @submit.prevent="submitTag"
+        >
+          <input
+            ref="tagInputRef"
+            v-model="tagInput"
+            class="tag-input"
+            type="text"
+            maxlength="32"
+            placeholder="新标签"
+            aria-label="新标签"
+            :disabled="tagBusy"
+            @keydown="onTagInputKeydown"
+          />
+          <button
+            type="submit"
+            class="tag-input-confirm"
+            aria-label="确认添加标签"
+            :disabled="tagBusy"
+          >
+            <Check :size="12" />
+          </button>
+          <button
+            type="button"
+            class="tag-input-cancel"
+            aria-label="取消添加标签"
+            @click="closeTagInput"
+          >
+            <X :size="12" />
+          </button>
+        </form>
+
+        <button
+          v-else
+          class="tag-add"
+          aria-label="添加标签"
+          :disabled="tagBusy"
+          @click="openTagInput"
+        >
+          <Plus :size="12" />
+        </button>
       </div>
+
+      <p v-if="tagError" class="tag-error">{{ tagError }}</p>
 
       <div class="card-footer">
         <span class="card-source">{{ item.source_name }}</span>
@@ -141,8 +269,63 @@ const visibleTags = computed(() => props.item.topic_tags.slice(0, 3));
 .card-tags {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 4px;
   margin-top: 8px;
+}
+
+.tag-add,
+.tag-input-confirm,
+.tag-input-cancel {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  background-color: transparent;
+  border: 1px dashed var(--border-color);
+  transition: all var(--transition-fast);
+}
+
+.tag-add:hover,
+.tag-input-confirm:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.tag-input-cancel:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.tag-input-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.tag-input {
+  width: 88px;
+  height: 20px;
+  padding: 0 6px;
+  font-size: 11px;
+  color: var(--text-primary);
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  outline: none;
+}
+
+.tag-input:focus {
+  border-color: var(--accent);
+}
+
+.tag-error {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--danger);
 }
 
 .card-footer {

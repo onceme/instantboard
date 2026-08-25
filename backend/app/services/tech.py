@@ -3,6 +3,7 @@ import logging
 import math
 import re
 from datetime import UTC, datetime, timedelta
+from uuid import UUID
 
 from redis.asyncio import Redis
 from sqlalchemy import and_, func, or_, select, text
@@ -167,6 +168,32 @@ class TechService:
                 },
             }
 
+        return await self.list_category_items(
+            category_id=tech_category.id,
+            tenant_id=tenant_id,
+            domain=domain,
+            subcategory=subcategory,
+            sort=sort,
+            page=page,
+            page_size=page_size,
+            source_id=source_id,
+            since=since,
+        )
+
+    async def list_category_items(
+        self,
+        category_id: str | UUID,
+        tenant_id: str,
+        domain: str | None = None,
+        subcategory: str | None = None,
+        sort: str = "hot",
+        page: int = 1,
+        page_size: int = 20,
+        source_id: str | None = None,
+        since: str | None = None,
+    ) -> dict:
+        """Generic paginated item feed for any category (tech news reuses this via get_news;
+        CategoryService exposes it per category_id for custom categories)."""
         stmt = (
             select(Item)
             .options(selectinload(Item.source))
@@ -174,7 +201,7 @@ class TechService:
                 # Collected items belong to the system tenant; include system-tenant rows as
                 # well, otherwise regular tenants can never see them.
                 Item.tenant_id.in_([tenant_id, SYSTEM_TENANT_ID]),
-                Item.category_id == tech_category.id,
+                Item.category_id == category_id,
             )
         )
 

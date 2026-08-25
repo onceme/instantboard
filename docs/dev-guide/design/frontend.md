@@ -29,12 +29,14 @@ frontend/src/
 │   ├── categories.ts
 │   ├── dashboard.ts
 │   ├── finance.ts
+│   ├── items.ts            # 条目手动打标: addItemTag / removeItemTag
 │   ├── sources.ts
 │   └── tech.ts
-├── router/                 # 路由: / → Finance, /tech, /dashboard, /settings, /login, /auth/callback, /ibadmin
-├── views/                  # 共 7 个视图
+├── router/                 # 路由: / → Finance, /tech, /c/:slug, /dashboard, /settings, /login, /auth/callback, /ibadmin
+├── views/                  # 共 8 个视图
 │   ├── FinanceView.vue
 │   ├── TechView.vue
+│   ├── CategoryView.vue    # /c/:slug 自定义分类通用信息流
 │   ├── DashboardView.vue
 │   ├── SettingsView.vue
 │   ├── LoginView.vue
@@ -57,6 +59,7 @@ frontend/src/
 │   │   #   NAVCalculator / MarketIndexCard / CommodityCard / FinanceSearch / QuoteChart
 │   ├── tech/               # TopicFilter.vue / NewsFeed.vue / NewsCard.vue / TopicTag.vue /
 │   │   │                   # CategoryPanel.vue / TechSubNav.vue（补充）
+│   │   │                   # NewsCard: 标签行"+"内联打标、TopicTag"×"移除（乐观+回滚）
 │   │   # ⚠️ 未实现: TrendChart（话题热度图）
 │   ├── dashboard/          # 实际 6 个:
 │   │   ├── HealthPanel.vue / SystemStatus.vue / ServicesHealth.vue
@@ -92,11 +95,12 @@ frontend/src/
 **图 (a) Sidebar 子树**
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
+%%{init: {"theme": "base", "themeVariables": {"primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#767676", "lineColor": "#767676", "arrowheadColor": "#767676", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#767676", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#767676", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#767676", "clusterBkg": "#ffffff", "clusterBdr": "#767676", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
 graph TD
   AppVue["App.vue → AppLayout"]
   AppVue --> SideVue["Sidebar.vue — 侧边导航"]
-  SideVue --> NavItems["导航项: Finance / Tech / Dashboard / Settings"]
+  SideVue --> NavItems["固定导航项: Finance / Tech / Dashboard / Settings"]
+  SideVue --> CustomNav["自定义分类动态条目 (/c/:slug)<br/>type=custom 且启用, 图标按 lucide 名映射 (Folder 兜底)"]
   SideVue --> AdminNav["admin-entry: /ibadmin<br/>管理员登录后切换第二套导航"]
   SideVue --> ThemeSide["ThemeToggle"]
 ```
@@ -104,7 +108,7 @@ graph TD
 **图 (b) Header 子树**
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
+%%{init: {"theme": "base", "themeVariables": {"primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#767676", "lineColor": "#767676", "arrowheadColor": "#767676", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#767676", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#767676", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#767676", "clusterBkg": "#ffffff", "clusterBdr": "#767676", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
 graph TD
   AppVue["App.vue → AppLayout"]
   AppVue --> HeaderVue["Header.vue — 顶部栏"]
@@ -120,9 +124,10 @@ graph TD
 各视图布局摘要:
 
 - **FinanceView**: FinanceSubNav + FinanceGrid；右栏（≥1440px）WatchlistMini + FundNAV；Overview 面板目前只渲染 MarketIndices（见 [finance-tab.md](finance-tab.md)）
-- **TechView**: TechSubNav + TopicFilter + CategoryPanel×4 / NewsFeed 双视图（见 [tech-tab.md](tech-tab.md)）
+- **TechView**: TechSubNav + TopicFilter + CategoryPanel×4 / NewsFeed 双视图（见 [tech-tab.md](tech-tab.md)）；其中 NewsCard 支持三级标签手动标注——标签行"+"内联输入框打标、标签上"×"移除（乐观移除失败回滚，见 [content-categories.md](content-categories.md) §3.6.1）
+- **CategoryView**: /c/:slug 自定义分类通用信息流 — 按 slug 解析自定义分类（未命中显示 EmptyState），GET /categories/{id}/items 分页拉取（useInfiniteScroll 无限滚动，复用 NewsCard）；加载/错误/重试与 FinanceView 模式一致（见 [content-categories.md](content-categories.md) §3.3.1 Step 6）
 - **DashboardView**: HealthPanel + 双列 flex（左 SystemStatus/DataSourcesHealth，右 ServicesHealth/SSEStats）（见 [dashboard-tab.md](dashboard-tab.md)）
-- **SettingsView**: CategoryEditor / SourceEditor / ProfileSettings / ThemeToggle
+- **SettingsView**: CategoryEditor / SourceEditor / ProfileSettings / ThemeToggle；CategoryEditor 为自定义分类行提供「重新分类」按钮（ConfirmationDialog 确认 → POST /categories/{id}/reclassify → 回显扫描/更新计数，失败走 ErrorAlert）
 - **LoginView**: SSO 按钮；SSOCallbackView 处理 /auth/callback；AdminLoginView 为 /ibadmin 独立入口
 
 ### 3.3 响应式布局策略
@@ -163,13 +168,14 @@ graph TD
 **侧边导航设计**:
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#000000", "lineColor": "#000000", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#000000", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#000000", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#000000", "clusterBkg": "#ffffff", "clusterBdr": "#000000", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"curve": "step", "nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
+%%{init: {"theme": "base", "themeVariables": {"primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#767676", "lineColor": "#767676", "arrowheadColor": "#767676", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#767676", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#767676", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#767676", "clusterBkg": "#ffffff", "clusterBdr": "#767676", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
 graph LR
   subgraph fullpage["全页面布局"]
     subgraph sidebar["Sidebar 侧边导航"]
       Logo["IB Logo"]
       NavFin["Finance"]
       NavTech["Tech"]
+      NavCustom["自定义分类 (动态, /c/:slug)"]
       NavDash["Dashboard"]
       NavSet["Settings"]
       ThemeBtn["ThemeToggle"]

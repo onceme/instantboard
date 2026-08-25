@@ -484,17 +484,95 @@ class TestYFinanceCollector:
 # ── AlphaVantageCollector ────────────────────────────────────────
 class TestAlphaVantageCollector:
     async def test_fetch_data_no_api_key(self):
-        c = AlphaVantageCollector()
+        with patch.object(AlphaVantageCollector, "_load_api_keys", return_value=[]):
+            c = AlphaVantageCollector()
         source = _make_source(config={"symbols": ["AAPL"], "function": "TIME_SERIES_INTRADAY"})
-        with patch.object(c, "fetch_data", wraps=c.fetch_data):
-            from app.config import settings as s
-
-            with patch.object(s, "alpha_vantage_api_key", None):
-                result = await c.fetch_data(source)
+        result = await c.fetch_data(source)
         assert result is None
 
+    async def test_load_api_keys_multiple(self):
+        with patch("app.collectors.finance.alpha_vantage_collector.settings") as mock_settings:
+            mock_settings.alpha_vantage_api_keys = "key1,key2,key3"
+            mock_settings.alpha_vantage_api_key = "single"
+            c = AlphaVantageCollector()
+        assert c._api_keys == ["key1", "key2", "key3"]
+
+    async def test_load_api_keys_multiple_strips_entries(self):
+        with patch("app.collectors.finance.alpha_vantage_collector.settings") as mock_settings:
+            mock_settings.alpha_vantage_api_keys = " key1 ,, key2 ,"
+            mock_settings.alpha_vantage_api_key = None
+            c = AlphaVantageCollector()
+        assert c._api_keys == ["key1", "key2"]
+
+    async def test_load_api_keys_single_key_fallback(self):
+        with patch("app.collectors.finance.alpha_vantage_collector.settings") as mock_settings:
+            mock_settings.alpha_vantage_api_keys = None
+            mock_settings.alpha_vantage_api_key = "single"
+            c = AlphaVantageCollector()
+        assert c._api_keys == ["single"]
+
+    async def test_load_api_keys_blank_multi_key_falls_back(self):
+        with patch("app.collectors.finance.alpha_vantage_collector.settings") as mock_settings:
+            mock_settings.alpha_vantage_api_keys = " , ,"
+            mock_settings.alpha_vantage_api_key = "single"
+            c = AlphaVantageCollector()
+        assert c._api_keys == ["single"]
+
+    async def test_load_api_keys_none_configured(self):
+        with patch("app.collectors.finance.alpha_vantage_collector.settings") as mock_settings:
+            mock_settings.alpha_vantage_api_keys = None
+            mock_settings.alpha_vantage_api_key = None
+            c = AlphaVantageCollector()
+        assert c._api_keys == []
+
+    async def test_key_rotation_order(self):
+        with patch.object(AlphaVantageCollector, "_load_api_keys", return_value=["key1", "key2"]):
+            c = AlphaVantageCollector()
+        assert c._get_next_key() == "key1"
+        assert c._get_next_key() == "key2"
+        assert c._get_next_key() == "key1"
+
+    async def test_get_next_key_empty_returns_none(self):
+        with patch.object(AlphaVantageCollector, "_load_api_keys", return_value=[]):
+            c = AlphaVantageCollector()
+        assert c._get_next_key() is None
+
+    async def test_fetch_data_rotates_keys_across_requests(self):
+        with patch.object(AlphaVantageCollector, "_load_api_keys", return_value=["key1", "key2"]):
+            c = AlphaVantageCollector()
+        source = _make_source(config={"symbols": ["AAPL", "MSFT"], "function": "TIME_SERIES_INTRADAY"})
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "Meta Data": {"2. Symbol": "AAPL"},
+            "Time Series (5min)": {
+                "2024-01-01 10:00:00": {
+                    "1. open": "100",
+                    "2. high": "110",
+                    "3. low": "99",
+                    "4. close": "105",
+                    "5. volume": "10000",
+                }
+            },
+        }
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        with (
+            patch("httpx.AsyncClient", return_value=mock_client),
+            patch("app.collectors.finance.alpha_vantage_collector.asyncio_sleep", new=AsyncMock()),
+        ):
+            result = await c.fetch_data(source)
+        assert len(result) == 2
+        calls = mock_client.get.call_args_list
+        assert len(calls) == 2
+        assert calls[0].kwargs["params"]["apikey"] == "key1"
+        assert calls[1].kwargs["params"]["apikey"] == "key2"
+
     async def test_fetch_data_success_intraday(self):
-        c = AlphaVantageCollector()
+        with patch.object(AlphaVantageCollector, "_load_api_keys", return_value=["test-key"]):
+            c = AlphaVantageCollector()
         source = _make_source(config={"symbols": ["AAPL"], "function": "TIME_SERIES_INTRADAY"})
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -516,16 +594,16 @@ class TestAlphaVantageCollector:
         mock_client.__aexit__ = AsyncMock(return_value=False)
         with (
             patch("httpx.AsyncClient", return_value=mock_client),
-            patch("app.collectors.finance.alpha_vantage_collector.settings") as mock_settings,
+            patch("app.collectors.finance.alpha_vantage_collector.asyncio_sleep", new=AsyncMock()),
         ):
-            mock_settings.alpha_vantage_api_key = "test-key"
             result = await c.fetch_data(source)
         assert isinstance(result, list)
         assert len(result) == 1
         assert result[0]["symbol"] == "AAPL"
 
     async def test_fetch_data_rate_limited(self):
-        c = AlphaVantageCollector()
+        with patch.object(AlphaVantageCollector, "_load_api_keys", return_value=["test-key"]):
+            c = AlphaVantageCollector()
         source = _make_source(config={"symbols": ["AAPL"]})
         mock_response = MagicMock()
         mock_response.status_code = 429
@@ -535,14 +613,14 @@ class TestAlphaVantageCollector:
         mock_client.__aexit__ = AsyncMock(return_value=False)
         with (
             patch("httpx.AsyncClient", return_value=mock_client),
-            patch("app.collectors.finance.alpha_vantage_collector.settings") as mock_settings,
+            patch("app.collectors.finance.alpha_vantage_collector.asyncio_sleep", new=AsyncMock()),
         ):
-            mock_settings.alpha_vantage_api_key = "test-key"
             result = await c.fetch_data(source)
         assert result == []
 
     async def test_fetch_data_api_error(self):
-        c = AlphaVantageCollector()
+        with patch.object(AlphaVantageCollector, "_load_api_keys", return_value=["test-key"]):
+            c = AlphaVantageCollector()
         source = _make_source(config={"symbols": ["AAPL"]})
         mock_response = MagicMock()
         mock_response.status_code = 500
@@ -552,14 +630,14 @@ class TestAlphaVantageCollector:
         mock_client.__aexit__ = AsyncMock(return_value=False)
         with (
             patch("httpx.AsyncClient", return_value=mock_client),
-            patch("app.collectors.finance.alpha_vantage_collector.settings") as mock_settings,
+            patch("app.collectors.finance.alpha_vantage_collector.asyncio_sleep", new=AsyncMock()),
         ):
-            mock_settings.alpha_vantage_api_key = "test-key"
             result = await c.fetch_data(source)
         assert result == []
 
     async def test_fetch_data_api_error_response(self):
-        c = AlphaVantageCollector()
+        with patch.object(AlphaVantageCollector, "_load_api_keys", return_value=["test-key"]):
+            c = AlphaVantageCollector()
         source = _make_source(config={"symbols": ["AAPL"]})
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -570,9 +648,8 @@ class TestAlphaVantageCollector:
         mock_client.__aexit__ = AsyncMock(return_value=False)
         with (
             patch("httpx.AsyncClient", return_value=mock_client),
-            patch("app.collectors.finance.alpha_vantage_collector.settings") as mock_settings,
+            patch("app.collectors.finance.alpha_vantage_collector.asyncio_sleep", new=AsyncMock()),
         ):
-            mock_settings.alpha_vantage_api_key = "test-key"
             result = await c.fetch_data(source)
         assert result == []
 
@@ -1894,7 +1971,8 @@ class TestAlphaVantageCollectorExtended:
 
     async def test_fetch_data_exception_in_loop(self):
         """Lines 37-38: generic exception during symbol fetch."""
-        c = AlphaVantageCollector()
+        with patch.object(AlphaVantageCollector, "_load_api_keys", return_value=["test-key"]):
+            c = AlphaVantageCollector()
         source = _make_source(config={"symbols": ["AAPL"], "function": "TIME_SERIES_INTRADAY"})
 
         async def mock_get(url, params=None):
@@ -1905,11 +1983,7 @@ class TestAlphaVantageCollectorExtended:
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
-        with (
-            patch("httpx.AsyncClient", return_value=mock_client),
-            patch("app.collectors.finance.alpha_vantage_collector.settings") as mock_settings,
-        ):
-            mock_settings.alpha_vantage_api_key = "test-key"
+        with patch("httpx.AsyncClient", return_value=mock_client):
             result = await c.fetch_data(source)
         assert result == []
 
@@ -1979,7 +2053,8 @@ class TestAlphaVantageCollectorExtended:
 
     async def test_fetch_data_note_response(self):
         """Line 63-65: API returns 'Note' key."""
-        c = AlphaVantageCollector()
+        with patch.object(AlphaVantageCollector, "_load_api_keys", return_value=["test-key"]):
+            c = AlphaVantageCollector()
         source = _make_source(config={"symbols": ["AAPL"]})
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -1992,9 +2067,8 @@ class TestAlphaVantageCollectorExtended:
 
         with (
             patch("httpx.AsyncClient", return_value=mock_client),
-            patch("app.collectors.finance.alpha_vantage_collector.settings") as mock_settings,
+            patch("app.collectors.finance.alpha_vantage_collector.asyncio_sleep", new=AsyncMock()),
         ):
-            mock_settings.alpha_vantage_api_key = "test-key"
             result = await c.fetch_data(source)
         assert result == []
 

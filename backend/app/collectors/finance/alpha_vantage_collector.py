@@ -16,11 +16,30 @@ class AlphaVantageCollector(BaseCollector):
     rate_limit_per_minute = 5
     base_url = "https://www.alphavantage.co/query"
 
+    def __init__(self) -> None:
+        super().__init__()
+        self._key_index: int = 0
+        self._api_keys: list[str] = self._load_api_keys()
+
+    def _load_api_keys(self) -> list[str]:
+        if settings.alpha_vantage_api_keys:
+            keys = [key.strip() for key in settings.alpha_vantage_api_keys.split(",") if key.strip()]
+            if keys:
+                return keys
+        if settings.alpha_vantage_api_key:
+            return [settings.alpha_vantage_api_key]
+        return []
+
+    def _get_next_key(self) -> str | None:
+        if not self._api_keys:
+            return None
+        key = self._api_keys[self._key_index % len(self._api_keys)]
+        self._key_index += 1
+        return key
+
     async def fetch_data(self, source: Any) -> Any:
         config = getattr(source, "config", {}) or {}
-        api_key = config.get("api_key_env", "ALPHA_VANTAGE_API_KEY")
-        key_value = getattr(settings, api_key.lower(), None) or getattr(settings, "alpha_vantage_api_key", None)
-        if not key_value:
+        if not self._api_keys:
             logger.warning("Alpha Vantage API key not configured")
             return None
 
@@ -29,8 +48,11 @@ class AlphaVantageCollector(BaseCollector):
 
         results = []
         for symbol in symbols:
+            api_key = self._get_next_key()
+            if api_key is None:
+                break
             try:
-                quote = await self._fetch_quote(symbol, function, key_value)
+                quote = await self._fetch_quote(symbol, function, api_key)
                 if quote:
                     results.append(quote)
                 await asyncio_sleep(12)

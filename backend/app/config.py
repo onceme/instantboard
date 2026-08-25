@@ -109,6 +109,9 @@ class Settings(BaseSettings):
     # Financial Data API Keys
     yahoo_finance_api_key: str | None = Field(default=None, alias="YAHOO_FINANCE_API_KEY")
     alpha_vantage_api_key: str | None = Field(default=None, alias="ALPHA_VANTAGE_API_KEY")
+    # Comma-separated list of keys; the collector rotates through them round-robin.
+    # Takes precedence over alpha_vantage_api_key when non-empty.
+    alpha_vantage_api_keys: str | None = Field(default=None, alias="ALPHA_VANTAGE_API_KEYS")
     finnhub_api_key: str = Field(default="", alias="FINNHUB_API_KEY")
     finnhub_api_keys: Annotated[list[str], NoDecode] = Field(default=[], alias="FINNHUB_API_KEYS")
 

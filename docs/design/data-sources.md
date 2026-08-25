@@ -479,7 +479,7 @@ class APIKeyManager:
 | 服务 | 环境变量 | 必需? | 免费 | 付费 | 说明 |
 |------|---------|------|------|------|------|
 | Yahoo Finance | `YAHOO_FINANCE_API_KEY` ⚠️死配置 | 否 | - | - | httpx直连、无需Key；字段已定义但无使用方 |
-| Alpha Vantage | `ALPHA_VANTAGE_API_KEY` | 推荐(备用源) | 5/min | $49/月 600/min | **仅单Key**，`ALPHA_VANTAGE_API_KEYS` 多Key不支持 |
+| Alpha Vantage | `ALPHA_VANTAGE_API_KEY` / `ALPHA_VANTAGE_API_KEYS` | 推荐(备用源) | 5/min | $49/月 600/min | 支持多Key列表（逗号分隔，进程内round-robin），`ALPHA_VANTAGE_API_KEYS` 优先于单Key |
 | Finnhub | `FINNHUB_API_KEY` / `FINNHUB_API_KEYS` | 可选 | 60/min | $29/月 | 支持多Key列表（进程内round-robin） |
 | IEX Cloud | ⚠️ 未实现 | 可选 | 限量 | $9/月起 | 无采集器/配置/种子 |
 | 东方财富 | 无 | 否 | - | - | 无需Key, 控制频率即可 |
@@ -494,7 +494,7 @@ class APIKeyManager:
 | 科技源策略 | 独立无failover | RSS源内容不同不可替代，失败仅标记不影响其他 |
 | 健康监控 | source_health表+Redis缓存 | PG持久记录+Redis快速查询，双重保障 |
 | API Key存储 | .env环境变量 | 不入代码/数据库/日志，安全且易管理 |
-| Key限流处理 | Finnhub多Key池进程内round-robin | 缓解单Key限流；统一Key管理器（限流标记/失效检测）未实现，见§3.6.2 |
+| API Key限流处理 | Finnhub/Alpha Vantage多Key池进程内round-robin | 缓解单Key限流；统一Key管理器（限流标记/失效检测）未实现，见§3.6.2 |
 | 采集频率 | 分类级别配置(30s-5min可调) | 高频行情30s, 低频新闻5min, 灵活可配 |
 
 ## 5. 边界情况

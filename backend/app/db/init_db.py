@@ -387,6 +387,19 @@ TECH_CROSS_DOMAIN_SOURCES = [
         "refresh_interval_seconds": 300,
         "priority": 5,
     },
+    {
+        "name": "Twitter/X-科技话题",
+        "source_type": "social",
+        "url": "https://api.twitter.com/2/tweets/search/recent",
+        "config": {"library": "twitter", "query": "AI OR robotics", "max_results": 20},
+        "refresh_interval_seconds": 600,
+        "priority": 4,
+        # Collector is registered (config.library=twitter) but the source needs
+        # TWITTER_BEARER_TOKEN, and the Twitter API v2 recent-search endpoint is only
+        # available on paid tiers with strict request quotas; kept disabled as an
+        # activation template.
+        "is_active": False,
+    },
 ]
 
 

@@ -142,7 +142,7 @@ cross_refs: [frontend.md, api.md, data-sources.md, database.md, data-flow.md, co
 |-----------|------|---------|------|
 | **Reddit (r/artificial+robotics+embedded+space)** | Social | 全领域 | ⛔ inactive（reddit 采集器已实现：公开 JSON、无需凭据；种子激活为后续特性） |
 | **Google News Tech** | RSS | 全领域 | ✅ active |
-| **Twitter/X Lists** | Social | 全领域 | ⛔ 种子与代码中完全缺失 |
+| **Twitter/X (recent search)** | Social | 全领域 | ⛔ inactive（twitter 采集器已实现：API v2 recent search、需付费档 `TWITTER_BEARER_TOKEN`；种子激活为后续特性） |
 
 ### 3.3 新闻流展示设计
 

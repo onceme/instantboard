@@ -7,6 +7,7 @@ from app.collectors.tech.arxiv_collector import ArxivCollector
 from app.collectors.tech.hackernews_collector import HackerNewsCollector
 from app.collectors.tech.reddit_collector import RedditCollector
 from app.collectors.tech.rss_collector import RSSCollector
+from app.collectors.tech.twitter_collector import TwitterCollector
 from app.collectors.tech.web_scrape_collector import WebScrapeCollector
 
 COLLECTOR_REGISTRY = {
@@ -19,6 +20,7 @@ COLLECTOR_REGISTRY = {
     "hackernews": HackerNewsCollector,
     "arxiv": ArxivCollector,
     "reddit": RedditCollector,
+    "twitter": TwitterCollector,
     "web_scrape": WebScrapeCollector,
 }
 

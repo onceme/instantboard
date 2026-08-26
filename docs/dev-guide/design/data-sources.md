@@ -59,11 +59,12 @@ cross_refs: [architecture.md, api.md, database.md, data-flow.md, finance-tab.md,
 | 20 | Reddit | API (公开JSON, httpx直连) | reddit.com/r/{sub} | 10min | JSON | 免费(限流) | 科技-全领域 | ✅ 采集器已实现 (公开JSON, 无需凭据); 种子未激活 |
 | 21 | Google News Tech | RSS | news.google.com/rss/search?q=technology | 5min | RSS XML | 免费 | 科技-通用 | ✅ 活跃 |
 | 22 | ESA News | RSS | esa.int/RSS | 30min | RSS XML | 免费 | 科技-太空 | ✅ 活跃 |
+| 23 | Twitter/X | API v2 (recent search, httpx直连) | api.twitter.com/2/tweets/search/recent | 10min | JSON | 付费(限额) | 科技-全领域 | ✅ 采集器已实现 (需 `TWITTER_BEARER_TOKEN`, 付费档); 种子未激活待凭据 |
 
 > ⚠️ **种子与采集器现状**（以 `app/db/init_db.py` 与 `app/collectors/__init__.py` 为准）：
-> - 已注册采集器共 10 个：`yfinance` / `alpha_vantage` / `eastmoney` / `finnhub` / `iex_cloud` / `rss` / `hackernews` / `arxiv` / `reddit` / `web_scrape`（`COLLECTOR_REGISTRY`）。
+> - 已注册采集器共 11 个：`yfinance` / `alpha_vantage` / `eastmoney` / `finnhub` / `iex_cloud` / `rss` / `hackernews` / `arxiv` / `reddit` / `twitter` / `web_scrape`（`COLLECTOR_REGISTRY`）。
 > - **`web_scrape` 通用采集器已实现**：`WebScrapeCollector`（`app/collectors/tech/web_scrape_collector.py`，注册名 `web_scrape`，source_type 直接命中）。httpx 拉取（自定义 `User-Agent`—源级 `config.user_agent`，默认 `instantboard-collector/1.0`、10s 超时、跟随重定向），`BeautifulSoup(html, "lxml")` 解析（lxml 失败回退 `html.parser`）。解析规则全部来自 `config.parse_rules`（CSS 选择器驱动）：`item_selector`（条目容器，缺省时以 `title_selector` 命中元素自身为条目）、`title_selector`（缺省回退条目内首个 h1-h4）、`link_selector`（取 href，缺省回退容器自身 href 或首个 `<a href>`；相对链接用 `urljoin(source.url)` 补全；`javascript:`/`mailto:`/`tel:`/`#` 链接丢弃）、`summary_selector`（可选，截断 300 字符）、`date_selector`（可选，优先 `<time datetime>` 属性，dateutil 解析失败用当前时间兜底）、`limit`（默认 20，上限 100）。缺 title 或 url 的条目跳过；429/403 → 记日志并返回空结果（本轮视为空成功），其他异常走 `BaseCollector` 重试/失败路径。种子 #10/#15/#18 及机器人领域 Automotive News 已 `is_active=True`；**#6 天天基金保持未激活模板**——采集器已可用，但基金 NAV 消费链路（`get_fund_nav` 展示管道）属后续特性。
-> - **Reddit（social）采集器已实现**：`RedditCollector`（`app/collectors/tech/reddit_collector.py`，注册名 `reddit`，公开 JSON 接口、无需凭据），经 `source_type=social` + `config.library=reddit` 解析（见 §3.5.1）；#20 种子仍 `is_active=False`（种子激活与 `subreddits` 配置为后续特性）。**Twitter/X** 完全缺失。
+> - **Reddit（social）采集器已实现**：`RedditCollector`（`app/collectors/tech/reddit_collector.py`，注册名 `reddit`，公开 JSON 接口、无需凭据），经 `source_type=social` + `config.library=reddit` 解析（见 §3.5.1）；#20 种子仍 `is_active=False`（种子激活与 `subreddits` 配置为后续特性）。**Twitter/X 采集器已实现、种子未激活待凭据**：`TwitterCollector`（`app/collectors/tech/twitter_collector.py`，注册名 `twitter`，API v2 recent search `api.twitter.com/2/tweets/search/recent`，Bearer token 认证），经 `source_type=social` + `config.library=twitter` 解析（见 §3.5.1）；种子"Twitter/X-科技话题" `is_active=False`——需配置 `TWITTER_BEARER_TOKEN`，且 recent search 端点仅付费档可用。
 > - **IEX Cloud** 采集器已实现（可选启用），种子为未激活模板。
 > - Finnhub 无定时采集种子源（种子财经源共 7 条，不含 Finnhub），仅在财经 failover 链内按需调用（见 §3.5）。
 > - source_type 为 api/social 的源（以及显式指名采集器的源，如东方财富 `web_scrape`+`library=eastmoney`）通过 `config.library` 解析采集器，且 `config.library` 优先于 source_type（见 §3.5.1）；解析失败时 `collector_available=false`，且激活会被拒绝。
@@ -281,9 +282,9 @@ cross_refs: [architecture.md, api.md, database.md, data-flow.md, finance-tab.md,
 |---|------|------|-----|------|------|------|
 | 1 | **Reddit** | API | `https://www.reddit.com/r/{subreddit}/new.json` | 10min | 免费(限流) | 子版: r/artificial, r/robotics, r/embedded, r/space |
 | 2 | **Google News Tech** | RSS | `https://news.google.com/rss/search?q=technology+AI+robotics` | 5min | 免费 | 通用科技新闻 |
-| 3 | **Twitter/X** | Social | Twitter API v2 (Lists) | 10min | 付费($100/月) | 高成本, 仅付费租户可选启用 |
+| 3 | **Twitter/X** | Social | Twitter API v2 (recent search) | 10min | 付费($100/月, Basic档起) | 高成本；采集器已实现（注册名 `twitter`，需 `TWITTER_BEARER_TOKEN`），种子未激活待凭据 |
 
-> ⚠️ **Reddit 采集器已实现、种子未激活**：`RedditCollector`（注册名 `reddit`，`app/collectors/tech/reddit_collector.py`）使用公开 JSON 接口 `https://www.reddit.com/r/{subreddit}/new.json?limit={n}`，无需 OAuth/凭据，但必须携带自定义 `User-Agent`（源级 `config.user_agent`，默认 `instantboard-collector/1.0`）。源级配置键：`subreddits`（子版列表，逐个拉取并按 post id 聚合去重）、`limit`（默认 25，上限 100）、`user_agent`；条目 `extra_data` 含 `reddit_score`/`num_comments`/`subreddit`/`author`；429 限流时返回空并记日志。种子仍存在但 `is_active=False`（`init_db.py` `TECH_CROSS_DOMAIN_SOURCES`），种子激活及 `library`/`subreddits` 配置为后续特性。Twitter/X 完全缺失。
+> ⚠️ **Reddit 采集器已实现、种子未激活**：`RedditCollector`（注册名 `reddit`，`app/collectors/tech/reddit_collector.py`）使用公开 JSON 接口 `https://www.reddit.com/r/{subreddit}/new.json?limit={n}`，无需 OAuth/凭据，但必须携带自定义 `User-Agent`（源级 `config.user_agent`，默认 `instantboard-collector/1.0`）。源级配置键：`subreddits`（子版列表，逐个拉取并按 post id 聚合去重）、`limit`（默认 25，上限 100）、`user_agent`；条目 `extra_data` 含 `reddit_score`/`num_comments`/`subreddit`/`author`；429 限流时返回空并记日志。种子仍存在但 `is_active=False`（`init_db.py` `TECH_CROSS_DOMAIN_SOURCES`），种子激活及 `library`/`subreddits` 配置为后续特性。**Twitter/X 采集器已实现、种子未激活待凭据**：`TwitterCollector`（`app/collectors/tech/twitter_collector.py`）调用 API v2 recent search 端点 `https://api.twitter.com/2/tweets/search/recent?query=<q>&max_results=<n>&tweet.fields=created_at,public_metrics`（Bearer token 来自 `TWITTER_BEARER_TOKEN`）。源级配置键：`query`（搜索词；列表或逗号分隔字符串，逐个拉取并按 tweet id 聚合去重）、`max_results`（默认 20，钳制 10-100）。条目：title=推文文本截断 200、url=`https://twitter.com/i/status/{id}`、summary=推文全文、`extra_data` 含 `like_count`/`retweet_count`/`reply_count`/`impression_count`（有啥取啥）；无 token → 记日志返回 None（按采集失败处理），429/401/403 → 记日志返回空（本轮视为空成功）。种子"Twitter/X-科技话题" `is_active=False`，启用前须配置付费档 Bearer token（API 为付费/限额服务）。
 
 ### 3.4 数据源健康监控设计
 
@@ -486,6 +487,7 @@ class APIKeyManager:
 | IEX Cloud | `IEX_CLOUD_API_KEY` | 可选 | 限量 | $9/月起 | 采集器已实现（可选启用，统一APIKeyManager轮换/限流标记/失效检测，见§3.6.2）；`IEX_CLOUD_BASE_URL` 可覆盖base URL（如指向sandbox） |
 | 东方财富 | 无 | 否 | - | - | 无需Key, 控制频率即可 |
 | Reddit | 无需 (公开JSON, 需自定义 `User-Agent`，源级 `config.user_agent` 提供，默认 `instantboard-collector/1.0`) | 否 | 限量 | - | `RedditCollector` 已实现（注册名 `reddit`；429 时返回空并记日志）；种子未激活，无 OAuth/`REDDIT_CLIENT_ID` 凭据体系 |
+| Twitter/X | `TWITTER_BEARER_TOKEN` | 可选 | - | 付费 ($100/月起; recent search 限额) | `TwitterCollector` 已实现（注册名 `twitter`；无 token 返回 None 按采集失败处理，429/401/403 记日志返回空）；种子未激活待凭据 |
 
 ## 4. 关键决策
 

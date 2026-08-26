@@ -119,6 +119,10 @@ class Settings(BaseSettings):
     # Override to point at a sandbox/test deployment (e.g. https://sandbox.iexapis.com/stable).
     iex_cloud_base_url: str = Field(default="https://cloud.iexapis.com/stable", alias="IEX_CLOUD_BASE_URL")
 
+    # Twitter/X API v2 (optional social tech source); the collector stays dormant without
+    # a token. Note: the recent-search endpoint requires a paid Twitter API tier.
+    twitter_bearer_token: str | None = Field(default=None, alias="TWITTER_BEARER_TOKEN")
+
     # CORS
     cors_origins: Annotated[list[str], NoDecode] = Field(
         default=["http://localhost:3000", "http://localhost:8000"],

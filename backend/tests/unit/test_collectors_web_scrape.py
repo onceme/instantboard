@@ -96,7 +96,7 @@ def _articles_html(count: int) -> str:
 # ── Registry / resolve_collector ─────────────────────────────────
 class TestWebScrapeRegistry:
     def test_registered_in_collector_registry(self):
-        assert len(COLLECTOR_REGISTRY) == 10
+        assert len(COLLECTOR_REGISTRY) == 11
         assert "web_scrape" in COLLECTOR_REGISTRY
         assert get_collector("web_scrape") is WebScrapeCollector
 

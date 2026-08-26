@@ -1,3 +1,4 @@
+import html
 import logging
 from datetime import UTC, datetime
 from typing import Any
@@ -146,6 +147,7 @@ class RedditCollector(BaseCollector):
                     "summary": summary,
                     "published_at": published_at,
                     "author": author,
+                    "image_url": self._extract_image_url(post) or None,
                     "extra_data": {
                         "reddit_score": post.get("score", 0),
                         "num_comments": post.get("num_comments", 0),
@@ -156,3 +158,24 @@ class RedditCollector(BaseCollector):
             )
 
         return items
+
+    @staticmethod
+    def _extract_image_url(post: dict) -> str:
+        """Best-effort post thumbnail: preview image first, then thumbnail field.
+
+        Reddit escapes "&" as "&amp;" inside preview URLs; thumbnail holds
+        placeholders ("self", "default", "nsfw") for posts without media.
+        """
+        url = ""
+        preview = post.get("preview")
+        if isinstance(preview, dict):
+            images = preview.get("images") or []
+            if images and isinstance(images[0], dict):
+                source = images[0].get("source")
+                if isinstance(source, dict):
+                    url = str(source.get("url") or "").strip()
+        if not url:
+            thumbnail = str(post.get("thumbnail") or "").strip()
+            if thumbnail.startswith(("http://", "https://")):
+                url = thumbnail
+        return html.unescape(url) if url else ""

@@ -353,6 +353,35 @@ class TestRedditParse:
         assert await c.parse_data("not a list", source) == []
         assert await c.parse_data(["not a dict"], source) == []
 
+    async def test_parse_image_from_preview(self):
+        c = RedditCollector()
+        post = _make_post(
+            preview={"images": [{"source": {"url": "https://preview.redd.it/a.jpg?width=640&amp;format=jpg"}}]},
+        )
+        result = await c.parse_data([post], _make_source())
+        assert result[0]["image_url"] == "https://preview.redd.it/a.jpg?width=640&format=jpg"
+
+    async def test_parse_image_preview_preferred_over_thumbnail(self):
+        c = RedditCollector()
+        post = _make_post(
+            preview={"images": [{"source": {"url": "https://preview.redd.it/a.jpg"}}]},
+            thumbnail="https://thumbs.redd.it/t.jpg",
+        )
+        result = await c.parse_data([post], _make_source())
+        assert result[0]["image_url"] == "https://preview.redd.it/a.jpg"
+
+    async def test_parse_image_thumbnail_fallback(self):
+        c = RedditCollector()
+        post = _make_post(thumbnail="https://thumbs.redd.it/t.jpg")
+        result = await c.parse_data([post], _make_source())
+        assert result[0]["image_url"] == "https://thumbs.redd.it/t.jpg"
+
+    async def test_parse_no_image_placeholder_thumbnail(self):
+        c = RedditCollector()
+        post = _make_post(thumbnail="self")
+        result = await c.parse_data([post], _make_source())
+        assert result[0]["image_url"] is None
+
 
 # ── collect() end-to-end ──────────────────────────────────────────
 class TestRedditCollect:

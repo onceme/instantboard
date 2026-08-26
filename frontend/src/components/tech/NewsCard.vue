@@ -4,7 +4,7 @@ import { DOMAIN_CONFIG } from "@/types";
 import { itemsApi } from "@/api/items";
 import { getApiErrorMessage } from "@/utils/api";
 import { formatRelativeTime } from "@/utils/format";
-import { computed, nextTick, ref } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import TopicTag from "./TopicTag.vue";
 import { Check, ExternalLink, Plus, X } from "lucide-vue-next";
 
@@ -31,6 +31,18 @@ const domainColorVar = computed(() => {
 });
 
 const visibleTags = computed(() => props.item.topic_tags.slice(0, 3));
+
+const imgFailed = ref(false);
+watch(
+  () => props.item.image_url,
+  () => {
+    imgFailed.value = false;
+  },
+);
+
+function onImgError() {
+  imgFailed.value = true;
+}
 
 const tagInputOpen = ref(false);
 const tagInput = ref("");
@@ -199,6 +211,22 @@ async function removeTag(tag: string) {
         }}</span>
       </div>
     </div>
+
+    <a
+      v-if="item.image_url && !imgFailed"
+      :href="item.url"
+      target="_blank"
+      rel="noopener noreferrer"
+      class="card-thumb-link"
+    >
+      <img
+        :src="item.image_url"
+        :alt="item.title"
+        class="card-thumb"
+        loading="lazy"
+        @error="onImgError"
+      />
+    </a>
   </div>
 </template>
 
@@ -345,6 +373,21 @@ async function removeTag(tag: string) {
   color: var(--text-muted);
 }
 
+.card-thumb-link {
+  display: flex;
+  align-items: flex-start;
+  flex-shrink: 0;
+  padding: 12px 12px 12px 0;
+}
+
+.card-thumb {
+  width: 96px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  background-color: var(--bg-secondary);
+}
+
 @media (max-width: 767px) {
   .card-summary {
     display: none;
@@ -356,6 +399,15 @@ async function removeTag(tag: string) {
 
   .ext-link {
     display: none;
+  }
+
+  .card-thumb-link {
+    padding: 8px 8px 8px 0;
+  }
+
+  .card-thumb {
+    width: 64px;
+    height: 48px;
   }
 }
 </style>

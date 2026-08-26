@@ -60,7 +60,8 @@ frontend/src/
 │   │   #   NAVCalculator / MarketIndexCard / CommodityCard / FinanceSearch / QuoteChart
 │   ├── tech/               # TopicFilter.vue / NewsFeed.vue / NewsCard.vue / TopicTag.vue /
 │   │   │                   # CategoryPanel.vue / TechSubNav.vue（补充）
-│   │   │                   # NewsCard: 标签行"+"内联打标、TopicTag"×"移除（乐观+回滚）
+│   │   │                   # NewsCard: 标签行"+"内联打标、TopicTag"×"移除（乐观+回滚）、
+│   │   │                   #   image_url 缩略图（懒加载，@error 隐藏）
 │   │   # ⚠️ 未实现: TrendChart（话题热度图）
 │   ├── dashboard/          # 实际 6 个:
 │   │   ├── HealthPanel.vue / SystemStatus.vue / ServicesHealth.vue
@@ -125,7 +126,7 @@ graph TD
 各视图布局摘要:
 
 - **FinanceView**: FinanceSubNav + FinanceGrid；右栏（≥1440px）WatchlistMini + FundNAV；Overview 面板目前只渲染 MarketIndices（见 [finance-tab.md](finance-tab.md)）
-- **TechView**: TechSubNav + TopicFilter + CategoryPanel×4 / NewsFeed 双视图（见 [tech-tab.md](tech-tab.md)）；其中 NewsCard 支持三级标签手动标注——标签行"+"内联输入框打标、标签上"×"移除（乐观移除失败回滚，见 [content-categories.md](content-categories.md) §3.6.1）
+- **TechView**: TechSubNav + TopicFilter + CategoryPanel×4 / NewsFeed 双视图（见 [tech-tab.md](tech-tab.md)）；其中 NewsCard 支持三级标签手动标注——标签行"+"内联输入框打标、标签上"×"移除（乐观移除失败回滚，见 [content-categories.md](content-categories.md) §3.6.1）——并在 `image_url` 非空时渲染缩略图（桌面 96×72、移动端 64×48，`loading="lazy"`，加载失败 `@error` 后隐藏；见 [tech-tab.md](tech-tab.md) §3.3.3）
 - **CategoryView**: /c/:slug 自定义分类通用信息流 — 按 slug 解析自定义分类（未命中显示 EmptyState），GET /categories/{id}/items 分页拉取（useInfiniteScroll 无限滚动，复用 NewsCard）；加载/错误/重试与 FinanceView 模式一致（见 [content-categories.md](content-categories.md) §3.3.1 Step 6）
 - **DashboardView**: HealthPanel + 双列 flex（左 SystemStatus/DataSourcesHealth，右 ServicesHealth/SSEStats）（见 [dashboard-tab.md](dashboard-tab.md)）
 - **SettingsView**: CategoryEditor / SourceEditor / ProfileSettings / TenantOverrides / ThemeToggle；CategoryEditor 的创建/编辑为完整表单——名称/描述/图标（`categoryIcons.ts` CATEGORY_ICON_OPTIONS 的 15 个精选 lucide 图标，默认 folder）/颜色（`<input type="color">`，默认 #3B82F6）/刷新频率（秒，客户端校验 ≥10，创建留空走后端默认 300、编辑留空保持不变）/关键词（逗号分隔 → keywords_filter 数组，空白项过滤；后端响应不回显关键词，编辑留空 = 保持不变）/slug（可选，创建留空由后端从名称生成），type 固定 custom，并为自定义分类行提供「重新分类」按钮（ConfirmationDialog 确认 → POST /categories/{id}/reclassify → 回显扫描/更新计数，失败走 ErrorAlert）；「租户覆盖」页签仅 `role === "admin"` 渲染（TenantOverrides.vue）——列出系统+自有分类并为每行提供刷新频率/颜色覆盖输入，加载时经 GET /tenant/settings 回填，保存时留空条目不写入 payload（整体替换语义 = 清除已有覆盖），400 展示 error.details[] 首条、403 降级提示无权限（见 [content-categories.md](content-categories.md) §3.4.4）
@@ -281,7 +282,7 @@ CSS 变量实现:
 | Sidebar | 展开 220px | 折叠 60px (图标) | 隐藏，汉堡菜单抽屉 |
 | 右侧面板 | ≥1440px 显示 | 隐藏 | 隐藏 |
 | FinanceGrid | 双区(主+右栏) | 单列 | 单列 |
-| NewsCard | 完整 (标题+摘要) | 同左 | 极简 (标题+来源+时间) |
+| NewsCard | 完整 (标题+摘要+缩略图 96×72) | 同左 | 极简 (标题+来源+时间) + 缩略图 64×48 |
 | Dashboard 卡片 | 双列 | 双列 | 单列堆叠 |
 
 **触控优化**:

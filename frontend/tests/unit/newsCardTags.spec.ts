@@ -15,7 +15,10 @@ import TopicTag from "@/components/tech/TopicTag.vue";
 import { apiClient } from "@/utils/api";
 import type { TechNewsItem } from "@/types";
 
-function makeItem(topic_tags = ["tech", "ai", "llm"]): TechNewsItem {
+function makeItem(
+  topic_tags = ["tech", "ai", "llm"],
+  overrides: Partial<TechNewsItem> = {},
+): TechNewsItem {
   return {
     id: "item-1",
     title: "GPT-5 released",
@@ -28,6 +31,7 @@ function makeItem(topic_tags = ["tech", "ai", "llm"]): TechNewsItem {
     published_at: "2026-08-25T10:00:00Z",
     fetched_at: "2026-08-25T10:05:00Z",
     priority: 5,
+    ...overrides,
   };
 }
 
@@ -260,5 +264,43 @@ describe("remove tag flow", () => {
     expect(wrapper.find(".tag-error").text()).toBe(
       "Tag not found on this item",
     );
+  });
+});
+
+describe("image thumbnail", () => {
+  it("renders a lazy thumbnail when image_url is present", async () => {
+    const item = makeItem(["tech", "ai"], {
+      image_url: "https://img.example.com/a.jpg",
+    });
+    const wrapper = await mountCard(item);
+
+    const thumb = wrapper.find("img.card-thumb");
+    expect(thumb.exists()).toBe(true);
+    expect(thumb.attributes("src")).toBe("https://img.example.com/a.jpg");
+    expect(thumb.attributes("loading")).toBe("lazy");
+    expect(thumb.attributes("alt")).toBe("GPT-5 released");
+    // The thumbnail link points at the article, like the title
+    const link = wrapper.find("a.card-thumb-link");
+    expect(link.exists()).toBe(true);
+    expect(link.attributes("href")).toBe("https://example.com/1");
+  });
+
+  it("hides the thumbnail after the image fails to load", async () => {
+    const item = makeItem(["tech", "ai"], {
+      image_url: "https://img.example.com/broken.jpg",
+    });
+    const wrapper = await mountCard(item);
+    expect(wrapper.find("img.card-thumb").exists()).toBe(true);
+
+    await wrapper.find("img.card-thumb").trigger("error");
+
+    expect(wrapper.find("img.card-thumb").exists()).toBe(false);
+    expect(wrapper.find("a.card-thumb-link").exists()).toBe(false);
+  });
+
+  it("does not render any image when image_url is absent", async () => {
+    const wrapper = await mountCard(makeItem());
+    expect(wrapper.find("img.card-thumb").exists()).toBe(false);
+    expect(wrapper.find("a.card-thumb-link").exists()).toBe(false);
   });
 });

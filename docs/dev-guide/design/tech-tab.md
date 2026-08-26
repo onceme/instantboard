@@ -171,6 +171,7 @@ graph TD
         NT["标题 (可点击 → 原文链接)"]
         NS["摘要 (2行截断)"]
         DC["领域色条 (左边缘色块)"]
+        NImg["缩略图 (image_url 有则渲染, 加载失败隐藏)"]
     end
     subgraph Meta["辅助信息元素"]
         NR["来源名称"]
@@ -194,7 +195,7 @@ graph TD
 
 **三级标签手动标注（已实现）**：标签行（`.card-tags`）中每个 TopicTag 内含"×"，点击经 `DELETE /api/v1/items/{item_id}/tags/{tag}` 乐观移除（失败回滚并内联提示）；标签行尾"+"按钮展开内联输入框（Enter/确认提交），经 `POST /api/v1/items/{item_id}/tags` 打标，客户端按 `^[a-z0-9-]{1,32}$` 预校验，成功后以服务端返回的 `topic_tags` 覆盖本地。卡片最多显示 3 个标签（`visibleTags` slice），超出部分仍可经服务端持有。详见 [content-categories.md](content-categories.md) §3.6.1 与 [api.md](api.md) 条目手动打标 API。
 
-> ⚠️ **未实现**：图片缩略图 — `/tech/news` 响应包含 `image_url`，但 `NewsCard.vue` 不渲染（桌面/移动端均无图）。
+> ✅ **图片缩略图（已实现）**：`/tech/news` 响应的 `image_url` 由采集器产出——RSS 按 `media:content` → `media:thumbnail` → `enclosure` → 正文 `<img>` 优先级取第一个可用图片（均无则 None）；Reddit 取 `preview.images[0].source.url` 回退 `thumbnail`（占位符 self/default/nsfw 视为无图）；HN/Arxiv/Twitter 天然无图。`NewsCard.vue` 在 `image_url` 非空时于卡片右侧渲染缩略图（桌面 96×72 / 移动端 ≤767px 64×48，均圆角裁切 + `loading="lazy"` + 包裹原文链接），加载失败（`@error`）置 `imgFailed` 后隐藏；无图保持原布局。
 
 ### 3.4 话题标签与分类体系
 
@@ -328,7 +329,7 @@ if hn_score:
 | 标签体系 | 一级4个 + 二级24个；三级未实现 | 结构化且可扩展 |
 | 标签提取 | 纯关键词匹配（~192条） | 简单可控；TF-IDF 为待实现项 |
 | 主数据源类型 | RSS 为主；web_scrape 源暂不可用（无采集器），reddit（social）种子已激活（公开 JSON、无需凭据） | RSS 最稳定 |
-| NewsCard设计 | 领域色条+标题+摘要+标签；不渲染图片 | 信息密度适中 |
+| NewsCard设计 | 领域色条+标题+摘要+标签+缩略图（`image_url` 有则渲染，懒加载，加载失败隐藏） | 信息密度适中 |
 
 ## 5. 边界情况
 

@@ -1865,6 +1865,77 @@ class TestRSSCollectorExtended:
         assert len(result) >= 1
         assert result[0].get("image_url") == "https://img.example.com/enc.jpg"
 
+    async def test_parse_data_media_thumbnail_image(self):
+        """image_url from media:thumbnail when media_content is absent."""
+        c = RSSCollector()
+        source = _make_source(config={"parse_rules": {}})
+        raw_xml = """<?xml version="1.0"?>
+        <rss xmlns:media="http://search.yahoo.com/mrss/" version="2.0">
+        <channel>
+        <item>
+            <title>Thumb</title>
+            <link>http://x.com/11</link>
+            <description>Desc</description>
+            <media:thumbnail url="https://img.example.com/thumb.jpg" width="120" height="90"/>
+        </item>
+        </channel>
+        </rss>"""
+        result = await c.parse_data(raw_xml, source)
+        assert len(result) == 1
+        assert result[0].get("image_url") == "https://img.example.com/thumb.jpg"
+
+    async def test_parse_data_media_thumbnail_preferred_over_enclosure(self):
+        """Priority: media:thumbnail wins over enclosure."""
+        c = RSSCollector()
+        source = _make_source(config={"parse_rules": {}})
+        raw_xml = """<?xml version="1.0"?>
+        <rss xmlns:media="http://search.yahoo.com/mrss/" version="2.0">
+        <channel>
+        <item>
+            <title>Priority</title>
+            <link>http://x.com/12</link>
+            <description>Desc</description>
+            <media:thumbnail url="https://img.example.com/thumb.jpg"/>
+            <enclosure url="https://img.example.com/enc.jpg" type="image/jpeg"/>
+        </item>
+        </channel>
+        </rss>"""
+        result = await c.parse_data(raw_xml, source)
+        assert len(result) == 1
+        assert result[0].get("image_url") == "https://img.example.com/thumb.jpg"
+
+    async def test_parse_data_inline_img_fallback(self):
+        """image_url falls back to the first <img> inside content/summary HTML."""
+        c = RSSCollector()
+        source = _make_source(config={"parse_rules": {}})
+        raw_xml = """<?xml version="1.0"?>
+        <rss version="2.0">
+        <channel>
+        <item>
+            <title>Inline</title>
+            <link>http://x.com/13</link>
+            <description>&lt;p&gt;Lead&lt;/p&gt;&lt;img src="https://img.example.com/inline.jpg?a=1&amp;amp;b=2"&gt;</description>
+        </item>
+        </channel>
+        </rss>"""
+        result = await c.parse_data(raw_xml, source)
+        assert len(result) == 1
+        assert result[0].get("image_url") == "https://img.example.com/inline.jpg?a=1&b=2"
+
+    async def test_parse_data_no_image_returns_none(self):
+        """image_url is None when the entry carries no usable image."""
+        c = RSSCollector()
+        source = _make_source(config={"parse_rules": {}})
+        raw_xml = """<?xml version="1.0"?>
+        <rss version="2.0">
+        <channel>
+        <item><title>Plain</title><link>http://x.com/14</link><description>No image here</description></item>
+        </channel>
+        </rss>"""
+        result = await c.parse_data(raw_xml, source)
+        assert len(result) == 1
+        assert result[0].get("image_url") is None
+
     async def test_parse_feedparser_date_invalid_struct_time(self):
         """Lines 116-117: ValueError from datetime construction falls through."""
         # Published parsed exists but with invalid values

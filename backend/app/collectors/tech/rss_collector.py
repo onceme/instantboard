@@ -1,4 +1,6 @@
+import html
 import logging
+import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -8,6 +10,61 @@ import httpx
 from app.collectors.base import BaseCollector
 
 logger = logging.getLogger(__name__)
+
+_IMAGE_URL_RE = re.compile(r"\.(?:jpe?g|png|gif|webp|avif|bmp)(?:[?#]|$)", re.IGNORECASE)
+_IMG_TAG_RE = re.compile(r"<img[^>]+src=[\"']([^\"']+)[\"']", re.IGNORECASE)
+
+
+def _is_image_media(url: str, media_type: str) -> bool:
+    if media_type.startswith("image"):
+        return True
+    if not media_type:
+        return bool(_IMAGE_URL_RE.search(url))
+    return False
+
+
+def _first_img_in_html(entry: dict) -> str:
+    blobs: list[str] = []
+    content = entry.get("content") or []
+    if isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict) and block.get("value"):
+                blobs.append(str(block["value"]))
+    for key in ("summary", "description"):
+        value = entry.get(key)
+        if isinstance(value, str) and value.strip():
+            blobs.append(value)
+    for blob in blobs:
+        match = _IMG_TAG_RE.search(blob)
+        if match:
+            url = html.unescape(match.group(1)).strip()
+            if url:
+                return url
+    return ""
+
+
+def _extract_image_url(entry: dict) -> str:
+    """First usable image URL for a feed entry, in priority order.
+
+    Sources: media:content → media:thumbnail → enclosure → first <img>
+    inside the entry content/summary HTML. Returns "" when nothing usable.
+    """
+    for media in entry.get("media_content") or []:
+        url = (media.get("url") or "").strip()
+        if url and _is_image_media(url, media.get("type") or ""):
+            return url
+
+    for thumb in entry.get("media_thumbnail") or []:
+        url = (thumb.get("url") or "").strip()
+        if url:
+            return url
+
+    for enc in entry.get("enclosures") or []:
+        url = (enc.get("href") or "").strip()
+        if url and _is_image_media(url, enc.get("type") or ""):
+            return url
+
+    return _first_img_in_html(entry)
 
 
 class RSSCollector(BaseCollector):
@@ -89,17 +146,7 @@ class RSSCollector(BaseCollector):
                 extra_data[extra_key] = entry.get(entry_key, "")
             item["extra_data"] = extra_data
 
-            if entry.get("media_content"):
-                for media in entry.get("media_content", []):
-                    if media.get("type", "").startswith("image"):
-                        item["image_url"] = media.get("url", "")
-                        break
-
-            if not item.get("image_url") and entry.get("enclosures"):
-                for enc in entry.get("enclosures", []):
-                    if enc.get("type", "").startswith("image"):
-                        item["image_url"] = enc.get("href", "")
-                        break
+            item["image_url"] = _extract_image_url(entry) or None
 
             items.append(item)
 

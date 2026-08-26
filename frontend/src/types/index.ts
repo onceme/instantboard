@@ -331,6 +331,28 @@ export interface DataSourceHealthDetail {
   last_error?: string;
 }
 
+// GET /api/v1/dashboard/data-sources/{source_id}
+// (backend schemas/dashboard.py DataSourceHealthDetailResponse).
+// success_rate_24h is a 0..1 ratio (success_count_24h / total_fetches_24h),
+// null when there were no fetches in the window. health_history entries are
+// cached source_health snapshots; response_time_trend entries carry a
+// timestamp (ts/time/timestamp) and a millisecond value (ms).
+export interface DataSourceHealthDetailResponse {
+  source_id: string;
+  name: string;
+  source_type?: string | null;
+  status: "healthy" | "degraded" | "down";
+  success_rate_24h: number | null;
+  avg_response_time_ms: number | null;
+  last_success_at?: string | null;
+  last_failure_at?: string | null;
+  consecutive_failures: number | null;
+  total_fetches_24h: number | null;
+  last_error?: string | null;
+  health_history?: Array<Record<string, unknown>> | null;
+  response_time_trend?: Array<Record<string, unknown>> | null;
+}
+
 export interface SchedulerStatus {
   job_id: string;
   name: string;

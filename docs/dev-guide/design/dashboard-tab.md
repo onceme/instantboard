@@ -73,12 +73,19 @@ graph TD
   DSH --> StatusColors["状态色块: healthy / degraded / down"]
   DSH --> Sort["排序: down 优先"]
   DSH --> DownHL["down状态的行: 高亮"]
+  DSH --> Filters["过滤(客户端): 状态 | 类型 | 名称关键字, 三者叠加"]
+  DSH --> Pager["分页: 每页 20 条, 过滤变化重置第 1 页"]
+  DSH --> Expand["行展开: 懒加载 data-sources/{source_id} 详情(按行缓存)"]
 ```
 
-> ⚠️ **未实现**：
-> - 「成功率 / 采集频率」列 — 后端已有 `success_rate_24h`/`total_fetches_24h` 但前端未展示（增强项）
-> - 过滤器（按类型/分类）与分页
-> - 行展开详情 — 展开是空壳，详情数据由 `GET /api/v1/dashboard/data-sources/{source_id}`（含 `health_history`、`response_time_trend`）提供，但该端点从未被前端调用
+> ✅ **已实现**（前端增强，后端端点复用）：
+> - 过滤器：状态下拉（全部/healthy/degraded/down）+ 类型下拉（按实际 `source_type` 去重）+ 名称关键字搜索（大小写不敏感），三者叠加；源数量级小，客户端过滤即可；无匹配结果时显示 EmptyState
+> - 分页：每页 20 条（`common/Pagination.vue`），任一过滤条件变化时重置回第 1 页
+> - 行展开详情：点击行懒加载 `GET /api/v1/dashboard/data-sources/{source_id}`，详情按 `source_id` 组件内缓存——同一行重复展开不重复请求，请求中（inflight）去重；加载失败行内提示并附「重试」按钮；再次点击收起
+> - 展开区内容：成功率（`success_rate_24h`，后端为 0..1 比值，前端 ×100 显示百分比）、24h 采集总数（`total_fetches_24h`）、连续失败数、最后错误、`health_history` 列表、`response_time_trend` 迷你条形（div 高度条，不引入新图表库）
+> - 原「成功率 / 采集频率」列增强项以上述展开详情形式落地（不作为独立表格列）
+>
+> 已知边界：`response_time_trend:{source_id}` Redis Key 目前无后端写入方，趋势列表实际恒为空（前端按空态显示"暂无趋势"，契约已就位）
 
 ### 3.3 数据库状态指标（现状）
 

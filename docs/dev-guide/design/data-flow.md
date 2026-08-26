@@ -231,7 +231,7 @@ graph TD
 
 - **DedupProcessor 两层去重键（注意二者不同）**：① Redis Set `MD5(title:url)` 快速检查（`processors/dedup.py:40-42`）；② PG UNIQUE 兜底 `(tenant_id, source_id, url, published_at)`（`models/item.py:56-63`）；Redis 层不含 `published_at`。
 - **FilterProcessor**：检查 `category.keywords_filter`，标题/摘要须含至少 1 个关键词；过滤列表为空则全量通过。
-- **Categorizer**：按 `source.category_id` 定一级分类；`TechTopicExtractor` 提取 `topic_tags`；FinanceCollector 自动标记 `type`（stock/fund/...）。
+- **Categorizer**：按 `source.category_id` 定一级分类；`TechTopicExtractor` 提取 `topic_tags`——规则标签不足（< 3）且进程内滑窗语料（最近 2000 条）预热达标（≥ 50）时，叠加 TF-IDF 高频术语三级标签（标题候选、上限 3，见 content-categories.md §3.6.3）；FinanceCollector 自动标记 `type`（stock/fund/...）。
 - **Transformer**：字段名统一映射、时区归一 UTC、HTML 摘要清理（去标签截断 200 字符）、URL 规范化、`priority` 计算（`source.priority` + 热度加权）。
 
 #### 3.3.2 处理器链实现

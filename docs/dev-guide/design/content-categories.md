@@ -547,7 +547,7 @@ graph TD
     end
     subgraph level3_tags["三级标签 — 话题级, 动态"]
         direction LR
-        l3_auto["自动提取 (关键词匹配)<br/>gpt-4 / starlink / optimus ..."] ~~~ l3_manual["手动标注 (已实现: /items/{id}/tags + NewsCard)"]
+        l3_auto["自动提取 (关键词匹配 + TF-IDF 滑窗)<br/>gpt-4 / starlink / optimus ..."] ~~~ l3_manual["手动标注 (已实现: /items/{id}/tags + NewsCard)"]
     end
     t_finance --> l2_fin
     t_robotics --> l2_rob
@@ -558,7 +558,7 @@ graph TD
     level2_tags --> l3_manual
 ```
 
-二级标签完整清单（财经 6 + 科技四领域 ×6 = 30 个 slug）由 §3.5.1-3.5.5 各表承载，不再进图；robotics / ai / embedded / space 在科技域兼具一级标签与二级分组依据的双重身份；三级标签来自采集时的关键词匹配（§3.6.3）或用户手动标注（见下）。
+二级标签完整清单（财经 6 + 科技四领域 ×6 = 30 个 slug）由 §3.5.1-3.5.5 各表承载，不再进图；robotics / ai / embedded / space 在科技域兼具一级标签与二级分组依据的双重身份；三级标签来自采集时的关键词匹配与 TF-IDF 滑窗高频术语补全（§3.6.3）或用户手动标注（见下）。
 
 > ✅ **手动标注已实现**（`POST/DELETE /api/v1/items/{item_id}/tags`，`api/v1/items.py` + `services/item.py` + `NewsCard.vue`）：
 >
@@ -603,8 +603,9 @@ items.topic_tags: JSONB数组
 
 ```python
 # processors/categorizer.py — 模块级 KEYWORD_TO_TAG 映射 + TechTopicExtractor
-# 现状: 仅关键词匹配 (大小写不敏感子串匹配), 无匹配时兜底打 "general";
-# ⚠️ TF-IDF / LLM 三级标签提取未实现。
+# 现状: 关键词匹配 (大小写不敏感子串匹配), 无匹配时兜底打 "general";
+# 规则标签不足时叠加 TF-IDF 三级标签 (进程内滑窗语料, 已实现);
+# ⚠️ LLM 三级标签标注未实现。
 
 class TechTopicExtractor:
     """
@@ -616,10 +617,26 @@ class TechTopicExtractor:
     算法步骤:
     1. 一级标签: 由 source.category_id 决定 (固定)
     2. 二级标签: 关键词规则匹配 (KEYWORD_TO_TAG 映射表, 约190个关键词)
-    3. ⚠️ 未实现 — 三级标签: TF-IDF辅助提取 / LLM 标注（原设计步骤，无代码实现）
+    3. 三级标签 (已实现, TF-IDF 流式口径):
+       - 进程内滑窗语料: 最近 2000 条已处理文本 (TFIDF_WINDOW_SIZE),
+         deque + 增量 df 计数, 滑出时递减; 预热不足 50 条
+         (TFIDF_WARMUP_SIZE) 时跳过三级提取
+       - 触发条件: 规则匹配产出标签 < 3 个 (TFIDF_MIN_RULE_TAGS) 才补
+       - 分词: 小写化, 长度 3-40, 字母/数字 + 连字符/+/# 白名单
+         (risc-v / gpt-4o 等保持整体), 去约 115 条英文停用词 +
+         http/https/www 等 URL/HTML 噪声, 排除纯数字
+       - 候选: 仅标题中出现的词元 (降低噪声); 评分
+         tf(标题tf×2 + 摘要tf) × idf(ln((1+N)/(1+df))+1);
+         取 得分 ≥ 2.5 (TFIDF_MIN_SCORE) 且 df ≥ 3 (TFIDF_MIN_DOC_FREQ)
+         的候选, 每条最多 3 个 (TFIDF_MAX_TERTIARY_TAGS)
+       - 输出: slug 化 ([a-z0-9-]{1,32}), 与一级/二级标签去重后
+         追加在末尾; 同分按 slug 字典序, 同输入同语料同输出 (确定性)
+       - 降级: 语料维护/打分任何异常都只记日志, 回退纯规则标签,
+         绝不影响条目入库
+       ⚠️ LLM 标注 (原设计步骤3) 属未来增强, 未实现
     
     标签去重: topic_tags中不重复 (Set去重)
-    标签排序: 一级 → 二级 → 三级 (保持层级顺序)
+    标签排序: 一级 → 二级 → 其他规则标签 → 三级 (三级按得分追加在末尾)
     """
     
     # 一级标签: 由 source.category_id 确定
@@ -782,7 +799,7 @@ SSE推送: ⚠️ 未实现——后端不存在 `topic_stats_update` 事件;
 | 二级子分类实现 | 虚拟子分类 (topic_tags 中的标签) | 子分类数量多(30+)，独立建表过度设计；topic_tags 已支持过滤和展示，利用 GIN 索引高效查询 |
 | 数据源绑定层级 | 绑定到一级分类 (sources.category_id) | 一个数据源可能覆盖多个二级子分类（如 HackerNews 覆盖4个领域）；二级子分类通过 Categorizer 自动打标签归入 |
 | 标签体系 | 三级扁平数组存储 (topic_tags JSONB) | 比 nested JSONB 更易查询；GIN 索引 `@>` 操作符天然支持层级过滤；扁平数组可同时表达层级和具体标签 |
-| 标签提取 | 关键词规则匹配（⚠️TF-IDF未实现） | 规则匹配可控、简单可靠；TF-IDF/LLM三级标签提取为原方案，无代码实现 |
+| 标签提取 | 关键词规则匹配 + TF-IDF 三级补全（滑窗2000/预热50/仅标题候选/上限3，见§3.6.3）；⚠️LLM标注未实现 | 规则匹配可控、简单可靠；规则标签不足时 TF-IDF 从进程内滑窗语料提取高频术语补三级标签（确定性、异常降级），不引入重型依赖 |
 | 跨领域新闻 | 多标签支持 (一条新闻多个 topic_tags) | "太空中的AI" 可同时有 ["tech", "ai", "space"] 标签，在所有相关面板中显示 |
 | 多租户分类 | 预定义共享 + 自定义私有 | 预定义分类所有租户共享避免重复配置；自定义分类仅本租户可见保证隔离 |
 | 财经子分类映射 | 对应前端子面板而非 topic_tags 过滤 | 财经数据模型特殊（行情专用表而非 items 通用表），子面板切换比标签过滤更直觉 |

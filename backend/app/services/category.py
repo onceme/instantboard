@@ -19,7 +19,7 @@ from app.models.tenant import Tenant
 
 # Bulk re-tagging must apply exactly the same rules as the collection pipeline, so
 # reuse its processors instead of duplicating the keyword tables here.
-from app.processors.categorizer import CategorizerProcessor, TechTopicExtractor
+from app.processors.categorizer import CategorizerProcessor, get_topic_extractor
 from app.schemas.base import PaginatedMeta, PaginatedResponse, SuccessResponse
 from app.schemas.category import (
     CategoryCreate,
@@ -35,7 +35,9 @@ from app.services.tenant import extract_overrides, load_tenant_settings
 logger = logging.getLogger(__name__)
 
 RECLASSIFY_BATCH_SIZE = 500
-_topic_extractor = TechTopicExtractor()
+# Shared with the collection pipeline (same corpus), so re-tagging reproduces
+# the TF-IDF tertiary tags the pipeline would assign.
+_topic_extractor = get_topic_extractor()
 _categorizer = CategorizerProcessor()
 
 SUBCATEGORY_LABEL_MAP = {
@@ -405,9 +407,8 @@ class CategoryService:
     def _recompute_item_tags(item: Item, category: Category) -> list[str]:
         """Rebuild one item's tags exactly like CategorizerProcessor.process would
         (level-1 tag stays the category slug, as set at collection time)."""
-        text = f"{item.title or ''} {item.summary or ''}"
         if category.type == "tech":
-            return _topic_extractor.extract_with_level1(text, category.slug)
+            return _topic_extractor.extract_with_level1(item.title or "", category.slug, summary=item.summary or "")
         if category.type == "finance":
             finance_tags = _categorizer._determine_finance_tags(
                 {

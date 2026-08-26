@@ -1,4 +1,7 @@
 import logging
+import math
+import re
+from collections import Counter, deque
 from typing import Any
 
 from app.processors.base import BaseProcessor
@@ -196,10 +199,213 @@ KEYWORD_TO_TAG: dict[str, list[str]] = {
     "行情": ["finance", "china-stock"],
 }
 
+# ── TF-IDF tertiary tag extraction ────────────────────────────────────────────
+# Streaming variant: statistics live in an in-process sliding window over the
+# last TFIDF_WINDOW_SIZE processed documents (observation order = processing
+# order), so memory stays bounded and idf tracks the current news mix without
+# any external index. Extraction stays skipped until TFIDF_WARMUP_SIZE documents
+# have been observed — below that, idf values are meaningless.
+TFIDF_WINDOW_SIZE = 2000
+TFIDF_WARMUP_SIZE = 50
+# Tertiary tags only supplement sparse rule results; rich rule matches keep the
+# deterministic rule-only output.
+TFIDF_MIN_RULE_TAGS = 3
+TFIDF_MAX_TERTIARY_TAGS = 3
+TFIDF_TITLE_WEIGHT = 2
+# score = (title_tf * TFIDF_TITLE_WEIGHT + summary_tf) * idf,
+# idf = ln((1 + N) / (1 + df)) + 1 (smoothed, sklearn-style).
+TFIDF_MIN_SCORE = 2.5
+# Candidates must already recur in the window — a term seen once or twice is
+# noise, not a trending topic.
+TFIDF_MIN_DOC_FREQ = 3
+TFIDF_MIN_TOKEN_LEN = 3
+TFIDF_MAX_TOKEN_LEN = 40
+# Matches the manual-tag API format ^[a-z0-9-]{1,32}$ (see api.md §条目手动打标).
+TFIDF_MAX_TAG_LEN = 32
+
+# Words joined by '-', '+' or '#' stay single tokens so technical terms like
+# "risc-v", "gpt-4o" and "tf-idf" survive tokenization.
+_TOKEN_RE = re.compile(r"[a-z0-9]+(?:[+#\-][a-z0-9]+)*")
+_TAG_UNSAFE_RE = re.compile(r"[^a-z0-9-]+")
+_HYPHENS_RE = re.compile(r"-{2,}")
+
+# ~115 common English stopwords plus URL/HTML noise that survives tokenization
+# of scraped snippets; keeps the candidate pool free of words that dominate any
+# feed without carrying topic meaning.
+_STOPWORDS = frozenset(
+    {
+        "a",
+        "about",
+        "above",
+        "after",
+        "again",
+        "against",
+        "all",
+        "am",
+        "an",
+        "and",
+        "any",
+        "are",
+        "as",
+        "at",
+        "be",
+        "because",
+        "been",
+        "before",
+        "being",
+        "below",
+        "between",
+        "both",
+        "but",
+        "by",
+        "can",
+        "could",
+        "did",
+        "do",
+        "does",
+        "doing",
+        "down",
+        "during",
+        "each",
+        "few",
+        "for",
+        "from",
+        "further",
+        "had",
+        "has",
+        "have",
+        "having",
+        "he",
+        "her",
+        "here",
+        "him",
+        "his",
+        "how",
+        "if",
+        "in",
+        "into",
+        "is",
+        "it",
+        "its",
+        "just",
+        "me",
+        "might",
+        "more",
+        "most",
+        "my",
+        "no",
+        "nor",
+        "not",
+        "now",
+        "of",
+        "off",
+        "on",
+        "once",
+        "one",
+        "only",
+        "or",
+        "other",
+        "our",
+        "ours",
+        "out",
+        "over",
+        "own",
+        "same",
+        "she",
+        "should",
+        "so",
+        "some",
+        "such",
+        "than",
+        "that",
+        "the",
+        "their",
+        "them",
+        "then",
+        "there",
+        "these",
+        "they",
+        "this",
+        "those",
+        "through",
+        "to",
+        "too",
+        "under",
+        "until",
+        "up",
+        "very",
+        "was",
+        "we",
+        "were",
+        "what",
+        "when",
+        "where",
+        "which",
+        "while",
+        "who",
+        "whom",
+        "why",
+        "will",
+        "with",
+        "would",
+        "you",
+        "your",
+        # URL / markup noise
+        "amp",
+        "asp",
+        "aspx",
+        "com",
+        "css",
+        "gif",
+        "href",
+        "htm",
+        "html",
+        "http",
+        "https",
+        "img",
+        "jpg",
+        "jpeg",
+        "jsp",
+        "net",
+        "org",
+        "php",
+        "png",
+        "rss",
+        "src",
+        "svg",
+        "url",
+        "webp",
+        "www",
+        "xml",
+    }
+)
+
+
+def _slugify_tag(token: str) -> str:
+    slug = _TAG_UNSAFE_RE.sub("-", token)
+    slug = _HYPHENS_RE.sub("-", slug).strip("-")
+    return slug[:TFIDF_MAX_TAG_LEN]
+
 
 class TechTopicExtractor:
-    def extract_tags(self, text: str) -> list[str]:
-        text_lower = text.lower()
+    """Primary/secondary tag rules plus TF-IDF tertiary tags.
+
+    Every call observes the document into an in-process sliding-window corpus
+    (deque of per-document term sets + a df counter decremented on eviction —
+    simple incremental bookkeeping, no rebuilds). When the rule match yields
+    fewer than TFIDF_MIN_RULE_TAGS tags, high-frequency terminology is scored
+    with tf * idf over the window and appended as tertiary tags. All TF-IDF
+    failures degrade to the plain rule output; an item is never lost to tagging.
+    """
+
+    def __init__(self) -> None:
+        self._window: deque[frozenset[str]] = deque()
+        self._df: dict[str, int] = {}
+
+    def extract_tags(self, title: str, summary: str = "") -> list[str]:
+        title = title or ""
+        summary = summary or ""
+        text_lower = f"{title} {summary}".lower()
         tags_set: set[str] = set()
 
         matched_keywords = []
@@ -211,16 +417,87 @@ class TechTopicExtractor:
         if not tags_set:
             tags_set.add("general")
 
-        sorted_tags = self._sort_tags(tags_set)
-        return sorted_tags
+        try:
+            self.observe(title, summary)
+        except Exception:
+            logger.warning("TF-IDF corpus update failed; continuing without it", exc_info=True)
 
-    def extract_with_level1(self, text: str, level1_tag: str) -> list[str]:
-        tags = self.extract_tags(text)
+        tertiary_tags: list[str] = []
+        if len(tags_set) < TFIDF_MIN_RULE_TAGS:
+            try:
+                tertiary_tags = self.extract_tfidf_tags(title, summary)
+            except Exception:
+                logger.warning("TF-IDF tertiary tag extraction failed; keeping rule tags only", exc_info=True)
+
+        return self._sort_tags(tags_set, tertiary_tags)
+
+    def extract_with_level1(self, title: str, level1_tag: str, summary: str = "") -> list[str]:
+        tags = self.extract_tags(title, summary)
         if level1_tag not in tags:
             tags.insert(0, level1_tag)
         return tags
 
-    def _sort_tags(self, tags: set[str]) -> list[str]:
+    def observe(self, title: str, summary: str) -> None:
+        """Feed one processed document into the sliding-window corpus."""
+        terms = set(self._tokenize(title))
+        terms.update(self._tokenize(summary))
+        if not terms:
+            return
+        if len(self._window) >= TFIDF_WINDOW_SIZE:
+            evicted = self._window.popleft()
+            for term in evicted:
+                count = self._df.get(term, 0)
+                if count <= 1:
+                    self._df.pop(term, None)
+                else:
+                    self._df[term] = count - 1
+        self._window.append(frozenset(terms))
+        for term in terms:
+            self._df[term] = self._df.get(term, 0) + 1
+
+    def extract_tfidf_tags(self, title: str, summary: str) -> list[str]:
+        """Rank title terms by tf * idf over the window and return at most
+        TFIDF_MAX_TERTIARY_TAGS slugified tertiary tags, best score first.
+
+        Deterministic for a given corpus state: ties break on the slug.
+        """
+        if len(self._window) < TFIDF_WARMUP_SIZE:
+            return []
+        title_counts = Counter(self._tokenize(title))
+        if not title_counts:
+            return []
+        summary_counts = Counter(self._tokenize(summary))
+        corpus_size = len(self._window)
+        best: dict[str, float] = {}
+        for term, title_tf in title_counts.items():
+            df = self._df.get(term, 0)
+            if df < TFIDF_MIN_DOC_FREQ:
+                continue
+            tf = TFIDF_TITLE_WEIGHT * title_tf + summary_counts.get(term, 0)
+            idf = math.log((1 + corpus_size) / (1 + df)) + 1.0
+            score = tf * idf
+            if score < TFIDF_MIN_SCORE:
+                continue
+            slug = _slugify_tag(term)
+            if slug and score > best.get(slug, 0.0):
+                best[slug] = score
+        ranked = sorted(best.items(), key=lambda entry: (-entry[1], entry[0]))
+        return [slug for slug, _ in ranked[:TFIDF_MAX_TERTIARY_TAGS]]
+
+    def _tokenize(self, text: str) -> list[str]:
+        if not text:
+            return []
+        tokens: list[str] = []
+        for match in _TOKEN_RE.finditer(text.lower()):
+            token = match.group(0)
+            if len(token) < TFIDF_MIN_TOKEN_LEN or len(token) > TFIDF_MAX_TOKEN_LEN:
+                continue
+            if token.isdigit() or token in _STOPWORDS:
+                continue
+            tokens.append(token)
+        return tokens
+
+    def _sort_tags(self, tags: set[str], tertiary: list[str] | None = None) -> list[str]:
         level1_order = ["finance", "tech", "robotics", "ai", "embedded", "space"]
         level2_order = [
             "china-stock",
@@ -254,6 +531,8 @@ class TechTopicExtractor:
             "space-manufacturing",
         ]
 
+        tertiary = tertiary or []
+        tertiary_set = set(tertiary)
         result = []
         for tag in level1_order:
             if tag in tags:
@@ -262,14 +541,33 @@ class TechTopicExtractor:
             if tag in tags and tag not in result:
                 result.append(tag)
         for tag in sorted(tags):
+            if tag not in result and tag not in tertiary_set:
+                result.append(tag)
+        # Tertiary (TF-IDF) tags keep their score order, appended after the
+        # level-1/level-2/other buckets; duplicates keep their earlier slot.
+        for tag in tertiary:
             if tag not in result:
                 result.append(tag)
 
         return result
 
 
+_shared_topic_extractor = TechTopicExtractor()
+
+
+def get_topic_extractor() -> TechTopicExtractor:
+    """Per-process shared extractor.
+
+    A fresh processor chain is built for every collection run, so the TF-IDF
+    corpus must live on a module-level instance to accumulate across runs;
+    reclassify (services/category.py) reuses the same instance so batches see
+    the corpus the pipeline built.
+    """
+    return _shared_topic_extractor
+
+
 class CategorizerProcessor(BaseProcessor):
-    _topic_extractor = TechTopicExtractor()
+    _topic_extractor = get_topic_extractor()
 
     async def process(self, item: dict, source: Any) -> dict | None:
         category = getattr(source, "category", None)
@@ -287,14 +585,15 @@ class CategorizerProcessor(BaseProcessor):
                 item["topic_tags"] = [category_slug]
         else:
             item["topic_tags"] = self._topic_extractor.extract_tags(
-                f"{item.get('title', '')} {item.get('summary', '')}"
+                item.get("title", "") or "", item.get("summary", "") or ""
             )
 
         return item
 
     def _extract_tech_tags(self, item: dict, level1_slug: str) -> list[str]:
-        text = f"{item.get('title', '')} {item.get('summary', '')}"
-        return self._topic_extractor.extract_with_level1(text, level1_slug)
+        title = item.get("title", "") or ""
+        summary = item.get("summary", "") or ""
+        return self._topic_extractor.extract_with_level1(title, level1_slug, summary=summary)
 
     def _determine_finance_tags(self, item: dict) -> list[str]:
         title = item.get("title", "").lower()

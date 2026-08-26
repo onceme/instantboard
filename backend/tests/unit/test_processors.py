@@ -14,6 +14,7 @@ from app.processors import (
     TransformerProcessor,
     create_default_processor_chain,
 )
+from app.processors import categorizer as categorizer_mod
 from app.processors.categorizer import KEYWORD_TO_TAG, TechTopicExtractor
 from app.processors.dedup import DEDUP_TTL_SECONDS
 from app.processors.filter import BLACKLIST_KEYWORDS, MIN_TITLE_LENGTH
@@ -156,6 +157,114 @@ class TestTechTopicExtractor:
         assert "llm" in result
 
 
+# ── TechTopicExtractor TF-IDF tertiary tags ─────────────────────
+def _feed_corpus(ext: TechTopicExtractor, docs: list[tuple[str, str]]) -> None:
+    for title, summary in docs:
+        ext.observe(title, summary)
+
+
+def _quantinium_corpus(term_count: int, filler_count: int) -> list[tuple[str, str]]:
+    docs = [("quantinium research progress", "quantinium labs report")] * term_count
+    docs += [(f"filler bulletin entry {i}", "unrelated filler content") for i in range(filler_count)]
+    return docs
+
+
+class TestTechTopicExtractorTfidf:
+    def test_cold_corpus_skips_tertiary_tags(self):
+        ext = TechTopicExtractor()
+        _feed_corpus(ext, [("quantinium research progress", "")] * 48)
+        assert ext.extract_tfidf_tags("Quantinium breakthrough", "quantinium") == []
+        assert ext.extract_tags("Quantinium breakthrough", "quantinium") == ["general"]
+
+    def test_warmup_boundary_enables_extraction(self):
+        ext = TechTopicExtractor()
+        _feed_corpus(ext, [("quantinium research progress", "")] * 49)
+        # The extracted item is observed before scoring: 49 + 1 = 50 = warmup size.
+        assert ext.extract_tags("Quantinium breakthrough", "quantinium")[-1] == "quantinium"
+
+    def test_frequent_term_extracted_from_title(self):
+        ext = TechTopicExtractor()
+        _feed_corpus(ext, _quantinium_corpus(80, 40))
+        tags = ext.extract_tags("Quantinium breakthrough", "quantinium research")
+        assert "quantinium" in tags
+        assert tags == ["general", "quantinium"]
+
+    def test_stopwords_short_and_numeric_tokens_never_tagged(self):
+        ext = TechTopicExtractor()
+        _feed_corpus(ext, _quantinium_corpus(0, 80))
+        assert ext.extract_tfidf_tags("the and with for", "the with and for") == []
+        assert ext.extract_tfidf_tags("go up to be my", "go up to be") == []
+        assert ext.extract_tfidf_tags("123 456 789", "456 789 123") == []
+
+    def test_low_doc_freq_term_not_tagged(self):
+        ext = TechTopicExtractor()
+        _feed_corpus(ext, _quantinium_corpus(0, 60))
+        _feed_corpus(ext, [("zorblatt prototype revealed", "zorblatt")])
+        assert ext.extract_tfidf_tags("Zorblatt ships", "zorblatt") == []
+
+    def test_title_terms_weighted_above_summary(self):
+        ext = TechTopicExtractor()
+        docs = [("common filler headline", "common filler body")] * 60
+        docs += [(f"alphafoo progress note {i}", "") for i in range(20)]
+        docs += [(f"betafoo progress note {i}", "") for i in range(20)]
+        _feed_corpus(ext, docs)
+        ranked = ext.extract_tfidf_tags("alphafoo betafoo", "alphafoo alphafoo")
+        assert ranked == ["alphafoo", "betafoo"]
+
+    def test_max_three_tertiary_tags(self):
+        ext = TechTopicExtractor()
+        docs = []
+        for term in ["alphafoo", "betafoo", "gammafoo", "deltafoo"]:
+            docs += [(f"{term} progress note", "")] * 30
+        _feed_corpus(ext, docs)
+        ranked = ext.extract_tfidf_tags(
+            "alphafoo betafoo gammafoo deltafoo",
+            "alphafoo alphafoo alphafoo betafoo betafoo gammafoo",
+        )
+        assert ranked == ["alphafoo", "betafoo", "gammafoo"]
+
+    def test_tertiary_dedups_rule_tags(self):
+        ext = TechTopicExtractor()
+        _feed_corpus(ext, [("humanoid research progress", "humanoid study")] * 60)
+        tags = ext.extract_tags("Humanoid robot advances", "humanoid platform")
+        assert tags == ["robotics", "humanoid"]
+
+    def test_sliding_window_eviction_drops_df(self, monkeypatch):
+        monkeypatch.setattr(categorizer_mod, "TFIDF_WINDOW_SIZE", 10)
+        monkeypatch.setattr(categorizer_mod, "TFIDF_WARMUP_SIZE", 3)
+        ext = TechTopicExtractor()
+        _feed_corpus(ext, [("quantinium research progress", "")] * 10)
+        assert ext._df["quantinium"] == 10
+        assert ext.extract_tfidf_tags("quantinium progress", "quantinium") == ["quantinium"]
+        _feed_corpus(ext, [(f"filler bulletin entry {i}", "unrelated filler content") for i in range(10)])
+        assert "quantinium" not in ext._df
+        assert ext.extract_tfidf_tags("quantinium progress", "quantinium") == []
+
+    def test_extraction_failure_degrades_to_rule_tags(self, monkeypatch):
+        def boom(*args, **kwargs):
+            raise RuntimeError("corpus corrupt")
+
+        ext = TechTopicExtractor()
+        _feed_corpus(ext, [("quantinium research progress", "")] * 60)
+        monkeypatch.setattr(ext, "extract_tfidf_tags", boom)
+        assert ext.extract_tags("Quantinium breakthrough", "quantinium") == ["general"]
+
+        cold = TechTopicExtractor()
+        monkeypatch.setattr(cold, "observe", boom)
+        assert cold.extract_tags("Quantinium breakthrough", "quantinium") == ["general"]
+
+    def test_deterministic_same_corpus_same_output(self):
+        docs = _quantinium_corpus(80, 40)
+        ext1 = TechTopicExtractor()
+        ext2 = TechTopicExtractor()
+        _feed_corpus(ext1, docs)
+        _feed_corpus(ext2, docs)
+        a = ext1.extract_tags("Quantinium rollout schedule", "quantinium")
+        b = ext2.extract_tags("Quantinium rollout schedule", "quantinium")
+        assert a == b
+        assert "quantinium" in a
+
+
 # ── CategorizerProcessor ────────────────────────────────────────
 class TestCategorizerProcessor:
     async def test_process_tech_category(self):
@@ -258,6 +367,39 @@ class TestCategorizerProcessor:
         item = {"title": "Random", "summary": ""}
         result = await c.process(item, source)
         assert result["topic_tags"] == ["other"]
+
+
+# ── CategorizerProcessor with TF-IDF tertiary tags ─────────────
+class TestCategorizerTfidfTags:
+    async def test_process_tech_appends_tertiary_tag(self, monkeypatch):
+        ext = TechTopicExtractor()
+        _feed_corpus(ext, _quantinium_corpus(80, 40))
+        proc = CategorizerProcessor()
+        monkeypatch.setattr(proc, "_topic_extractor", ext)
+        source = _make_source()
+        item = {"title": "Quantinium breakthrough", "summary": "quantinium research"}
+        result = await proc.process(item, source)
+        assert result is not None
+        # Tertiary tag appended after level-1/level-2/other buckets
+        assert result["topic_tags"] == ["tech", "general", "quantinium"]
+
+    async def test_process_rich_rule_match_skips_tfidf(self, monkeypatch):
+        ext = TechTopicExtractor()
+        _feed_corpus(ext, _quantinium_corpus(80, 40))
+        calls: list[int] = []
+        original = ext.extract_tfidf_tags
+        monkeypatch.setattr(
+            ext, "extract_tfidf_tags", lambda title, summary: calls.append(1) or original(title, summary)
+        )
+        proc = CategorizerProcessor()
+        monkeypatch.setattr(proc, "_topic_extractor", ext)
+        source = _make_source()
+        item = {"title": "GPT Claude Gemini quantinium", "summary": ""}
+        result = await proc.process(item, source)
+        assert result is not None
+        assert calls == []
+        assert "quantinium" not in result["topic_tags"]
+        assert result["topic_tags"][:3] == ["tech", "ai", "llm"]
 
 
 # ── DedupProcessor ──────────────────────────────────────────────

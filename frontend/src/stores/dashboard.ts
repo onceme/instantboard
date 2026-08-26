@@ -4,7 +4,7 @@ import type {
   DashboardSystemInfo,
   ServiceHealth,
   DataSourceHealthSummary,
-  SchedulerStatus,
+  SchedulerStatusResponse,
   SSEStats,
   SourceHealthUpdateEvent,
 } from "@/types";
@@ -18,7 +18,7 @@ export const useDashboardStore = defineStore("dashboard", () => {
   const systemInfo = ref<DashboardSystemInfo | null>(null);
   const services = ref<ServiceHealth[]>([]);
   const dataSources = ref<DataSourceHealthSummary | null>(null);
-  const scheduler = ref<SchedulerStatus[]>([]);
+  const scheduler = ref<SchedulerStatusResponse | null>(null);
   const sseStats = ref<SSEStats | null>(null);
   const sseConnection = ref<SSEConnection | null>(null);
   const sseState = ref<SSEConnectionState>(SSEConnectionState.DISCONNECTED);
@@ -44,7 +44,8 @@ export const useDashboardStore = defineStore("dashboard", () => {
   }
 
   async function fetchScheduler() {
-    const response = await apiGet<SchedulerStatus[]>("/dashboard/scheduler");
+    const response =
+      await apiGet<SchedulerStatusResponse>("/dashboard/scheduler");
     scheduler.value = response.data;
   }
 

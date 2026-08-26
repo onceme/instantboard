@@ -353,15 +353,37 @@ export interface DataSourceHealthDetailResponse {
   response_time_trend?: Array<Record<string, unknown>> | null;
 }
 
-export interface SchedulerStatus {
+// GET /api/v1/dashboard/scheduler (admin only) — backend
+// schemas/dashboard.py SchedulerJobInfo. success/failure counters and
+// last_run may be null when the scheduler has no stats for the window.
+export interface SchedulerJobInfo {
   job_id: string;
+  source_id?: string | null;
   name: string;
-  schedule: string;
-  last_run?: string;
-  next_run?: string;
+  schedule?: string | null;
+  original_interval?: number | null;
+  current_interval?: number | null;
+  adaptive_multiplier?: number | null;
+  last_run?: string | null;
+  next_run?: string | null;
   status: "active" | "paused" | "error";
-  success_count_24h: number;
-  failure_count_24h: number;
+  success_count_24h?: number | null;
+  failure_count_24h?: number | null;
+}
+
+// GET /api/v1/dashboard/scheduler — backend SchedulerStatusResponse. In dev
+// (embedded scheduler) the per-job lists are populated and the *_count fields
+// mirror their lengths; in prod the lists are empty (jobs live in the worker
+// container) and counts + last_heartbeat come from the worker heartbeat,
+// written every 15s with a 45s Redis TTL.
+export interface SchedulerStatusResponse {
+  total_jobs: number;
+  running_jobs: SchedulerJobInfo[];
+  paused_jobs: SchedulerJobInfo[];
+  all_jobs: SchedulerJobInfo[];
+  running_jobs_count: number;
+  paused_jobs_count: number;
+  last_heartbeat?: string | null;
 }
 
 export interface SSEStats {

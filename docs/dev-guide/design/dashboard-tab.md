@@ -1,5 +1,5 @@
 ---
-version: 1.3
+version: 1.4
 author: designer
 date: 2026-08-26
 status: draft
@@ -201,6 +201,7 @@ graph LR
       subgraph left["左列"]
         SS["SystemStatus<br/>版本/运行时长/环境/CPU/内存/磁盘"]
         DSH["DataSourcesHealth<br/>数据源健康表格"]
+        SP["SchedulerPanel<br/>调度器任务表 + worker 心跳新鲜度"]
       end
       subgraph right["右列"]
         SVH["ServicesHealth<br/>PG/Redis/Scheduler/SSE 服务卡片"]
@@ -214,7 +215,13 @@ graph LR
 - `/dashboard/services` 返回 4 个服务卡片：**postgresql / redis / scheduler / sse**（scheduler 依据 worker 心跳判定）
 - SSE 统计字段：活跃连接数、累计连接、`average_events_per_minute`、`avg_connection_duration_seconds`、`peak_connections_today`
 
-> ⚠️ **未实现**：`SchedulerPanel` — `/dashboard/scheduler` 端点与 store 的 fetch 存在，但**无前端组件**渲染任务列表。
+> ✅ **已实现**：`SchedulerPanel`（左列，位于 DataSourcesHealth 之后；数据来自 `dashboardStore.scheduler`，`init()` 调 `fetchScheduler`，admin only）：
+> - 头部摘要卡片：总任务数（`total_jobs`）、运行中（`running_jobs_count`）、已暂停（`paused_jobs_count`）——计数取自后端计数字段（生产模式下任务列表为空、计数来自 worker 心跳）
+> - worker 心跳新鲜度：`last_heartbeat` 距今相对时间；与后端心跳 TTL 语义一致（`RedisKeys.WORKER_HEARTBEAT_TTL = 45s`，worker 每 15s 写一次），距今 <45s 显示"心跳正常"，≥45s 或缺失（Key 已过期/从未写入）显示"⚠️ 疑似掉线"
+> - 运行中 / 已暂停 两个页签（各带计数），切换渲染 `running_jobs` / `paused_jobs`
+> - 任务表列：名称、周期（`current_interval`；`adaptive_multiplier ≠ 1` 时显示 原值→现值 删除线/高亮 + ×倍率标注）、上次运行（相对时间）、下次运行（未来相对时间）、状态徽章、24h 成功/失败（缺失显示 "--"，失败数 >0 红色高亮）
+> - 无任务显示 EmptyState；生产模式下计数 >0 但列表为空时提示"任务详情位于 worker 容器"
+> - 前端类型契约同步修正：`types/index.ts` 旧 `SchedulerStatus`（job 级、且误为数组）替换为与后端一致的 `SchedulerJobInfo` + `SchedulerStatusResponse`（对象），`stores/dashboard.ts` 与 `api/dashboard.ts` 同步
 
 #### 3.8.3 图表渲染优化
 

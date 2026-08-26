@@ -5,6 +5,7 @@ import HealthPanel from "@/components/dashboard/HealthPanel.vue";
 import SystemStatus from "@/components/dashboard/SystemStatus.vue";
 import ServicesHealth from "@/components/dashboard/ServicesHealth.vue";
 import DataSourcesHealth from "@/components/dashboard/DataSourcesHealth.vue";
+import SchedulerPanel from "@/components/dashboard/SchedulerPanel.vue";
 import SSEStats from "@/components/dashboard/SSEStats.vue";
 
 const dashboardStore = useDashboardStore();
@@ -26,6 +27,7 @@ onUnmounted(() => {
       <div class="grid-left">
         <SystemStatus />
         <DataSourcesHealth />
+        <SchedulerPanel />
       </div>
       <div class="grid-right">
         <ServicesHealth />

@@ -4,7 +4,7 @@ import type {
   ServiceHealth,
   DataSourceHealthSummary,
   DataSourceHealthDetailResponse,
-  SchedulerStatus,
+  SchedulerStatusResponse,
   SSEStats,
 } from "@/types";
 
@@ -16,6 +16,6 @@ export const dashboardApi = {
     apiGet<DataSourceHealthDetailResponse>(
       `/dashboard/data-sources/${sourceId}`,
     ),
-  scheduler: () => apiGet<SchedulerStatus[]>("/dashboard/scheduler"),
+  scheduler: () => apiGet<SchedulerStatusResponse>("/dashboard/scheduler"),
   sseStats: () => apiGet<SSEStats>("/dashboard/sse-stats"),
 };

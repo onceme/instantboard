@@ -5,6 +5,7 @@ import { ref, computed } from "vue";
 import type { SearchResult } from "@/types";
 import { Search } from "lucide-vue-next";
 import QuoteCard from "./QuoteCard.vue";
+import DetailDrawer from "./DetailDrawer.vue";
 
 const financeStore = useFinanceStore();
 const searchQuery = ref("");
@@ -13,6 +14,11 @@ const selectedQuote = computed(() => {
   if (!selectedSymbol.value) return null;
   return financeStore.quotesCache.get(selectedSymbol.value) || null;
 });
+
+// Drawer state lives in this component (its only opener) rather than the
+// store: the drawer is local to the Search panel experience.
+const drawerSymbol = ref("");
+const drawerVisible = ref(false);
 
 let timer: ReturnType<typeof setTimeout> | null = null;
 
@@ -23,9 +29,15 @@ function onInput() {
   }, 300);
 }
 
+// UX choice: selecting a result opens DetailDrawer as the primary detail
+// experience (sparkline + watchlist action, finance-tab.md §3.1). The inline
+// QuoteCard below is kept as a lightweight quick preview so the panel is not
+// empty after the drawer closes.
 function selectResult(result: SearchResult) {
   selectedSymbol.value = result.symbol;
   financeStore.getQuote(result.symbol);
+  drawerSymbol.value = result.symbol;
+  drawerVisible.value = true;
   searchQuery.value = "";
   financeStore.searchSymbols("");
 }
@@ -93,6 +105,8 @@ function changeClass(changePercent?: number): string {
     <div v-if="!searchQuery.trim() && !selectedSymbol" class="search-empty">
       输入关键词搜索股票、基金或指数
     </div>
+
+    <DetailDrawer v-model:visible="drawerVisible" :symbol="drawerSymbol" />
   </div>
 </template>
 

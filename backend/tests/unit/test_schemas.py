@@ -607,6 +607,24 @@ class TestFinanceQuoteResponse:
         assert r.week_low_52 is None
         assert r.timestamp is None
         assert r.source is None
+        assert r.history == []
+
+    def test_history_defaults_empty_and_parses_points(self):
+        assert FinanceQuoteResponse(symbol="X", name="X").history == []
+
+        r = FinanceQuoteResponse(
+            symbol="AAPL",
+            name="Apple",
+            history=[
+                {"time": "2026-08-20T20:00:00Z", "close": 148.1},
+                {"time": "2026-08-21T20:00:00Z", "close": 150.25},
+            ],
+        )
+        assert [p.close for p in r.history] == [148.1, 150.25]
+        assert [p.time.isoformat() for p in r.history] == [
+            "2026-08-20T20:00:00+00:00",
+            "2026-08-21T20:00:00+00:00",
+        ]
 
 
 class TestMarketIndexResponse:

@@ -55,10 +55,17 @@ frontend/src/
 │   │   │                   #   科技搜索结果与 DataSourcesHealth 消费
 │   │   ├── ConfirmationDialog.vue  # CategoryEditor「重新分类」确认消费
 │   │   └── MessageCard.vue # 已实现暂无消费方（CategoryView 明确选用 NewsCard）
-│   ├── finance/            # 实际 13 个:
+│   ├── finance/            # 实际 14 个:
 │   │   ├── Watchlist.vue / WatchlistMini.vue / SearchSymbols.vue
 │   │   ├── Commodities.vue / MarketIndices.vue / FundNAV.vue
 │   │   ├── QuoteCard.vue / FinanceGrid.vue / FinanceSubNav.vue
+│   │   ├── DetailDrawer.vue  # 行情详情右侧滑出抽屉（SearchSymbols 选中结果
+│   │   │                   #   打开）: 现价/涨跌幅(涨跌配色)、开/高/低/昨收、
+│   │   │                   #   市值/市盈率(有则显示)、近5日收盘 SVG sparkline
+│   │   │                   #   (quote.history, <2点占位)、加入自选(成功/409已存在
+│   │   │                   #   →「已在自选中」禁用、失败行内提示)；价格绑定
+│   │   │                   #   quotesCache[symbol], SSE quote_update 随推自动刷新
+│   │   │                   #   (见 finance-tab.md §3.1)
 │   │   ├── MarketTicker.vue  # 顶部行情滚动条（FinanceView 最上方）: 全部指数
 │   │   │                   #   名称/点位/涨跌幅% 窄条; 纯 CSS 无缝循环(内容复制
 │   │   │                   #   + translateX -50%, 时长=条目数×6s, hover 暂停,
@@ -73,8 +80,9 @@ frontend/src/
 │   │   │                   #   (GET /categories/{id}/items sort=time&page_size=5,
 │   │   │                   #   纯时间排序无个性化; 加载骨架、失败行内重试、
 │   │   │                   #   无条目整面板不渲染)
-│   │   # ⚠️ 未实现: WatchlistPanel / StockDetail / FundDetail /
-│   │   #   NAVCalculator / MarketIndexCard / CommodityCard / FinanceSearch / QuoteChart
+│   │   # ⚠️ 未实现: WatchlistPanel / NAVCalculator / MarketIndexCard /
+│   │   #   CommodityCard / FinanceSearch（原 StockDetail/FundDetail 抽屉与
+│   │   #   QuoteChart sparkline 职责由 DetailDrawer + 内联 SVG 折线承接）
  │   ├── tech/               # TopicFilter.vue / NewsFeed.vue / NewsCard.vue / TopicTag.vue /
  │   │   │                   # CategoryPanel.vue / TechSubNav.vue（补充）/
  │   │   │                   # HotTopics.vue（/tech/topics 结果 top 12 热门标签，count 徽标，
@@ -107,7 +115,7 @@ frontend/src/
     └── global.css          # 全局样式（纯 CSS，无 .scss；sass 依赖未使用）
 ```
 
-> ⚠️ **未实现组件集中标注**：StockDetail/FundDetail 模态抽屉、QuoteChart sparkline、TrendChart（话题热度）、AppFooter。公共组件 MessageCard/SearchBar/Pagination/ConfirmationDialog 已实现（SearchBar → TechView 科技搜索、Pagination → TechView 搜索结果 + DataSourcesHealth、ConfirmationDialog → CategoryEditor；MessageCard 暂无消费方）。右栏"财经要闻"已由 FinanceNewsPanel 实现（见 [finance-tab.md](finance-tab.md) §3.6.2）；Overview 混合视图（自选摘要 + 市场指数 + 财经要闻三段式）已由 FinanceOverview/OverviewWatchlistSummary 实现（见 [finance-tab.md](finance-tab.md) §3.6.2）；财经顶部行情滚动条已由 MarketTicker 实现（见 [finance-tab.md](finance-tab.md) §3.4.3）。
+> ⚠️ **未实现组件集中标注**：TrendChart（话题热度）、AppFooter。公共组件 MessageCard/SearchBar/Pagination/ConfirmationDialog 已实现（SearchBar → TechView 科技搜索、Pagination → TechView 搜索结果 + DataSourcesHealth、ConfirmationDialog → CategoryEditor；MessageCard 暂无消费方）。右栏"财经要闻"已由 FinanceNewsPanel 实现（见 [finance-tab.md](finance-tab.md) §3.6.2）；Overview 混合视图（自选摘要 + 市场指数 + 财经要闻三段式）已由 FinanceOverview/OverviewWatchlistSummary 实现（见 [finance-tab.md](finance-tab.md) §3.6.2）；财经顶部行情滚动条已由 MarketTicker 实现（见 [finance-tab.md](finance-tab.md) §3.4.3）；行情详情抽屉已由 DetailDrawer 实现（SearchSymbols 选中打开、内联 SVG 近 5 日 sparkline、加入自选、SSE 联动，见 [finance-tab.md](finance-tab.md) §3.1），原设计的独立 StockDetail/FundDetail 模态与 QuoteChart 组件不再单独实现。
 
 ### 3.2 组件层级设计（现状要点）
 
@@ -144,7 +152,7 @@ graph TD
 
 各视图布局摘要:
 
-- **FinanceView**: MarketTicker（顶部行情滚动条，全部指数名称/点位/涨跌幅% 无缝横向滚动、点击切 Indices 子面板，见 [finance-tab.md](finance-tab.md) §3.4.3）+ FinanceSubNav + FinanceGrid；右栏（≥1440px）WatchlistMini + FundNAV + FinanceNewsPanel（财经要闻，见 [finance-tab.md](finance-tab.md) §3.6.2）；Overview 面板为三段式混合视图 FinanceOverview（自选摘要 top 5 + MarketIndices + FinanceNewsPanel；空自选不渲染摘要段，激活时 ensureWatchlist() 会话级加载自选+行情，见 [finance-tab.md](finance-tab.md) §3.6.2）
+- **FinanceView**: MarketTicker（顶部行情滚动条，全部指数名称/点位/涨跌幅% 无缝横向滚动、点击切 Indices 子面板，见 [finance-tab.md](finance-tab.md) §3.4.3）+ FinanceSubNav + FinanceGrid；右栏（≥1440px）WatchlistMini + FundNAV + FinanceNewsPanel（财经要闻，见 [finance-tab.md](finance-tab.md) §3.6.2）；Overview 面板为三段式混合视图 FinanceOverview（自选摘要 top 5 + MarketIndices + FinanceNewsPanel；空自选不渲染摘要段，激活时 ensureWatchlist() 会话级加载自选+行情，见 [finance-tab.md](finance-tab.md) §3.6.2）；Search 面板选中结果打开行情详情抽屉 DetailDrawer（近 5 日 sparkline + 加入自选 + SSE 联动，见 [finance-tab.md](finance-tab.md) §3.1）
 - **TechView**: TechSubNav + **SearchBar（通用搜索框，TopicFilter 上方，300ms 防抖）** + TopicFilter + HotTopics（热门标签 top 12，点击 → `/tech/news?tag=` 过滤）+ CategoryPanel×4 / NewsFeed 双视图（见 [tech-tab.md](tech-tab.md)）；搜索激活时内容区切换为 `GET /tech/search` 分页结果（`common/Pagination`，头部「搜索 “q” · N 条结果」+ 清除，SSE 不注入搜索结果；清除/空查询复原双视图），见 [tech-tab.md](tech-tab.md) §3.7；其中 NewsCard 支持三级标签手动标注——标签行"+"内联输入框打标、标签上"×"移除（乐观移除失败回滚，见 [content-categories.md](content-categories.md) §3.6.1）——并在 `image_url` 非空时渲染缩略图（桌面 96×72、移动端 64×48，`loading="lazy"`，加载失败 `@error` 后隐藏；见 [tech-tab.md](tech-tab.md) §3.3.3）
 - **CategoryView**: /c/:slug 自定义分类通用信息流 — 按 slug 解析自定义分类（未命中显示 EmptyState），GET /categories/{id}/items 分页拉取（useInfiniteScroll 无限滚动，复用 NewsCard）；加载/错误/重试与 FinanceView 模式一致（见 [content-categories.md](content-categories.md) §3.3.1 Step 6）
 - **DashboardView**: HealthPanel + 双列 flex（左 SystemStatus/DataSourcesHealth，右 ServicesHealth/SSEStats）（见 [dashboard-tab.md](dashboard-tab.md)）
@@ -226,7 +234,7 @@ graph LR
 - 主内容区: FinanceSubNav (子面板切换) + FinanceGrid 动态内容
 - Overview 子面板: 三段式混合视图 — 自选摘要（top 5，空自选不渲染）+ MarketIndices + FinanceNewsPanel（`FinanceOverview.vue`，见 [finance-tab.md](finance-tab.md) §3.6.2）
 - 右侧面板 (≥1440px): WatchlistMini + FundNAV + FinanceNewsPanel（财经要闻）
-- 搜索交互: 内联 QuoteCard（无抽屉/模态）
+- 搜索交互: 选中结果打开 DetailDrawer 行情详情抽屉（近 5 日 sparkline、加入自选、SSE 联动），内联 QuoteCard 保留为快速预览（见 [finance-tab.md](finance-tab.md) §3.1）
 
 ### 3.6 Tab2 科技界面详细设计
 

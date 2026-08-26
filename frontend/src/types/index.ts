@@ -84,6 +84,13 @@ export interface SSOProvider {
 }
 
 // Finance types
+// Daily close series point for the detail-drawer sparkline (backend
+// QuoteHistoryPoint); empty/absent when the source provides no chart history.
+export interface QuoteHistoryPoint {
+  time: string;
+  close: number;
+}
+
 export interface FinanceQuote {
   symbol: string;
   name: string;
@@ -105,6 +112,7 @@ export interface FinanceQuote {
   type?: "stock" | "fund" | "index" | "commodity";
   market?: string;
   exchange?: string;
+  history?: QuoteHistoryPoint[];
 }
 
 export interface MarketIndex {

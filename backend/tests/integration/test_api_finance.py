@@ -141,6 +141,40 @@ class TestFinanceQuote:
         assert resp.status_code == 200
         assert resp.json()["data"]["close_previous"] == 398.0
 
+    def test_quote_with_history(self, client, mock_finance_svc):
+        mock_finance_svc.get_quote.return_value = {
+            "symbol": "AAPL",
+            "name": "Apple Inc",
+            "current_price": 180.0,
+            "timestamp": NOW,
+            "history": [
+                {"time": "2026-08-20T20:00:00Z", "close": 178.5},
+                {"time": "2026-08-21T20:00:00Z", "close": 180.0},
+            ],
+        }
+
+        resp = client.get("/api/v1/finance/quote/AAPL", headers=_headers())
+        assert resp.status_code == 200
+        history = resp.json()["data"]["history"]
+        assert history == [
+            {"time": "2026-08-20T20:00:00Z", "close": 178.5},
+            {"time": "2026-08-21T20:00:00Z", "close": 180.0},
+        ]
+
+    def test_quote_without_history_defaults_empty(self, client, mock_finance_svc):
+        # Sources without chart data (alpha_vantage/finnhub failover) must
+        # degrade to an empty series, never a missing key or an error.
+        mock_finance_svc.get_quote.return_value = {
+            "symbol": "MSFT",
+            "name": "Microsoft",
+            "current_price": 400.0,
+            "timestamp": NOW,
+        }
+
+        resp = client.get("/api/v1/finance/quote/MSFT", headers=_headers())
+        assert resp.status_code == 200
+        assert resp.json()["data"]["history"] == []
+
 
 class TestMarketIndices:
     def test_indices_success(self, client, mock_finance_svc):

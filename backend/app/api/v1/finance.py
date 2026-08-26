@@ -78,6 +78,7 @@ async def get_quote(
         week_low_52=week_low_52,
         timestamp=quote.get("timestamp"),
         source=quote.get("source"),
+        history=quote.get("history") or [],
     )
 
     return SuccessResponse(data=data)
@@ -291,6 +292,7 @@ async def get_watchlist_quotes(
                 week_low_52=week_low_52,
                 timestamp=q.get("timestamp"),
                 source=q.get("source"),
+                history=q.get("history") or [],
             )
         )
 

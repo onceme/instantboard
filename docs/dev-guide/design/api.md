@@ -540,9 +540,16 @@ Response 200:
       "week_high_52": 199.62,
       "week_low_52": 124.17,
       "timestamp": "2026-06-23T10:00:00Z",
-      "source": "Yahoo Finance"
+      "source": "Yahoo Finance",
+      "history": [
+        { "time": "2026-06-19T20:00:00Z", "close": 176.8 },
+        { "time": "2026-06-22T20:00:00Z", "close": 178.52 }
+      ]
     }
   }
+
+# history: 近 5 日日线收盘序列 [{time, close}], 供详情抽屉 sparkline;
+#   仅 yfinance chart 源提供, 其余源/缺数据时为 [] (见 finance-tab.md §3.1)
 
 Response 404: { "success": false, "error": { "code": "SYMBOL_NOT_FOUND" } }
 ```

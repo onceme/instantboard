@@ -61,8 +61,13 @@ class YFinanceCollector(BaseCollector):
                 if not result:
                     return None
 
-                meta = result[0].get("meta", {})
-                return self._parse_meta(symbol, meta)
+                chart_result = result[0]
+                quote = self._parse_meta(symbol, chart_result.get("meta", {}))
+                # The chart API already returns the 5d daily series alongside
+                # meta; expose it as history for the detail-drawer sparkline
+                # (finance-tab.md §3.1). Missing/short series degrade to [].
+                quote["history"] = self._parse_history(chart_result)
+                return quote
             except httpx.TimeoutException:
                 logger.warning(f"yfinance timeout for {symbol}")
                 return None
@@ -91,6 +96,30 @@ class YFinanceCollector(BaseCollector):
             "market_status": meta.get("currentTradingPeriod", {}).get("regular", {}).get("marketState", "unknown"),
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
+
+    def _parse_history(self, chart_result: dict) -> list[dict]:
+        """Daily close series [{time, close}] from a chart-API result entry.
+
+        Yahoo returns null closes for holidays inside the range; those points
+        are dropped. Any missing/empty series yields [] (never raises).
+        """
+        timestamps = chart_result.get("timestamp") or []
+        indicator_quotes = (chart_result.get("indicators") or {}).get("quote") or []
+        closes = (indicator_quotes[0] or {}).get("close") or [] if indicator_quotes else []
+
+        history = []
+        # strict=False on purpose: Yahoo occasionally returns mismatched
+        # timestamp/close lengths; pair what exists instead of raising.
+        for ts, close in zip(timestamps, closes):  # noqa: B905
+            if ts is None or close is None:
+                continue
+            history.append(
+                {
+                    "time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts)),
+                    "close": round(close, 2),
+                }
+            )
+        return history
 
     def _determine_type(self, symbol: str) -> str:
         if symbol.startswith("^"):

@@ -485,6 +485,53 @@ class TestYFinanceCollector:
         assert result["change"] == 0
         assert result["change_percent"] == 0
 
+    async def test_fetch_data_includes_history_from_chart_series(self):
+        c = YFinanceCollector()
+        source = _make_source(config={"symbols": ["AAPL"]})
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "chart": {
+                "result": [
+                    {
+                        "meta": {"regularMarketPrice": 150, "chartPreviousClose": 148, "shortName": "Apple"},
+                        "timestamp": [1755734400, 1755820800, 1755907200],
+                        "indicators": {"quote": [{"close": [148.1, None, 150.25]}]},
+                    }
+                ]
+            }
+        }
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            result = await c.fetch_data(source)
+
+        assert result[0]["history"] == [
+            {"time": "2025-08-21T00:00:00Z", "close": 148.1},
+            # null close (holiday inside range) is dropped, not kept as 0/None
+            {"time": "2025-08-23T00:00:00Z", "close": 150.25},
+        ]
+
+    async def test_parse_history_empty_and_missing_series(self):
+        c = YFinanceCollector()
+        assert c._parse_history({}) == []
+        assert c._parse_history({"timestamp": [], "indicators": {"quote": [{"close": []}]}}) == []
+        assert c._parse_history({"timestamp": [1755734400]}) == []
+        assert c._parse_history({"timestamp": [1755734400], "indicators": {"quote": [None]}}) == []
+
+    async def test_parse_history_truncates_to_shorter_array(self):
+        c = YFinanceCollector()
+        # mismatched lengths (more timestamps than closes) must not raise
+        history = c._parse_history(
+            {
+                "timestamp": [1755734400, 1755820800],
+                "indicators": {"quote": [{"close": [148.5]}]},
+            }
+        )
+        assert history == [{"time": "2025-08-21T00:00:00Z", "close": 148.5}]
+
 
 # ── AlphaVantageCollector ────────────────────────────────────────
 class TestAlphaVantageCollector:

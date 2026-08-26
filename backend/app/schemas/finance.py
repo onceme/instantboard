@@ -14,6 +14,11 @@ class FinanceSearchResult(BaseModel):
     currency: str
 
 
+class QuoteHistoryPoint(BaseModel):
+    time: datetime
+    close: float
+
+
 class FinanceQuoteResponse(BaseModel):
     symbol: str
     name: str
@@ -31,6 +36,9 @@ class FinanceQuoteResponse(BaseModel):
     week_low_52: float | None = Field(default=None, validation_alias="52_week_low")
     timestamp: datetime | None = None
     source: str | None = None
+    # 5d daily closes for the detail-drawer sparkline (finance-tab.md §3.1);
+    # empty when the source collector does not provide chart history.
+    history: list[QuoteHistoryPoint] = Field(default_factory=list)
 
     model_config = {"populate_by_name": True}
 

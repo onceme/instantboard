@@ -1,5 +1,5 @@
 ---
-version: 1.5
+version: 1.6
 author: designer
 date: 2026-08-26
 status: draft
@@ -36,10 +36,18 @@ sequenceDiagram
     API-->>ST: 返回搜索结果列表 (分页)
     U->>SB: 点击结果
     SB->>API: GET /api/v1/finance/quote/{symbol}
-    SB->>SB: 内联渲染 QuoteCard (行情摘要)
+    SB->>SB: 打开 DetailDrawer 抽屉 + 内联 QuoteCard (快速预览)
+    Note over SB: 抽屉内现价随 SSE quote_update 自动刷新 (见下)
 ```
 
-> ⚠️ **未实现**：原设计的 DetailDrawer 右侧滑出抽屉（Sparkline 5日/1月/3月/1年多周期图、"加入自选/关注NAV估值"按钮、SSE 实时联动）不存在；选中搜索结果后仅在 SearchSymbols.vue 内联展示一张 QuoteCard，不打开抽屉。
+> ✅ **已实现**：DetailDrawer 右侧滑出抽屉（`DetailDrawer.vue`，SearchSymbols 选中搜索结果后打开，抽屉开合状态放在 SearchSymbols 组件内）：
+> - **内容**：代码/名称、现价与涨跌幅（跟随 `--up-color`/`--down-color` 涨跌配色）、当日区间（今开/最高/最低/昨收）、市值/市盈率（有值才渲染）
+> - **近 5 日 Sparkline**：纯 SVG polyline（未复用 dashboard 的 Chart.js ChartWrapper，注释说明：无额外依赖、侵入最小），数据为 quote 响应的 `history` 字段（`[{time, close}]` 日线收盘序列，见下方响应字段）；不足 2 点显示占位文案、不报错
+> - **加入自选**：调 `financeStore.addToWatchlist(symbol)`（后端接受 `{symbol}` 文本入参）；成功后切换「已在自选中」禁用态，后端 409（重复添加）同样转为禁用态，失败行内提示错误信息
+> - **SSE 联动**：抽屉打开期间现价/涨跌幅绑定 `financeStore.quotesCache[symbol]`；store 的 `quote_update` 处理器（`updateQuoteFromSSE`）按 symbol 合并推送，无需额外订阅即自动刷新
+> - **刷新时机**：每次打开（含打开中切换代码）都重新 `getQuote`；拉取期间保留旧缓存内容、不闪空；拉取失败行内提示
+>
+> 口径收窄：sparkline 仅近 5 日日线一档，多周期切换（1月/3月/1年）未实现；「关注NAV估值」按钮仍不实现（NAV 估值管道缺失，见 §3.3）。
 
 **搜索逻辑 (后端, `services/finance.py`)**:
 ```python
@@ -59,7 +67,7 @@ async def search_symbols(tenant_id, q, type, market, page, page_size):
 
 **前端错误态**: `financeStore` 维护逐面板错误状态（`marketIndicesError`/`commoditiesError`/`watchlistError`），后端 5xx/503 时对应面板以 ErrorAlert 展示并支持重试，不静默失败。
 
-**quote 响应字段**（`FinanceQuoteResponse`）: symbol、name、current_price、open、high、low、close_previous、volume、change、change_percent、market_cap、pe_ratio、week_high_52、week_low_52、timestamp、source。
+**quote 响应字段**（`FinanceQuoteResponse`）: symbol、name、current_price、open、high、low、close_previous、volume、change、change_percent、market_cap、pe_ratio、week_high_52、week_low_52、timestamp、source、**history**（`[{time, close}]` 近 5 日日线收盘序列，供详情抽屉 sparkline；仅 `YFinanceCollector` 的 chart 数据提供——其本就请求 `range=5d` 日级序列、节假日空收盘点丢弃，其余源缺数据时为空数组、不报错）。
 
 ### 3.2 自选关注列表 (Watchlist) 功能详细设计
 

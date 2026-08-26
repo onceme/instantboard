@@ -80,13 +80,19 @@ async def search_symbols(tenant_id, q, type, market, page, page_size):
 3. 添加到自选: POST /api/v1/finance/watchlist
 4. 重新排序: PUT /api/v1/finance/watchlist/reorder
 5. 删除: DELETE /api/v1/finance/watchlist/{item_id}
+6. 涨跌提醒阈值: PATCH /api/v1/finance/watchlist/{item_id} (见下方已实现说明)
 ```
 
 > ⚠️ **已知 bug**：「加入自选」链路当前损坏 — 前端 `financeStore.addToWatchlist` 发送 `{symbol}`（stores/finance.ts），而后端 `WatchlistItemCreate` 必填 `symbol_id`（UUID，schemas/finance.py），请求必然 422；且目前没有任何组件调用该 action，界面上不存在可见的"加入自选"入口。
 
 > ⚠️ **未实现/契约不匹配**：拖拽排序 — `reorderWatchlist` store action 存在但无任何组件调用；且前端 payload `{item_ids: string[]}` 与后端 `WatchlistReorderRequest`（`{items: [{item_id, display_order}]}`）不匹配，即使调用也会 422。
 
-> ⚠️ **半成品**：涨跌提醒 — 仅 `watchlist_items.alert_threshold_percent` 字段存在；后端无阈值检测逻辑、无 `alert_update` SSE 事件（`SSEEventType` 枚举中不存在，仅前端 `types/` 残留 `ALERT_UPDATE`）、无桌面 Notification。
+> ✅ **已实现**：自选涨跌提醒（`services/finance.py`，`SSEEventType` 现有 10 种事件）——
+> - **阈值设置**：`PATCH /api/v1/finance/watchlist/{item_id}`，body `{alert_threshold_percent: float | null}`；范围 **[0.5, 50]**（超出 → 400 `VALIDATION_ERROR`，服务层校验而非 Pydantic 422）；**null = 关闭提醒**；条目不存在**或非当前用户所有** → 404（两者不可区分，防探测）。更新 `watchlist_items.alert_threshold_percent` 并失效自选缓存。前端入口为 Watchlist 每行铃铛图标的内联编辑器（清空输入即关闭）
+> - **检测与触发**：**挂在自选行情链路**，无定时扫描全市场——`FinanceService.get_watchlist_quotes` 每条行情解析后检查：设置了阈值且 `abs(change_percent) >= threshold` 时，以 `SET NX EX 3600` 原子抢占冷却键 `finance:alert_fired:{tenant_id}:{item_id}`；**1 小时冷却窗口**内同条目不重复触发；**Redis 不可用 → 静默跳过检测**（不报错、不告警，行情返回不受影响）
+> - **推送**：触发后向 `channel:finance` 推送 `alert_update`（**单对象**），载荷 `{symbol, name, price, change_percent, threshold_percent, direction: "up"|"down", triggered_at}`
+> - **前端**：`financeStore.alerts` 保留**最近 5 条**（最新在前）；`AlertToast.vue` 在 FinanceView 内渲染最新一条为右下浮动提示（方向箭头 ▲/▼ + 代码 + 涨跌幅 + 阈值，`change-up`/`change-down` 涨跌配色，**8 秒自动消失**、新告警重置计时）；页面隐藏（`document.visibilityState === "hidden"`）且浏览器**已授予** Notification 权限时镜像发送浏览器通知——**不主动索要权限**（无 `requestPermission()` 调用）
+> - **口径**：不做「定时扫描全市场」类告警（无后台任务，仅用户自选行情请求时检测）；无声音/震动/通知中心聚合等富通知形态
 
 **Watchlist UI 组件（现状）**:
 
@@ -399,11 +405,12 @@ graph TD
 | `market_index_update` | **整个指数数组** `[{symbol, name, value, change, change_percent, market_status, market_status_reason, holiday_name, region, timestamp}, ...]`（`market_status_reason` 为闭市原因 `weekend`/`holiday`/`off_hours`，开市为 `null`；`holiday_name` 为节日名称，非节假日为 `null`） | 定时刷新任务 `market_indices_refresh`（30s、开市门控、载荷未变时跳过推送）+ `get_market_indices` 缓存未命中拉取完成后随路推送 | 注意是数组 |
 | `commodity_update` | **整个商品数组** `[{symbol, name, value, change, change_percent, unit, timestamp}, ...]` | 定时刷新任务 `commodities_refresh`（60s、开市门控、载荷未变时跳过推送）+ `get_commodities` 缓存未命中拉取完成后随路推送 | 注意是数组 |
 | `nav_estimate_update` | `{symbol, name, nav_official, nav_estimate, nav_estimate_deviation_percent, estimate_method, timestamp}` | `get_fund_nav` 请求时随路推送 | |
+| `alert_update` | `{symbol, name, price, change_percent, threshold_percent, direction: "up"\|"down", triggered_at}` **单对象** | 自选行情链路（`get_watchlist_quotes`）：设置阈值的条目 `abs(change_percent) >= 阈值` 且 1h 冷却未触发 | 涨跌提醒，见 §3.2；`finance:alert_fired:{tenant_id}:{item_id}` SET NX EX 3600 冷却，Redis 不可用静默跳过 |
 | `heartbeat` | `{timestamp}` | 保持连接 | 30s |
 
 > ⚠️ **已知契约冲突（待修复）**：后端 `market_index_update` / `commodity_update` 每次推送**整个数组**（`services/finance.py` push_event 直接传 `formatted` 列表），但前端 `stores/finance.ts` 的 `updateMarketIndexFromSSE` / `updateCommodityFromSSE` 按**单对象**消费（读 `data.symbol`），数组 payload 无法落位——这两个事件实际不生效。需统一为数组契约（前端整体替换）或后端改为逐条推送。
 
-> ⚠️ **未实现**：`alert_update` — 后端 `SSEEventType` 枚举（共 9 种事件）中不存在，仅前端类型定义残留。
+> ✅ **已实现**：`alert_update` — 后端 `SSEEventType` 枚举现为 **10 种事件**；检测挂在自选行情链路（`get_watchlist_quotes`，同条目 1 小时冷却、无全市场定时扫描），前端以浮动 toast + 页面隐藏时的浏览器通知呈现（详见 §3.2）。
 
 详见 [api.md](api.md) SSE 端点定义。
 

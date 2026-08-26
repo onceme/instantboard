@@ -178,6 +178,19 @@ export interface WatchlistQuote {
   timestamp: string;
 }
 
+// SSE payload of "alert_update" (finance channel): fired by the backend when a
+// watchlist entry breaches its configured threshold (1h cooldown per item,
+// finance-tab.md §3.2). Built by FinanceService._check_alert_threshold.
+export interface FinanceAlert {
+  symbol: string;
+  name?: string | null;
+  price: number | null;
+  change_percent: number;
+  threshold_percent: number;
+  direction: "up" | "down";
+  triggered_at: string;
+}
+
 export interface SearchResult {
   symbol: string;
   name: string;

@@ -10,6 +10,7 @@ from app.schemas.finance import (
     FinanceSearchResult,
     FundNAVResponse,
     MarketIndexResponse,
+    WatchlistItemAlertUpdate,
     WatchlistItemCreate,
     WatchlistItemResponse,
     WatchlistReorderRequest,
@@ -224,6 +225,25 @@ async def add_to_watchlist(
         tenant_id=tenant_id,
         user_id=user_id,
         data=request.model_dump(),
+    )
+    data = WatchlistItemResponse(**item)
+    return SuccessResponse(data=data)
+
+
+@router.patch("/watchlist/{item_id}", response_model=SuccessResponse[WatchlistItemResponse])
+async def update_watchlist_item(
+    item_id: str,
+    request: WatchlistItemAlertUpdate,
+    service: FinanceService = Depends(_get_finance_service),
+    user: dict = Depends(get_current_user),
+    tenant_id: str = Depends(get_current_tenant),
+):
+    user_id = user.get("user_id")
+    item = await service.update_watchlist_alert_threshold(
+        tenant_id=tenant_id,
+        user_id=user_id,
+        item_id=item_id,
+        alert_threshold_percent=request.alert_threshold_percent,
     )
     data = WatchlistItemResponse(**item)
     return SuccessResponse(data=data)

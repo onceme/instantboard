@@ -395,7 +395,7 @@ graph TD
 | `channel:admin` | **无** | SSEEventRouter | 已被订阅但当前无任何发布者（保留备用） |
 | `channel:all` | — | SSEEventRouter（all 聚合） | 各频道消息向 `all` 订阅者二次投递 |
 
-> ⚠️ **未实现**：`db_metric_update` / `business_metric_update` / `alert_update` 无后端发布者——后端 `SSEEventType`（`core/sse_router.py`）共 9 种（item_update / quote_update / market_index_update / nav_estimate_update / commodity_update / system_metric_update / source_health_update / topic_stats_update / heartbeat），上述事件名仅存在于前端枚举死代码（`frontend/src/utils/sse.ts`）。亦不存在 `source_updated` 事件。（`topic_stats_update` 已实现：科技条目入库触发 + 900s 窗口节流，见 tech-tab.md §3.8）
+> ⚠️ **未实现**：`db_metric_update` / `business_metric_update` 无后端发布者——后端 `SSEEventType`（`core/sse_router.py`）共 10 种（item_update / quote_update / market_index_update / nav_estimate_update / commodity_update / alert_update / system_metric_update / source_health_update / topic_stats_update / heartbeat），这两个事件名仅存在于前端枚举死代码（`frontend/src/utils/sse.ts`）。亦不存在 `source_updated` 事件。（`alert_update` 已实现：自选行情链路检测 + 1h 冷却，见 finance-tab.md §3.2；`topic_stats_update` 已实现：科技条目入库触发 + 900s 窗口节流，见 tech-tab.md §3.8）
 
 #### 3.5.2 消息格式
 

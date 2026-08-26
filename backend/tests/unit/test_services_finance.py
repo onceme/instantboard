@@ -80,6 +80,23 @@ def _make_watchlist_item(
     return item
 
 
+def _item_then_symbol_execute(item, symbol):
+    """db.execute side effect: 1st call returns the watchlist item, 2nd the symbol."""
+    call_count = 0
+
+    async def execute_side_effect(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        mock_r = MagicMock()
+        if call_count == 1:
+            mock_r.scalar_one_or_none.return_value = item
+        elif call_count == 2:
+            mock_r.scalar_one_or_none.return_value = symbol
+        return mock_r
+
+    return execute_side_effect
+
+
 class TestSearchSymbols:
     @patch("app.services.finance.redis_get", new_callable=AsyncMock)
     @patch("app.services.finance.redis_set", new_callable=AsyncMock)
@@ -754,6 +771,274 @@ class TestGetWatchlistQuotes:
             service = FinanceService(db, redis)
             result = await service.get_watchlist_quotes("tenant-1", "user-1")
             assert len(result) == 0
+
+
+class TestUpdateWatchlistAlertThreshold:
+    async def test_threshold_below_min_rejected(self):
+        db, _ = _mock_db()
+        service = FinanceService(db, _mock_redis())
+
+        with pytest.raises(ValidationError, match="alert_threshold_percent"):
+            await service.update_watchlist_alert_threshold("tenant-1", "user-1", "wi-1", 0.4)
+        # Validation runs before any DB access
+        db.execute.assert_not_called()
+
+    async def test_threshold_above_max_rejected(self):
+        db, _ = _mock_db()
+        service = FinanceService(db, _mock_redis())
+
+        with pytest.raises(ValidationError, match="alert_threshold_percent"):
+            await service.update_watchlist_alert_threshold("tenant-1", "user-1", "wi-1", 50.1)
+        db.execute.assert_not_called()
+
+    @patch("app.services.finance.redis_delete", new_callable=AsyncMock)
+    async def test_threshold_boundaries_accepted(self, mock_redis_del):
+        for boundary in (0.5, 50.0):
+            db, _ = _mock_db()
+            item = _make_watchlist_item()
+            sym = _make_finance_symbol()
+            db.execute = _item_then_symbol_execute(item, sym)
+
+            service = FinanceService(db, _mock_redis())
+            result = await service.update_watchlist_alert_threshold("tenant-1", "user-1", str(item.id), boundary)
+            assert item.alert_threshold_percent == boundary
+            assert result["alert_threshold_percent"] == boundary
+
+    @patch("app.services.finance.redis_delete", new_callable=AsyncMock)
+    async def test_null_threshold_clears_alert(self, mock_redis_del):
+        db, _ = _mock_db()
+        item = _make_watchlist_item(alert_threshold_percent=3.0)
+        sym = _make_finance_symbol()
+        db.execute = _item_then_symbol_execute(item, sym)
+
+        service = FinanceService(db, _mock_redis())
+        result = await service.update_watchlist_alert_threshold("tenant-1", "user-1", str(item.id), None)
+        assert item.alert_threshold_percent is None
+        assert result["alert_threshold_percent"] is None
+        db.commit.assert_called_once()
+        # Watchlist cache invalidated after the update
+        mock_redis_del.assert_called_once()
+
+    async def test_item_not_found(self):
+        db, mock_result = _mock_db()
+        mock_result.scalar_one_or_none.return_value = None
+
+        service = FinanceService(db, _mock_redis())
+        with pytest.raises(SymbolNotFound, match="Watchlist item not found"):
+            await service.update_watchlist_alert_threshold("tenant-1", "user-1", "bad-id", 2.0)
+        db.commit.assert_not_called()
+
+    @patch("app.services.finance.redis_delete", new_callable=AsyncMock)
+    async def test_success_returns_updated_item(self, mock_redis_del):
+        db, _ = _mock_db()
+        item = _make_watchlist_item()
+        item.display_order = 2
+        item.notes = "hold"
+        sym = _make_finance_symbol()
+        db.execute = _item_then_symbol_execute(item, sym)
+
+        service = FinanceService(db, _mock_redis())
+        result = await service.update_watchlist_alert_threshold("tenant-1", "user-1", str(item.id), 2.5)
+
+        assert result == {
+            "id": str(item.id),
+            "symbol_id": str(item.symbol_id),
+            "symbol": "AAPL",
+            "name": "Apple Inc",
+            "display_order": 2,
+            "notes": "hold",
+            "alert_threshold_percent": 2.5,
+            "current_price": None,
+            "change": None,
+            "change_percent": None,
+        }
+
+
+class TestAlertThresholdDetection:
+    def _item(self, threshold=2.0):
+        return {
+            "id": "wi-1",
+            "symbol": "AAPL",
+            "name": "Apple Inc",
+            "alert_threshold_percent": threshold,
+        }
+
+    def _quote(self, change_percent=2.5):
+        return {"symbol": "AAPL", "name": "Apple Inc", "current_price": 231.5, "change_percent": change_percent}
+
+    def _mock_cooldown(self, acquired=True):
+        client = AsyncMock()
+        client.set.return_value = True if acquired else None
+        mock_get_client = AsyncMock(return_value=client)
+        return mock_get_client, client
+
+    async def test_breach_fires_alert_with_full_payload(self):
+        from app.core.redis import RedisKeys
+        from app.core.sse_router import SSEEventType, event_router
+
+        db, _ = _mock_db()
+        service = FinanceService(db, _mock_redis())
+        mock_get_client, client = self._mock_cooldown(acquired=True)
+
+        with (
+            patch("app.services.finance.get_redis_client", mock_get_client),
+            patch.object(event_router, "push_event", new_callable=AsyncMock) as mock_push,
+        ):
+            await service._check_alert_threshold("tenant-1", self._item(2.0), self._quote(2.5))
+
+        mock_push.assert_awaited_once()
+        category, event_type, payload, tenant_id = mock_push.call_args.args
+        assert category == "finance"
+        assert event_type == SSEEventType.ALERT_UPDATE
+        assert tenant_id == "tenant-1"
+        assert payload["symbol"] == "AAPL"
+        assert payload["name"] == "Apple Inc"
+        assert payload["price"] == 231.5
+        assert payload["change_percent"] == 2.5
+        assert payload["threshold_percent"] == 2.0
+        assert payload["direction"] == "up"
+        # ISO-8601 timestamp
+        datetime.fromisoformat(payload["triggered_at"])
+        # Cooldown marker: SET NX EX 3600 on the per-item key
+        client.set.assert_awaited_once()
+        call_kwargs = client.set.call_args.kwargs
+        assert client.set.call_args.args[0] == RedisKeys.alert_fired_key("tenant-1", "wi-1")
+        assert call_kwargs["nx"] is True
+        assert call_kwargs["ex"] == 3600
+
+    async def test_down_breach_direction_down(self):
+        from app.core.sse_router import event_router
+
+        db, _ = _mock_db()
+        service = FinanceService(db, _mock_redis())
+        mock_get_client, _ = self._mock_cooldown(acquired=True)
+
+        with (
+            patch("app.services.finance.get_redis_client", mock_get_client),
+            patch.object(event_router, "push_event", new_callable=AsyncMock) as mock_push,
+        ):
+            await service._check_alert_threshold("tenant-1", self._item(2.0), self._quote(-3.1))
+
+        payload = mock_push.call_args.args[2]
+        assert payload["direction"] == "down"
+        assert payload["change_percent"] == -3.1
+
+    async def test_exact_threshold_fires(self):
+        from app.core.sse_router import event_router
+
+        db, _ = _mock_db()
+        service = FinanceService(db, _mock_redis())
+        mock_get_client, _ = self._mock_cooldown(acquired=True)
+
+        with (
+            patch("app.services.finance.get_redis_client", mock_get_client),
+            patch.object(event_router, "push_event", new_callable=AsyncMock) as mock_push,
+        ):
+            await service._check_alert_threshold("tenant-1", self._item(2.0), self._quote(-2.0))
+
+        mock_push.assert_awaited_once()
+
+    async def test_below_threshold_no_alert_no_cooldown(self):
+        from app.core.sse_router import event_router
+
+        db, _ = _mock_db()
+        service = FinanceService(db, _mock_redis())
+        mock_get_client, client = self._mock_cooldown(acquired=True)
+
+        with (
+            patch("app.services.finance.get_redis_client", mock_get_client),
+            patch.object(event_router, "push_event", new_callable=AsyncMock) as mock_push,
+        ):
+            await service._check_alert_threshold("tenant-1", self._item(2.0), self._quote(1.5))
+
+        mock_push.assert_not_awaited()
+        # Cooldown marker must not be consumed by a non-breach
+        client.set.assert_not_called()
+
+    async def test_no_threshold_skipped(self):
+        from app.core.sse_router import event_router
+
+        db, _ = _mock_db()
+        service = FinanceService(db, _mock_redis())
+        mock_get_client, _ = self._mock_cooldown()
+
+        with (
+            patch("app.services.finance.get_redis_client", mock_get_client),
+            patch.object(event_router, "push_event", new_callable=AsyncMock) as mock_push,
+        ):
+            await service._check_alert_threshold("tenant-1", self._item(None), self._quote(9.9))
+
+        mock_push.assert_not_awaited()
+
+    async def test_missing_change_percent_skipped(self):
+        from app.core.sse_router import event_router
+
+        db, _ = _mock_db()
+        service = FinanceService(db, _mock_redis())
+        mock_get_client, _ = self._mock_cooldown()
+
+        with (
+            patch("app.services.finance.get_redis_client", mock_get_client),
+            patch.object(event_router, "push_event", new_callable=AsyncMock) as mock_push,
+        ):
+            await service._check_alert_threshold(
+                "tenant-1", self._item(1.0), {"current_price": 100.0, "change_percent": None}
+            )
+
+        mock_push.assert_not_awaited()
+
+    async def test_cooldown_suppresses_repeat_alert(self):
+        from app.core.sse_router import event_router
+
+        db, _ = _mock_db()
+        service = FinanceService(db, _mock_redis())
+        # SET NX returns None: marker already present (fired within the 1h window)
+        mock_get_client, _ = self._mock_cooldown(acquired=False)
+
+        with (
+            patch("app.services.finance.get_redis_client", mock_get_client),
+            patch.object(event_router, "push_event", new_callable=AsyncMock) as mock_push,
+        ):
+            await service._check_alert_threshold("tenant-1", self._item(2.0), self._quote(5.0))
+
+        mock_push.assert_not_awaited()
+
+    async def test_redis_unavailable_skips_silently(self):
+        from app.core.sse_router import event_router
+
+        db, _ = _mock_db()
+        service = FinanceService(db, _mock_redis())
+        mock_get_client = AsyncMock(side_effect=ConnectionError("redis down"))
+
+        with (
+            patch("app.services.finance.get_redis_client", mock_get_client),
+            patch.object(event_router, "push_event", new_callable=AsyncMock) as mock_push,
+        ):
+            # Must not raise
+            await service._check_alert_threshold("tenant-1", self._item(2.0), self._quote(5.0))
+
+        mock_push.assert_not_awaited()
+
+    async def test_get_watchlist_quotes_checks_each_item(self):
+        db, _ = _mock_db()
+        service = FinanceService(db, _mock_redis())
+
+        watchlist_items = [
+            {"id": "wi-1", "symbol": "AAPL", "alert_threshold_percent": 2.0},
+            {"id": "wi-2", "symbol": None, "alert_threshold_percent": 1.0},
+        ]
+        quote = {"symbol": "AAPL", "current_price": 231.5, "change_percent": 2.5}
+
+        with (
+            patch.object(FinanceService, "get_watchlist", new_callable=AsyncMock, return_value=watchlist_items),
+            patch.object(FinanceService, "_get_cached_quote", new_callable=AsyncMock, return_value=quote),
+            patch.object(FinanceService, "_check_alert_threshold", new_callable=AsyncMock) as mock_check,
+        ):
+            result = await service.get_watchlist_quotes("tenant-1", "user-1")
+
+        assert len(result) == 1
+        # Checked once for the resolved quote; symbol-less item never reaches the check
+        mock_check.assert_awaited_once_with("tenant-1", watchlist_items[0], quote)
 
 
 class TestHelperMethods:

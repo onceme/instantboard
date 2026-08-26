@@ -28,6 +28,9 @@ class TestSSEEventType:
     def test_commodity_update(self):
         assert SSEEventType.COMMODITY_UPDATE == "commodity_update"
 
+    def test_alert_update(self):
+        assert SSEEventType.ALERT_UPDATE == "alert_update"
+
     def test_system_metric_update(self):
         assert SSEEventType.SYSTEM_METRIC_UPDATE == "system_metric_update"
 

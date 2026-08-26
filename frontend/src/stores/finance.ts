@@ -1,6 +1,7 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import type {
+  FinanceAlert,
   FinanceQuote,
   MarketIndex,
   Commodity,
@@ -18,9 +19,14 @@ import {
   apiPut,
   getApiErrorMessage,
 } from "@/utils/api";
+import { formatPercent } from "@/utils/format";
+import { financeApi } from "@/api/finance";
 import { SSEConnection, SSEConnectionState } from "@/utils/sse.ts";
 import { useAuthStore } from "./auth";
 import { useSSEStore } from "./sse";
+
+// Keep only the most recent alerts around for the toast/history display.
+const ALERT_HISTORY_LIMIT = 5;
 
 export const useFinanceStore = defineStore("finance", () => {
   const watchlist = ref<WatchlistItem[]>([]);
@@ -30,6 +36,9 @@ export const useFinanceStore = defineStore("finance", () => {
   const searchResults = ref<SearchResult[]>([]);
   const quotesCache = ref<Map<string, FinanceQuote>>(new Map());
   const navData = ref<Map<string, FundNAV>>(new Map());
+  // Watchlist price alerts received via SSE alert_update, newest first
+  // (finance-tab.md §3.2); capped at ALERT_HISTORY_LIMIT entries.
+  const alerts = ref<FinanceAlert[]>([]);
 
   const currentPanel = ref<FinancePanel>("overview");
   const searchQuery = ref("");
@@ -174,6 +183,22 @@ export const useFinanceStore = defineStore("finance", () => {
     watchlist.value = reordered;
   }
 
+  // PATCH the alert threshold of a watchlist entry; null disables the alert.
+  // Errors are rethrown — the caller (Watchlist row editor) displays them.
+  async function updateWatchlistAlert(itemId: string, threshold: number | null) {
+    const response = await financeApi.updateWatchlistItem(itemId, {
+      alert_threshold_percent: threshold,
+    });
+    const index = watchlist.value.findIndex((item) => item.id === itemId);
+    if (index >= 0) {
+      watchlist.value[index] = {
+        ...watchlist.value[index],
+        alert_threshold_percent: threshold ?? undefined,
+      };
+    }
+    return response.data;
+  }
+
   function updateQuoteFromSSE(data: {
     symbol: string;
     current_price: number;
@@ -262,6 +287,37 @@ export const useFinanceStore = defineStore("finance", () => {
     navData.value.set(data.symbol, data);
   }
 
+  // alert_update payload: push to the front (newest first), cap the history,
+  // and mirror the alert to a browser Notification when the tab is hidden.
+  function updateAlertFromSSE(data: FinanceAlert) {
+    alerts.value = [data, ...alerts.value].slice(0, ALERT_HISTORY_LIMIT);
+    notifyBrowser(data);
+  }
+
+  function notifyBrowser(alert: FinanceAlert) {
+    // Notify only when the tab is hidden AND the permission was already
+    // granted. We deliberately never call Notification.requestPermission()
+    // here — an unsolicited permission prompt is intrusive; granting stays an
+    // explicit user/OS action (finance-tab.md §3.2).
+    if (typeof document === "undefined" || typeof Notification === "undefined") {
+      return;
+    }
+    if (document.visibilityState !== "hidden" || Notification.permission !== "granted") {
+      return;
+    }
+    const directionLabel = alert.direction === "up" ? "涨" : "跌";
+    try {
+      new Notification(`自选${directionLabel}幅提醒 ${alert.symbol}`, {
+        body: `${alert.name || alert.symbol} ${formatPercent(alert.change_percent)}（阈值 ${alert.threshold_percent}%）`,
+        tag: `finance-alert-${alert.symbol}`,
+      });
+    } catch (e) {
+      // Some environments require a service-worker registration for
+      // notifications; the in-app toast already covers the display.
+      console.debug("Browser notification failed:", e);
+    }
+  }
+
   function connectSSE() {
     const authStore = useAuthStore();
     const sseStore = useSSEStore();
@@ -285,6 +341,7 @@ export const useFinanceStore = defineStore("finance", () => {
           updateCommodityFromSSE(data as never),
         [SSEEventType.NAV_ESTIMATE_UPDATE]: (data) =>
           updateNAVFromSSE(data as never),
+        [SSEEventType.ALERT_UPDATE]: (data) => updateAlertFromSSE(data as never),
       },
     });
 
@@ -319,6 +376,7 @@ export const useFinanceStore = defineStore("finance", () => {
     searchResults,
     quotesCache,
     navData,
+    alerts,
     currentPanel,
     searchQuery,
     sseState,
@@ -338,8 +396,10 @@ export const useFinanceStore = defineStore("finance", () => {
     addToWatchlist,
     removeFromWatchlist,
     reorderWatchlist,
+    updateWatchlistAlert,
     updateMarketIndexFromSSE,
     updateCommodityFromSSE,
+    updateAlertFromSSE,
     connectSSE,
     disconnectSSE,
     init,

@@ -109,6 +109,14 @@ class WatchlistReorderRequest(BaseModel):
     items: list[WatchlistOrderUpdate]
 
 
+class WatchlistItemAlertUpdate(BaseModel):
+    # Alert threshold in percent; null clears the alert. The 0.5-50 range is
+    # enforced by FinanceService.update_watchlist_alert_threshold (400
+    # VALIDATION_ERROR), not here, so out-of-range values get the app error
+    # envelope instead of a FastAPI 422.
+    alert_threshold_percent: float | None = Field(default=None)
+
+
 class WatchlistItemResponse(BaseModel):
     id: str
     symbol_id: str

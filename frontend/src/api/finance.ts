@@ -1,4 +1,4 @@
-import { apiGet, apiPost, apiDelete, apiPut } from "@/utils/api";
+import { apiGet, apiPost, apiDelete, apiPatch, apiPut } from "@/utils/api";
 import type {
   FinanceQuote,
   MarketIndex,
@@ -26,6 +26,16 @@ export const financeApi = {
   watchlistQuotes: () => apiGet<WatchlistQuote[]>("/finance/watchlist/quotes"),
   addToWatchlist: (symbol: string) =>
     apiPost<WatchlistItem>("/finance/watchlist", { symbol }),
+  // PATCH /finance/watchlist/{item_id}: null clears the alert threshold
+  // (disables the alert); the backend validates the 0.5-50 range (400).
+  updateWatchlistItem: (
+    itemId: string,
+    payload: { alert_threshold_percent: number | null },
+  ) =>
+    apiPatch<WatchlistItem>(
+      `/finance/watchlist/${itemId}`,
+      payload as Record<string, unknown>,
+    ),
   removeFromWatchlist: (itemId: string) =>
     apiDelete(`/finance/watchlist/${itemId}`),
   reorderWatchlist: (itemIds: string[]) =>

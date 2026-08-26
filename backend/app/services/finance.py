@@ -15,7 +15,7 @@ from app.core.exceptions import (
     SymbolNotFound,
     ValidationError,
 )
-from app.core.redis import RedisKeys, redis_delete, redis_get, redis_set
+from app.core.redis import RedisKeys, get_redis_client, redis_delete, redis_get, redis_set
 from app.core.sse_router import SSEEventType, event_router
 from app.models.finance import FinanceQuote, FinanceSymbol, FundNAVEstimate
 from app.models.watchlist import WatchlistItem
@@ -67,6 +67,12 @@ REDIS_TTL_NAV = 120
 REDIS_TTL_SEARCH = 300
 
 MAX_WATCHLIST_ITEMS = 512
+
+# Watchlist price-alert threshold bounds in percent (finance-tab.md §3.2).
+# Enforced in update_watchlist_alert_threshold with a 400 VALIDATION_ERROR so
+# the response carries the app error envelope instead of a FastAPI 422.
+ALERT_THRESHOLD_MIN = 0.5
+ALERT_THRESHOLD_MAX = 50.0
 
 # Failover data-type identifiers, promoted to module-level constants to prevent a recurrence
 # of the "market_indices"/"market_index" spelling mismatch (previously
@@ -612,6 +618,121 @@ class FinanceService:
         watchlist_cache_key = RedisKeys.watchlist_key(tenant_id, user_id)
         await redis_delete(watchlist_cache_key)
 
+    async def update_watchlist_alert_threshold(
+        self,
+        tenant_id: str,
+        user_id: str,
+        item_id: str,
+        alert_threshold_percent: float | None,
+    ) -> dict:
+        """Set (or clear with null) the price-alert threshold of a watchlist item.
+
+        A "not found" and a "belongs to another user" miss are indistinguishable
+        by design (both 404 SymbolNotFound) so item existence is never leaked
+        across users. finance-tab.md §3.2.
+        """
+        if alert_threshold_percent is not None and not (
+            ALERT_THRESHOLD_MIN <= alert_threshold_percent <= ALERT_THRESHOLD_MAX
+        ):
+            raise ValidationError(
+                message=(
+                    f"alert_threshold_percent must be between {ALERT_THRESHOLD_MIN} "
+                    f"and {ALERT_THRESHOLD_MAX} or null to disable"
+                ),
+                details=[
+                    {
+                        "field": "alert_threshold_percent",
+                        "message": f"value must be within [{ALERT_THRESHOLD_MIN}, {ALERT_THRESHOLD_MAX}]",
+                    }
+                ],
+            )
+
+        stmt = select(WatchlistItem).where(
+            WatchlistItem.id == item_id,
+            WatchlistItem.tenant_id == tenant_id,
+            WatchlistItem.user_id == user_id,
+        )
+        result = await self.db.execute(stmt)
+        item = result.scalar_one_or_none()
+
+        if not item:
+            raise SymbolNotFound(message=f"Watchlist item not found: {item_id}")
+
+        item.alert_threshold_percent = alert_threshold_percent
+        await self.db.commit()
+        await self.db.refresh(item)
+
+        watchlist_cache_key = RedisKeys.watchlist_key(tenant_id, user_id)
+        await redis_delete(watchlist_cache_key)
+
+        stmt_symbol = select(FinanceSymbol).where(FinanceSymbol.id == item.symbol_id)
+        sym_result = await self.db.execute(stmt_symbol)
+        symbol_data = sym_result.scalar_one_or_none()
+
+        return {
+            "id": str(item.id),
+            "symbol_id": str(item.symbol_id),
+            "symbol": symbol_data.symbol if symbol_data else None,
+            "name": symbol_data.name if symbol_data else None,
+            "display_order": item.display_order,
+            "notes": item.notes,
+            "alert_threshold_percent": float(item.alert_threshold_percent) if item.alert_threshold_percent else None,
+            "current_price": None,
+            "change": None,
+            "change_percent": None,
+        }
+
+    async def _check_alert_threshold(self, tenant_id: str, item: dict, quote: dict) -> None:
+        """Publish an alert_update when the entry's threshold is breached.
+
+        Runs piggyback on the watchlist quote path (no market-wide scanner).
+        Guarded by an atomic SET NX EX cooldown marker per item so a
+        persistently-breached threshold fires at most once per
+        ALERT_FIRED_TTL window. Redis unavailable → skip detection silently
+        (no alert, no error); the push itself falls back to the in-process
+        direct push inside event_router.push_event like every other event.
+        finance-tab.md §3.2.
+        """
+        threshold = item.get("alert_threshold_percent")
+        change_percent = quote.get("change_percent")
+        if threshold is None or change_percent is None:
+            return
+
+        if abs(float(change_percent)) < float(threshold):
+            return
+
+        cooldown_key = RedisKeys.alert_fired_key(tenant_id, item.get("id", ""))
+        try:
+            client = await get_redis_client()
+            acquired = await client.set(
+                cooldown_key,
+                "1",
+                ex=RedisKeys.ALERT_FIRED_TTL,
+                nx=True,
+            )
+        except Exception as e:
+            logger.debug(f"Alert cooldown check failed for watchlist item {item.get('id')}: {e}")
+            return
+
+        if not acquired:
+            return
+
+        payload = {
+            "symbol": item.get("symbol"),
+            "name": item.get("name") or quote.get("name"),
+            "price": quote.get("current_price"),
+            "change_percent": change_percent,
+            "threshold_percent": threshold,
+            "direction": "up" if float(change_percent) >= 0 else "down",
+            "triggered_at": datetime.now(UTC).isoformat(),
+        }
+        await event_router.push_event(
+            "finance",
+            SSEEventType.ALERT_UPDATE,
+            payload,
+            tenant_id,
+        )
+
     async def get_watchlist_quotes(self, tenant_id: str, user_id: str) -> list[dict]:
         watchlist = await self.get_watchlist(tenant_id, user_id)
         quotes = []
@@ -626,6 +747,9 @@ class FinanceService:
                         quote = None
                 if quote:
                     quotes.append(quote)
+                    # Alert detection rides on the quote path: checked for every
+                    # resolved quote, de-duplicated by the Redis cooldown marker.
+                    await self._check_alert_threshold(tenant_id, item, quote)
         return quotes
 
     def _is_market_open(self, market: str) -> bool:

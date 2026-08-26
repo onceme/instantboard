@@ -125,6 +125,14 @@ export async function apiPut<T>(
   return response.data;
 }
 
+export async function apiPatch<T>(
+  url: string,
+  data?: Record<string, unknown>,
+): Promise<ApiResponse<T>> {
+  const response = await apiClient.patch<ApiResponse<T>>(url, data);
+  return response.data;
+}
+
 export async function apiDelete<T>(url: string): Promise<ApiResponse<T>> {
   const response = await apiClient.delete<ApiResponse<T>>(url);
   return response.data;

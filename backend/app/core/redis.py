@@ -91,6 +91,12 @@ class RedisKeys:
     # tenant per TOPIC_STATS_PUSHED_TTL window. Deleted early when the stats load
     # fails so the next collection can retry within the window.
     TOPIC_STATS_PUSHED = "tech:topic_stats_pushed:{tenant_id}"
+    # Cooldown marker written by FinanceService._check_alert_threshold (SET NX EX):
+    # once a watchlist entry trips its alert threshold, at most one alert_update is
+    # published per ALERT_FIRED_TTL window so a persistently-breached threshold does
+    # not spam the user on every quote fetch (finance-tab.md §3.2). Redis
+    # unavailable → detection is skipped (no alert), never an error.
+    ALERT_FIRED = "finance:alert_fired:{tenant_id}:{item_id}"
 
     SEARCH_TTL = 300
     STREAM_HISTORY_LIMIT = 500
@@ -117,6 +123,9 @@ class RedisKeys:
     # cache in TechService.get_topics so the pushed payload is never fresher than
     # what GET /tech/topics serves (tech-tab.md §3.8).
     TOPIC_STATS_PUSHED_TTL = 900
+    # Watchlist price-alert cooldown window (seconds): one alert_update per item
+    # per hour while the threshold stays breached (finance-tab.md §3.2).
+    ALERT_FIRED_TTL = 3600
 
     @staticmethod
     def session_key(session_id: str) -> str:
@@ -205,6 +214,10 @@ class RedisKeys:
     @staticmethod
     def topic_stats_pushed_key(tenant_id: str) -> str:
         return RedisKeys.TOPIC_STATS_PUSHED.format(tenant_id=tenant_id)
+
+    @staticmethod
+    def alert_fired_key(tenant_id: str, item_id: str) -> str:
+        return RedisKeys.ALERT_FIRED.format(tenant_id=tenant_id, item_id=item_id)
 
 
 async def redis_get(key: str) -> str | None:

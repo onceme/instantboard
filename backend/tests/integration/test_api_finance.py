@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.api.v1.finance import _get_finance_service
+from app.core.exceptions import SymbolNotFound, ValidationError
 from app.core.security import create_access_token
 
 NOW = datetime.now(UTC).isoformat()
@@ -455,3 +456,105 @@ class TestWatchlistQuotes:
         data = resp.json()["data"][0]
         assert data["close_previous"] == 398.0
         assert data["week_high_52"] == 420.0
+
+
+class TestWatchlistAlertThreshold:
+    def _item_payload(self, item_id, threshold):
+        return {
+            "id": item_id,
+            "symbol_id": str(uuid.uuid4()),
+            "symbol": "AAPL",
+            "name": "Apple",
+            "display_order": 0,
+            "notes": None,
+            "alert_threshold_percent": threshold,
+            "current_price": None,
+            "change": None,
+            "change_percent": None,
+        }
+
+    def test_update_threshold_success(self, client, mock_finance_svc):
+        item_id = str(uuid.uuid4())
+        mock_finance_svc.update_watchlist_alert_threshold.return_value = self._item_payload(item_id, 2.5)
+
+        resp = client.patch(
+            f"/api/v1/finance/watchlist/{item_id}",
+            headers=_headers(),
+            json={"alert_threshold_percent": 2.5},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is True
+        assert body["data"]["id"] == item_id
+        assert body["data"]["alert_threshold_percent"] == 2.5
+
+        mock_finance_svc.update_watchlist_alert_threshold.assert_called_once()
+        kwargs = mock_finance_svc.update_watchlist_alert_threshold.call_args.kwargs
+        assert kwargs["item_id"] == item_id
+        assert kwargs["alert_threshold_percent"] == 2.5
+
+    def test_update_threshold_null_disables(self, client, mock_finance_svc):
+        item_id = str(uuid.uuid4())
+        mock_finance_svc.update_watchlist_alert_threshold.return_value = self._item_payload(item_id, None)
+
+        resp = client.patch(
+            f"/api/v1/finance/watchlist/{item_id}",
+            headers=_headers(),
+            json={"alert_threshold_percent": None},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["data"]["alert_threshold_percent"] is None
+        kwargs = mock_finance_svc.update_watchlist_alert_threshold.call_args.kwargs
+        assert kwargs["alert_threshold_percent"] is None
+
+    def test_update_threshold_out_of_range_400(self, client, mock_finance_svc):
+        mock_finance_svc.update_watchlist_alert_threshold.side_effect = ValidationError(
+            message="alert_threshold_percent must be between 0.5 and 50 or null to disable"
+        )
+
+        resp = client.patch(
+            f"/api/v1/finance/watchlist/{uuid.uuid4()}",
+            headers=_headers(),
+            json={"alert_threshold_percent": 0.1},
+        )
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["error"]["code"] == "VALIDATION_ERROR"
+
+    def test_update_threshold_not_found_or_not_owned_404(self, client, mock_finance_svc):
+        # Missing items and items owned by another user are indistinguishable
+        mock_finance_svc.update_watchlist_alert_threshold.side_effect = SymbolNotFound(
+            message="Watchlist item not found"
+        )
+
+        resp = client.patch(
+            f"/api/v1/finance/watchlist/{uuid.uuid4()}",
+            headers=_headers(),
+            json={"alert_threshold_percent": 3},
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"]["error"]["code"] == "SYMBOL_NOT_FOUND"
+
+    def test_update_threshold_missing_body_defaults_null(self, client, mock_finance_svc):
+        item_id = str(uuid.uuid4())
+        mock_finance_svc.update_watchlist_alert_threshold.return_value = self._item_payload(item_id, None)
+
+        resp = client.patch(f"/api/v1/finance/watchlist/{item_id}", headers=_headers(), json={})
+        assert resp.status_code == 200
+        kwargs = mock_finance_svc.update_watchlist_alert_threshold.call_args.kwargs
+        assert kwargs["alert_threshold_percent"] is None
+
+    def test_update_threshold_non_numeric_422(self, client, mock_finance_svc):
+        resp = client.patch(
+            f"/api/v1/finance/watchlist/{uuid.uuid4()}",
+            headers=_headers(),
+            json={"alert_threshold_percent": "abc"},
+        )
+        assert resp.status_code == 422
+        mock_finance_svc.update_watchlist_alert_threshold.assert_not_called()
+
+    def test_update_threshold_requires_auth(self, client, mock_finance_svc):
+        resp = client.patch(
+            f"/api/v1/finance/watchlist/{uuid.uuid4()}",
+            json={"alert_threshold_percent": 2},
+        )
+        assert resp.status_code == 401

@@ -129,6 +129,7 @@ class SSEEventType(StrEnum):
     MARKET_INDEX_UPDATE = "market_index_update"
     NAV_ESTIMATE_UPDATE = "nav_estimate_update"
     COMMODITY_UPDATE = "commodity_update"
+    ALERT_UPDATE = "alert_update"
     SYSTEM_METRIC_UPDATE = "system_metric_update"
     SOURCE_HEALTH_UPDATE = "source_health_update"
     TOPIC_STATS_UPDATE = "topic_stats_update"

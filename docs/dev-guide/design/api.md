@@ -645,14 +645,36 @@ Response 200:
   }
 ```
 
-#### Watchlist API (见 [finance-tab.md](finance-tab.md) §3.4 详细设计)
+#### Watchlist API (见 [finance-tab.md](finance-tab.md) §3.2/§3.4 详细设计)
 
 ```
 GET    /api/v1/finance/watchlist               — 获取自选列表
 POST   /api/v1/finance/watchlist               — 添加到自选列表 (最多512项, 超出返回400 VALIDATION_ERROR)
+PATCH  /api/v1/finance/watchlist/{item_id}     — 设置/关闭自选涨跌提醒阈值 (见下方)
 DELETE /api/v1/finance/watchlist/{item_id}      — 从自选列表移除
 PUT    /api/v1/finance/watchlist/reorder        — 重排序自选列表
 GET    /api/v1/finance/watchlist/quotes         — 自选列表所有行情
+```
+
+#### PATCH `/api/v1/finance/watchlist/{item_id}` — 设置/关闭涨跌提醒阈值
+
+```
+Body:
+  { "alert_threshold_percent": 2.5 }     // float, 范围 [0.5, 50]
+  { "alert_threshold_percent": null }    // null = 关闭提醒
+  {}                                      // 字段缺省等同 null
+
+Response 200: SuccessResponse[WatchlistItemResponse]
+  （行情字段 current_price/change/change_percent 为 null）
+
+Errors:
+  400 VALIDATION_ERROR  — 阈值超出 [0.5, 50]（服务层校验, 非 Pydantic 422）
+  404 SYMBOL_NOT_FOUND  — 条目不存在或非当前用户所有（两者不可区分, 防探测）
+  422                   — body 类型非法（如字符串）
+  401 AUTH_REQUIRED     — 未认证
+
+副作用: 更新 watchlist_items.alert_threshold_percent 并失效自选缓存；
+        检测与推送见下方 SSE 事件 #10 alert_update 与 finance-tab.md §3.2
 ```
 
 ### 3.6 科技资讯 API
@@ -1034,13 +1056,28 @@ SSE Event Types:
      //（Redis tech:topic_stats_pushed:{tenant_id} SET NX EX 900；Redis 不可用静默跳过）
      // 载荷复用 TechService.get_topics 的缓存读取路径，与 REST 响应一致（见 tech-tab.md §3.8）
 
-  10. connected — 连接建立时立即发送的首个事件（sse.py:93-101, SSE 帧 id 固定为 "init"）
-     event: connected
-     data: {
-       "client_id": "{tenant_id}:{user_id}:{uuid}",
-       "category": "finance",
-       "timestamp": "..."
-     }
+   10. alert_update — 自选涨跌提醒 (finance channel)
+      event: alert_update
+      data: {
+        "symbol": "AAPL",
+        "name": "Apple Inc",
+        "price": 231.5,
+        "change_percent": 2.4,
+        "threshold_percent": 2,
+        "direction": "up",               // "up" | "down"
+        "triggered_at": "2026-08-26T10:00:00+00:00"
+      }
+      // 触发：自选行情链路（get_watchlist_quotes）检测到 |涨跌幅| >= 条目阈值
+      //（Redis finance:alert_fired:{tenant_id}:{item_id} SET NX EX 3600 冷却，
+      // 1h 窗口内同条目至多一次；Redis 不可用静默跳过）。单对象载荷（见 finance-tab.md §3.2）
+
+   11. connected — 连接建立时立即发送的首个事件（sse.py:93-101, SSE 帧 id 固定为 "init"）
+      event: connected
+      data: {
+        "client_id": "{tenant_id}:{user_id}:{uuid}",
+        "category": "finance",
+        "timestamp": "..."
+      }
 
 Client Implementation:
   const es = new EventSource(`/api/v1/stream/finance?token=${jwt}`);

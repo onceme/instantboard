@@ -331,6 +331,7 @@ CREATE INDEX idx_dashboard_snapshots_time ON dashboard_snapshots(tenant_id, time
 | **调度器心跳** | `scheduler:worker:heartbeat` | String | 45s | worker 每 15s 续期（3× 间隔）；API 侧以此为新鲜度阈值判断 worker 健康 |
 | **SSE 活跃连接（负载信号）** | `sse:active_connections` | String（整数计数） | 60s | api 进程在 SSE `register`/`unregister` 时以 SET 全量计数写入（自校正，无 INCR/DECR 漂移）并由 30s 心跳续期（`core/sse_router.py`）；调度侧 `scheduler/manager.py::evaluate_load_multiplier` 每轮采集读取作负载降频（连接数 >500 → ×2，见 finance-tab.md §3.8.3）。api 进程挂掉后键过期，调度侧回落正常频率（失败开放） |
 | **话题统计推送节流** | `tech:topic_stats_pushed:{tenant_id}` | String（标记位 `"1"`） | 900s | `topic_stats_update` SSE 推送节流（`services/sse.py::publish_topic_stats_update`）：科技条目入库触发时以 `SET NX EX 900` 原子抢占，窗口内同租户至多推送一次；统计加载失败时删除该键释放窗口以便重试（tech-tab.md §3.8） |
+| **自选涨跌提醒冷却** | `finance:alert_fired:{tenant_id}:{item_id}` | String（标记位 `"1"`） | 3600s | 自选涨跌提醒触发冷却（`services/finance.py::_check_alert_threshold`）：自选行情链路检测到 `\|涨跌幅\| >= 条目阈值` 时以 `SET NX EX 3600` 原子抢占，窗口内同条目至多推送一次 `alert_update`；Redis 不可用时跳过检测（不报错、行情照常返回）（finance-tab.md §3.2） |
 | **Token 黑名单** | `token_blacklist:{jti}` | String | token 剩余有效期 | access/refresh 撤销（core/security.py:75） |
 | **管理员防爆破** | `admin_login:fail:{email}` / `lock:{email}` | String（计数/锁） | 15min | email 维度：5 次失败触发锁定（详见 admin-login.md §7） |
 | **管理员防爆破 (IP)** | `admin_login:fail_ip:{ip}` / `lock_ip:{ip}` | String（计数/锁） | 1h | IP 维度：20 次失败触发锁定 |
@@ -353,7 +354,8 @@ CREATE INDEX idx_dashboard_snapshots_time ON dashboard_snapshots(tenant_id, time
 > ⚠️ **说明（key 前缀）**：并非所有 key 都有租户前缀——仅租户级数据键（quote、market_indices、
 > commodities、nav、search、dedup、watchlist）带 `t:{tenant_id}:` 前缀；session、source_health、
 > token_blacklist、admin_login:*、dashboard:*、scheduler:*、channel:*、sse:* 等均为全局键。
-> 特例：话题统计推送节流键 `tech:topic_stats_pushed:{tenant_id}` 为租户级但采用后缀式命名。
+> 特例：话题统计推送节流键 `tech:topic_stats_pushed:{tenant_id}` 与涨跌提醒冷却键
+> `finance:alert_fired:{tenant_id}:{item_id}` 为租户级但采用后缀式命名。
 
 **Redis 配置要点**:
 - `maxmemory-policy: allkeys-lru` — 内存满时淘汰最久未使用的 key

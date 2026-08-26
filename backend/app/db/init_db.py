@@ -371,13 +371,23 @@ TECH_SPACE_SOURCES = [
 
 TECH_CROSS_DOMAIN_SOURCES = [
     {
+        # RedditCollector is registered as "reddit"; the explicit config.library
+        # overrides source_type=social (bare "social" resolves to nothing in
+        # COLLECTOR_REGISTRY). The collector ignores source.url: it fetches each
+        # configured subreddit individually via the public JSON endpoint
+        # https://www.reddit.com/r/{subreddit}/new.json and aggregates the posts
+        # with cross-subreddit de-duplication by post id; the url here merely
+        # documents the covered subreddits.
         "name": "Reddit-科技全领域",
         "source_type": "social",
         "url": "https://www.reddit.com/r/artificial+robotics+embedded+space/new.json",
-        "config": {"platform": "reddit", "query": "r/artificial+robotics+embedded+space", "parse_rules": {}},
+        "config": {
+            "library": "reddit",
+            "subreddits": ["artificial", "robotics", "embedded", "space"],
+        },
         "refresh_interval_seconds": 600,
         "priority": 4,
-        "is_active": False,  # RedditCollector exists (library=reddit); seed subreddits config is a follow-up
+        "is_active": True,
     },
     {
         "name": "Google News Tech",

@@ -191,7 +191,7 @@ graph TD
 | 科技 | 全部子分类 | Google News Tech | rss | 全领域 |
 | 科技 | 全部子分类 | Twitter/X Lists | social | 全领域(付费租户可选) |
 
-> ⚠️ Reddit 采集器已实现（公开 JSON 接口、无需凭据；注册名 `reddit`，经 `source_type=social` + `config.library=reddit` 解析），但种子仍 `is_active=False`（种子激活与 `subreddits` 配置为后续特性）；Twitter/X 完全缺失（无采集器/配置/种子）。
+> ✅ Reddit 种子已激活（公开 JSON 接口、无需凭据；注册名 `reddit`，经 `source_type=social` + `config.library=reddit` 解析，`subreddits` 配置 r/artificial、r/robotics、r/embedded、r/space）；Twitter/X 采集器已实现但种子未激活待凭据（注册名 `twitter`，需配置 `TWITTER_BEARER_TOKEN`，且 recent search 端点仅付费档可用）。
 
 #### 3.2.7 映射关系设计要点
 

@@ -83,6 +83,56 @@ class TestInitDBModule:
             assert src.get("is_active", True) is True
             assert src["config"].get("query")
 
+    def test_reddit_seed_is_active_and_collectable(self):
+        """The Reddit cross-domain seed must be collectable out of the box:
+        config.library=reddit overrides source_type=social (bare "social" has no
+        collector) and config.subreddits feeds RedditCollector's per-subreddit
+        fetch. Regression against the seed reverting to the inactive template
+        (missing library → resolve_collector None → NoCollectorAvailable on the
+        create/enable path, scheduler skipping it as uncollectable)."""
+        from app.collectors import resolve_collector
+        from app.collectors.tech.reddit_collector import RedditCollector
+        from app.db.init_db import TECH_CROSS_DOMAIN_SOURCES
+
+        reddit_sources = [src for src in TECH_CROSS_DOMAIN_SOURCES if src["config"].get("library") == "reddit"]
+        assert len(reddit_sources) == 1
+        src = reddit_sources[0]
+        assert src["name"] == "Reddit-科技全领域"
+        assert src["source_type"] == "social"
+        assert src["is_active"] is True
+        assert src["config"]["subreddits"] == ["artificial", "robotics", "embedded", "space"]
+        assert src["refresh_interval_seconds"] == 600
+        assert resolve_collector(src["source_type"], src["config"]) is RedditCollector
+
+    def test_active_seeds_all_resolve_to_collectors(self):
+        """Every seed with is_active=True must resolve to a registered collector.
+        Otherwise the scheduler skips the job ('No collector for ...') and the
+        create/enable API rejects the source with NoCollectorAvailable — active
+        seeds that can never collect are exactly the state the pre-flight check
+        exists to prevent."""
+        from app.collectors import resolve_collector
+        from app.db.init_db import (
+            FINANCE_SOURCES,
+            TECH_AI_SOURCES,
+            TECH_CROSS_DOMAIN_SOURCES,
+            TECH_EMBEDDED_SOURCES,
+            TECH_ROBOTICS_SOURCES,
+            TECH_SPACE_SOURCES,
+        )
+
+        all_sources = (
+            FINANCE_SOURCES
+            + TECH_AI_SOURCES
+            + TECH_ROBOTICS_SOURCES
+            + TECH_EMBEDDED_SOURCES
+            + TECH_SPACE_SOURCES
+            + TECH_CROSS_DOMAIN_SOURCES
+        )
+        assert all_sources
+        for src in all_sources:
+            if src.get("is_active", True):
+                assert resolve_collector(src["source_type"], src.get("config")) is not None, src["name"]
+
     def test_tech_sources_constants(self):
         from app.db.init_db import TECH_AI_SOURCES, TECH_EMBEDDED_SOURCES, TECH_ROBOTICS_SOURCES, TECH_SPACE_SOURCES
 

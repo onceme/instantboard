@@ -270,6 +270,10 @@ export interface DashboardSystemInfo {
   memory_used_mb: number;
   disk_total_gb: number;
   disk_used_gb: number;
+  // Disk I/O rates (MB/s) — backend app/services/dashboard.py
+  // sample_disk_rates(); 0 on the first sample or when psutil is unavailable.
+  disk_read_mbps?: number;
+  disk_write_mbps?: number;
   network_in_kbps?: number;
   network_out_kbps?: number;
   api_version?: string;

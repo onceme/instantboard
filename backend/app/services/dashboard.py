@@ -107,6 +107,14 @@ _last_metrics: dict = {}
 # get_system_info() and collect_and_push_metrics() need the same series.
 _last_net_sample: dict | None = None
 
+# Previous disk_io_counters() sample (cumulative read/write bytes + monotonic
+# timestamp) used to compute disk I/O rates. Mirrors _last_net_sample: the
+# frontend contract expects rates (disk_read_mbps / disk_write_mbps, MB/s), not
+# the cumulative byte counters psutil exposes, so every sample diffs against
+# this state. Module-level because both get_system_info() and
+# collect_and_push_metrics() need the same series.
+_last_disk_sample: dict | None = None
+
 # Active threshold alerts, keyed by alert code. Each value is
 # {code, message, triggered_at}; triggered_at is pinned on first trigger and the
 # alert is removed again once the condition recovers (dashboard-tab.md §5).
@@ -239,6 +247,65 @@ def sample_network_rates() -> dict:
     return data
 
 
+def sample_disk_rates() -> dict:
+    """Sample disk_io_counters() and compute I/O rates (MB/s) vs the previous sample.
+
+    Returns both the rate fields the frontend renders (disk_read_mbps /
+    disk_write_mbps) and the cumulative counters. The first sample has no
+    previous data and reports 0 rates; counter resets (reboot/overflow) clamp
+    negative deltas to 0. Degradation (same style as sample_network_rates,
+    dashboard-tab.md §5): without psutil, or when disk_io_counters is
+    unavailable (the attribute is missing in restricted containers, returns
+    None or raises), the rates degrade to 0, no sample state is kept and no
+    exception propagates.
+    """
+    global _last_disk_sample
+
+    if psutil is None or not callable(getattr(psutil, "disk_io_counters", None)):
+        return {
+            "disk_read_mbps": 0.0,
+            "disk_write_mbps": 0.0,
+            "disk_read_bytes": 0,
+            "disk_write_bytes": 0,
+        }
+
+    try:
+        disk = psutil.disk_io_counters()
+    except Exception as e:
+        # Restricted environments (containers without /proc/diskstats) may raise
+        # instead of returning counters; degrade silently.
+        logger.debug(f"disk_io_counters() unavailable: {e}")
+        disk = None
+
+    now = time.monotonic()
+
+    data = {
+        "disk_read_mbps": 0.0,
+        "disk_write_mbps": 0.0,
+        "disk_read_bytes": disk.read_bytes if disk else 0,
+        "disk_write_bytes": disk.write_bytes if disk else 0,
+    }
+
+    if disk and _last_disk_sample:
+        elapsed = now - _last_disk_sample["timestamp"]
+        if elapsed > 0:
+            data["disk_read_mbps"] = round(
+                max(disk.read_bytes - _last_disk_sample["read_bytes"], 0) / elapsed / (1024 * 1024), 2
+            )
+            data["disk_write_mbps"] = round(
+                max(disk.write_bytes - _last_disk_sample["write_bytes"], 0) / elapsed / (1024 * 1024), 2
+            )
+
+    if disk:
+        _last_disk_sample = {
+            "read_bytes": disk.read_bytes,
+            "write_bytes": disk.write_bytes,
+            "timestamp": now,
+        }
+
+    return data
+
+
 class DashboardService:
     def __init__(self, db: AsyncSession, redis: Redis | None):
         self.db = db
@@ -284,6 +351,7 @@ class DashboardService:
             disk_total_gb = None
             disk_used_gb = None
             net_data = sample_network_rates()
+            disk_io = sample_disk_rates()
         else:
             cpu_usage = await asyncio.to_thread(psutil.cpu_percent, 0.5)
             cpu_count = psutil.cpu_count()
@@ -294,6 +362,7 @@ class DashboardService:
             disk_total_gb = round(disk.total / (1024**3), 1)
             disk_used_gb = round(disk.used / (1024**3), 1)
             net_data = await asyncio.to_thread(sample_network_rates)
+            disk_io = await asyncio.to_thread(sample_disk_rates)
 
         pg_connections = None
         pg_active_queries = None
@@ -336,6 +405,18 @@ class DashboardService:
             "memory_used_mb": memory_used_mb,
             "disk_total_gb": disk_total_gb,
             "disk_used_gb": disk_used_gb,
+            # Disk I/O rates (MB/s) sampled by sample_disk_rates(); the capacity
+            # fields above are kept unchanged.
+            "disk_read_mbps": disk_io["disk_read_mbps"],
+            "disk_write_mbps": disk_io["disk_write_mbps"],
+            "disk": {
+                "disk_total_gb": disk_total_gb,
+                "disk_used_gb": disk_used_gb,
+                "disk_read_mbps": disk_io["disk_read_mbps"],
+                "disk_write_mbps": disk_io["disk_write_mbps"],
+                "read_bytes": disk_io["disk_read_bytes"],
+                "write_bytes": disk_io["disk_write_bytes"],
+            },
             # Frontend renders the flat rate fields (KB/s); the nested group keeps the
             # cumulative counters for backward compatibility.
             "network_in_kbps": net_data["network_in_kbps"],
@@ -958,6 +1039,7 @@ class DashboardService:
             memory_usage_percent = None
             disk_usage_percent = None
             net_data = sample_network_rates()
+            disk_io = sample_disk_rates()
         else:
             cpu_usage = await asyncio.to_thread(psutil.cpu_percent, 0.5)
             mem = await asyncio.to_thread(psutil.virtual_memory)
@@ -965,6 +1047,7 @@ class DashboardService:
             memory_usage_percent = mem.percent
             disk_usage_percent = disk.percent
             net_data = await asyncio.to_thread(sample_network_rates)
+            disk_io = await asyncio.to_thread(sample_disk_rates)
 
         # Load-adaptive interval: three consecutive samples above the cpu_high
         # threshold degrade the loop to 60s; the first sample back at or below the
@@ -996,6 +1079,8 @@ class DashboardService:
             "network_out_kbps": net_data["network_out_kbps"],
             "network_bytes_sent": net_data["network_bytes_sent"],
             "network_bytes_recv": net_data["network_bytes_recv"],
+            "disk_read_mbps": disk_io["disk_read_mbps"],
+            "disk_write_mbps": disk_io["disk_write_mbps"],
             "timestamp": datetime.now(UTC).isoformat(),
         }
 
@@ -1031,6 +1116,19 @@ class DashboardService:
             if current_metrics["network_out_kbps"] != _last_metrics.get("network_out_kbps"):
                 should_push = True
                 incremental_data["network_out_kbps"] = current_metrics["network_out_kbps"]
+
+            # Disk I/O rates follow the network-rate rule, not the 5%
+            # METRIC_THRESHOLDS one (which only applies to CPU/memory percents):
+            # rates fluctuate around small values where a relative threshold would
+            # either suppress real activity or push noise every cycle, so any
+            # change is pushed and the 30s cadence keeps the volume bounded.
+            if current_metrics["disk_read_mbps"] != _last_metrics.get("disk_read_mbps"):
+                should_push = True
+                incremental_data["disk_read_mbps"] = current_metrics["disk_read_mbps"]
+
+            if current_metrics["disk_write_mbps"] != _last_metrics.get("disk_write_mbps"):
+                should_push = True
+                incremental_data["disk_write_mbps"] = current_metrics["disk_write_mbps"]
         else:
             should_push = True
             incremental_data = current_metrics

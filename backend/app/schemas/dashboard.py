@@ -15,6 +15,12 @@ class DiskInfo(BaseModel):
     disk_total_gb: float | None = None
     disk_used_gb: float | None = None
     disk_usage_percent: float | None = None
+    # I/O rates (MB/s) diff-sampled from psutil.disk_io_counters() by
+    # services/dashboard.py sample_disk_rates(); 0 when psutil is unavailable.
+    disk_read_mbps: float | None = None
+    disk_write_mbps: float | None = None
+    read_bytes: int | None = None
+    write_bytes: int | None = None
 
 
 class NetworkInfo(BaseModel):
@@ -59,6 +65,9 @@ class SystemInfoResponse(BaseModel):
     memory_used_mb: int | None = None
     disk_total_gb: float | None = None
     disk_used_gb: float | None = None
+    # Disk I/O rates (MB/s) — same contract as the nested disk group above.
+    disk_read_mbps: float | None = None
+    disk_write_mbps: float | None = None
     network_in_kbps: float | None = None
     network_out_kbps: float | None = None
 
@@ -164,4 +173,7 @@ class SystemMetricUpdate(BaseModel):
     network_out_kbps: float | None = None
     network_bytes_sent: int | None = None
     network_bytes_recv: int | None = None
+    # Disk I/O rates (MB/s), pushed on any change like the network rates.
+    disk_read_mbps: float | None = None
+    disk_write_mbps: float | None = None
     timestamp: str | None = None

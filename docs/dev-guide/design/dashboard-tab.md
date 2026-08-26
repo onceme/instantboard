@@ -1,5 +1,5 @@
 ---
-version: 1.2
+version: 1.3
 author: designer
 date: 2026-08-26
 status: draft
@@ -103,14 +103,15 @@ graph TD
 | 内存使用率 (%) | `psutil.virtual_memory().percent` | 30s | 数字 |
 | 内存使用/总量 (MB) | psutil | 30s | 数字 |
 | 磁盘使用/总量 (GB) | `psutil.disk_usage('/')` | 30s | 数字 |
+| 磁盘 I/O 速率 (MB/s) | `psutil.disk_io_counters()` 差分采样 → `disk_read_mbps`/`disk_write_mbps` | 30s | 数字 |
 | 网络流量 | `psutil.net_io_counters()` → **累计** `network_bytes_sent/received` | 30s | 数字 |
 
-- **磁盘 I/O**：`psutil.disk_io_counters()` 无任何代码调用，已删除。
+- ✅ **磁盘 I/O 已实现**（`services/dashboard.py` `sample_disk_rates()`，仿照 `sample_network_rates`）：模块级 `_last_disk_sample` 记录上次 `read_bytes`/`write_bytes` + `time.monotonic()`，每次采样差分计算 `disk_read_mbps`/`disk_write_mbps`（MB/s，保留 2 位小数）；首次采样返回 0；计数器回绕/重启的负差钳制为 0；psutil 缺失、容器受限环境无 `disk_io_counters` 属性、返回 None 或抛错时降级为 0 且不保留采样状态。`get_system_info()` 同时暴露扁平字段与嵌套 `disk` 分组（容量 + 速率 + 累计字节）；SSE 增量推送沿用网络速率规则——不走 5% 阈值（该阈值仅适用于 CPU/内存百分比），速率任何变化即推（`collect_and_push_metrics`）；前端 SystemStatus 磁盘区域展示读写速率（缺值/0 显示 "--"）。
 > ⚠️ **已知契约冲突（前后端断裂，待修复）**：后端推送的是**累计字节数** `network_bytes_sent/network_bytes_recv`，而前端 `types/index.ts` 期待的是**速率** `network_in_kbps/network_out_kbps` — 后端从不返回速率字段，导致 SystemStatus 网络项恒显示 "--"。
 
 **psutil 采集策略**:
 - `cpu_percent(0.5)` 为 0.5s 采样间隔的阻塞调用，经 `asyncio.to_thread` 放入线程池执行，**不阻塞事件循环**（该调用本身约耗 0.5s，并非 "<1ms/次"）
-- `virtual_memory()` / `disk_usage()` / `net_io_counters()` 直接读取 /proc，开销可忽略
+- `virtual_memory()` / `disk_usage()` / `net_io_counters()` / `disk_io_counters()` 直接读取 /proc，开销可忽略
 
 ### 3.5 业务指标
 
@@ -258,7 +259,7 @@ graph LR
 ## 5. 边界情况
 
 - **psutil 不可用** ✅ 已实现（`services/dashboard.py` 顶部 try/except 导入，缺失时 `psutil=None` + 启动告警日志）：
-  `get_system_info` / `collect_and_push_metrics` / `archive_snapshot` 全部判空降级——CPU/内存/磁盘指标为 `None`、网络速率为 0（`sample_network_rates` 不再保留采样状态），快照的 psutil 列存 `None`；DB/Redis/SSE 采集与告警评估照常。响应带 `psutil_available: false` 标记（`SystemInfoResponse` 新增字段），全程不抛异常。
+  `get_system_info` / `collect_and_push_metrics` / `archive_snapshot` 全部判空降级——CPU/内存/磁盘指标为 `None`、网络/磁盘 I/O 速率为 0（`sample_network_rates` / `sample_disk_rates` 不再保留采样状态），快照的 psutil 列存 `None`；DB/Redis/SSE 采集与告警评估照常。响应带 `psutil_available: false` 标记（`SystemInfoResponse` 新增字段），全程不抛异常。
 - **阈值告警** ✅ 已实现（`DashboardService._collect_alerts`，每次 30s 采集循环内评估，内存中维护 `[{code, message, triggered_at}]`，同 code 活跃期去重、恢复即移除；`GET /dashboard/system` 新增 `alerts` 字段，列表变化时整体随 `system_metric_update` 推送）：
   - `redis_memory_high`：`used_memory / maxmemory > 0.8`（maxmemory 为 0/未设置则跳过）
   - `db_pool_exhausted`：连接池 `checked_out >= pool_size`（优先 SQLAlchemy `pool.checkedout()/size()`，回退 `status()` 对象取值）

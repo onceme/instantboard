@@ -54,6 +54,25 @@ const diskPercent = computed(() => {
       </div>
     </div>
 
+    <div v-if="systemInfo" class="disk-io-row">
+      <div class="network-item">
+        <span class="network-label">磁盘读</span>
+        <span class="network-value">{{
+          systemInfo.disk_read_mbps
+            ? `${systemInfo.disk_read_mbps} MB/s`
+            : "--"
+        }}</span>
+      </div>
+      <div class="network-item">
+        <span class="network-label">磁盘写</span>
+        <span class="network-value">{{
+          systemInfo.disk_write_mbps
+            ? `${systemInfo.disk_write_mbps} MB/s`
+            : "--"
+        }}</span>
+      </div>
+    </div>
+
     <div v-if="systemInfo" class="network-row">
       <div class="network-item">
         <span class="network-label">发送</span>
@@ -151,6 +170,12 @@ const diskPercent = computed(() => {
   margin-top: 12px;
   padding-top: 12px;
   border-top: 1px solid var(--border-light);
+}
+
+.disk-io-row {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 12px;
 }
 
 .network-item {

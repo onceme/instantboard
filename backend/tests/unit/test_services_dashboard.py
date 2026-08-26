@@ -52,6 +52,7 @@ class TestGetSystemInfo:
         mock_psutil.virtual_memory.return_value = MagicMock(total=8 * 1024**3, used=4 * 1024**3)
         mock_psutil.disk_usage.return_value = MagicMock(total=500 * 1024**3, used=200 * 1024**3)
         mock_psutil.net_io_counters.return_value = MagicMock(bytes_sent=1000, bytes_recv=2000)
+        mock_psutil.disk_io_counters.return_value = MagicMock(read_bytes=3000, write_bytes=4000)
 
         db, mock_result = _mock_db()
         mock_result.scalar.return_value = 5
@@ -79,6 +80,7 @@ class TestGetSystemInfo:
         mock_psutil.virtual_memory.return_value = MagicMock(total=4 * 1024**3, used=2 * 1024**3)
         mock_psutil.disk_usage.return_value = MagicMock(total=100 * 1024**3, used=50 * 1024**3)
         mock_psutil.net_io_counters.return_value = MagicMock(bytes_sent=500, bytes_recv=500)
+        mock_psutil.disk_io_counters.return_value = MagicMock(read_bytes=3000, write_bytes=4000)
 
         db, mock_result = _mock_db()
         mock_result.scalar.return_value = 0
@@ -96,6 +98,7 @@ class TestGetSystemInfo:
         mock_psutil.virtual_memory.return_value = MagicMock(total=4 * 1024**3, used=2 * 1024**3)
         mock_psutil.disk_usage.return_value = MagicMock(total=100 * 1024**3, used=50 * 1024**3)
         mock_psutil.net_io_counters.return_value = MagicMock(bytes_sent=500, bytes_recv=500)
+        mock_psutil.disk_io_counters.return_value = MagicMock(read_bytes=3000, write_bytes=4000)
 
         db, mock_result = _mock_db()
         db.execute = AsyncMock(side_effect=Exception("DB error"))
@@ -117,6 +120,7 @@ class TestGetSystemInfo:
         mock_psutil.virtual_memory.return_value = MagicMock(total=4 * 1024**3, used=2 * 1024**3)
         mock_psutil.disk_usage.return_value = MagicMock(total=100 * 1024**3, used=50 * 1024**3)
         mock_psutil.net_io_counters.return_value = MagicMock(bytes_sent=1000, bytes_recv=2000)
+        mock_psutil.disk_io_counters.return_value = MagicMock(read_bytes=3000, write_bytes=4000)
 
         saved = dash_mod._last_net_sample
         dash_mod._last_net_sample = None
@@ -137,6 +141,42 @@ class TestGetSystemInfo:
             "network_out_kbps": 0.0,
             "bytes_sent": 1000,
             "bytes_recv": 2000,
+        }
+
+    @patch("app.services.dashboard.psutil")
+    async def test_get_system_info_disk_rates(self, mock_psutil):
+        from app.services import dashboard as dash_mod
+
+        mock_psutil.cpu_percent.return_value = 10.0
+        mock_psutil.cpu_count.return_value = 2
+        mock_psutil.virtual_memory.return_value = MagicMock(total=4 * 1024**3, used=2 * 1024**3)
+        mock_psutil.disk_usage.return_value = MagicMock(total=100 * 1024**3, used=50 * 1024**3)
+        mock_psutil.net_io_counters.return_value = MagicMock(bytes_sent=500, bytes_recv=500)
+        mock_psutil.disk_io_counters.return_value = MagicMock(read_bytes=3000, write_bytes=4000)
+
+        saved = dash_mod._last_disk_sample
+        dash_mod._last_disk_sample = None
+        try:
+            db, mock_result = _mock_db()
+            mock_result.scalar.return_value = 0
+            service = DashboardService(db, None)
+            result = await service.get_system_info(datetime.now(UTC))
+        finally:
+            dash_mod._last_disk_sample = saved
+
+        # First sample: rates are 0 but present; capacity fields stay intact.
+        assert result["disk_read_mbps"] == 0.0
+        assert result["disk_write_mbps"] == 0.0
+        assert result["disk_total_gb"] is not None
+        assert result["disk_used_gb"] is not None
+        # Disk group keeps capacity + rate + cumulative fields together.
+        assert result["disk"] == {
+            "disk_total_gb": result["disk_total_gb"],
+            "disk_used_gb": result["disk_used_gb"],
+            "disk_read_mbps": 0.0,
+            "disk_write_mbps": 0.0,
+            "read_bytes": 3000,
+            "write_bytes": 4000,
         }
 
 
@@ -624,18 +664,24 @@ class TestCollectAndPushMetrics:
         mock_psutil.virtual_memory.return_value = MagicMock(percent=50.0)
         mock_psutil.disk_usage.return_value = MagicMock(percent=60.0)
         mock_psutil.net_io_counters.return_value = MagicMock(bytes_sent=1000, bytes_recv=2000)
+        mock_psutil.disk_io_counters.return_value = MagicMock(read_bytes=3000, write_bytes=4000)
 
         mock_router.push_event = AsyncMock()
 
         db, _ = _mock_db()
 
-        from app.services.dashboard import _last_metrics
+        from app.services import dashboard as dash_mod
 
-        _last_metrics.clear()
+        dash_mod._last_metrics.clear()
+        dash_mod._last_disk_sample = None
 
         service = DashboardService(db, _mock_redis())
         await service.collect_and_push_metrics(datetime.now(UTC))
         mock_router.push_event.assert_called_once()
+        # First push ships the full baseline, including the disk I/O rates.
+        payload = mock_router.push_event.call_args.kwargs["data"]
+        assert payload["disk_read_mbps"] == 0.0
+        assert payload["disk_write_mbps"] == 0.0
 
     @patch("app.services.dashboard.event_router")
     @patch("app.services.dashboard.redis_set", new_callable=AsyncMock)
@@ -645,6 +691,10 @@ class TestCollectAndPushMetrics:
         mock_psutil.virtual_memory.return_value = MagicMock(percent=60.0)
         mock_psutil.disk_usage.return_value = MagicMock(percent=60.0)
         mock_psutil.net_io_counters.return_value = MagicMock(bytes_sent=2000, bytes_recv=3000)
+        # Disk counters advance by 1 MiB read / 0.5 MiB write over the 10s window.
+        mock_psutil.disk_io_counters.return_value = MagicMock(
+            read_bytes=4000 + 1024 * 1024, write_bytes=5000 + 512 * 1024
+        )
 
         mock_router.push_event = AsyncMock()
 
@@ -660,10 +710,17 @@ class TestCollectAndPushMetrics:
             "network_out_kbps": 0.0,
             "network_bytes_sent": 1000,
             "network_bytes_recv": 2000,
+            "disk_read_mbps": 0.0,
+            "disk_write_mbps": 0.0,
         }
         dash_mod._last_net_sample = {
             "bytes_recv": 2000,
             "bytes_sent": 1000,
+            "timestamp": 100.0,
+        }
+        dash_mod._last_disk_sample = {
+            "read_bytes": 4000,
+            "write_bytes": 5000,
             "timestamp": 100.0,
         }
 
@@ -671,6 +728,10 @@ class TestCollectAndPushMetrics:
         with patch("app.services.dashboard.time.monotonic", return_value=110.0):
             await service.collect_and_push_metrics(datetime.now(UTC))
         mock_router.push_event.assert_called_once()
+        payload = mock_router.push_event.call_args.kwargs["data"]
+        # Disk rates follow the network-rate rule: any change is pushed as-is.
+        assert payload["disk_read_mbps"] == pytest.approx(0.1, abs=1e-4)
+        assert payload["disk_write_mbps"] == pytest.approx(0.05, abs=1e-4)
 
     @patch("app.services.dashboard.event_router")
     @patch("app.services.dashboard.redis_set", new_callable=AsyncMock)
@@ -681,6 +742,7 @@ class TestCollectAndPushMetrics:
         mock_psutil.disk_usage.return_value = MagicMock(percent=60.0)
         # Counters unchanged from the previous sample -> rate 0.0 (matches _last_metrics).
         mock_psutil.net_io_counters.return_value = MagicMock(bytes_sent=1000, bytes_recv=2000)
+        mock_psutil.disk_io_counters.return_value = MagicMock(read_bytes=3000, write_bytes=4000)
 
         mock_router.push_event = AsyncMock()
 
@@ -696,12 +758,19 @@ class TestCollectAndPushMetrics:
             "network_out_kbps": 0.0,
             "network_bytes_sent": 1000,
             "network_bytes_recv": 2000,
+            "disk_read_mbps": 0.0,
+            "disk_write_mbps": 0.0,
         }
-        # Seed the previous net sample with identical counters so the computed
-        # rate is 0.0 and nothing changes.
+        # Seed the previous net/disk samples with identical counters so the
+        # computed rates are 0.0 and nothing changes.
         dash_mod._last_net_sample = {
             "bytes_recv": 2000,
             "bytes_sent": 1000,
+            "timestamp": 100.0,
+        }
+        dash_mod._last_disk_sample = {
+            "read_bytes": 3000,
+            "write_bytes": 4000,
             "timestamp": 100.0,
         }
 
@@ -718,6 +787,7 @@ class TestCollectAndPushMetrics:
         mock_psutil.virtual_memory.return_value = MagicMock(percent=50.0)
         mock_psutil.disk_usage.return_value = MagicMock(percent=60.0)
         mock_psutil.net_io_counters.return_value = MagicMock(bytes_sent=1000, bytes_recv=2000)
+        mock_psutil.disk_io_counters.return_value = MagicMock(read_bytes=3000, write_bytes=4000)
 
         mock_router.push_event = AsyncMock()
 
@@ -726,6 +796,7 @@ class TestCollectAndPushMetrics:
         from app.services import dashboard as dash_mod
 
         dash_mod._last_metrics.clear()
+        dash_mod._last_disk_sample = None
 
         service = DashboardService(db, _mock_redis())
         await service.collect_and_push_metrics(datetime.now(UTC))
@@ -813,6 +884,120 @@ class TestSampleNetworkRates:
         assert data["network_bytes_sent"] == 0
         assert data["network_bytes_recv"] == 0
         assert dash_mod._last_net_sample is None
+
+
+class TestSampleDiskRates:
+    """MB/s rates computed from consecutive disk_io_counters() samples.
+
+    Mirrors TestSampleNetworkRates: module-level ``_last_disk_sample`` carries
+    state between samples, so every test resets it before and after running.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset_disk_sample(self):
+        from app.services import dashboard as dash_mod
+
+        saved = dash_mod._last_disk_sample
+        dash_mod._last_disk_sample = None
+        yield
+        dash_mod._last_disk_sample = saved
+
+    @patch("app.services.dashboard.psutil")
+    def test_first_sample_returns_zero(self, mock_psutil):
+        from app.services.dashboard import sample_disk_rates
+
+        mock_psutil.disk_io_counters.return_value = MagicMock(read_bytes=3000, write_bytes=4000)
+
+        with patch("app.services.dashboard.time.monotonic", return_value=100.0):
+            data = sample_disk_rates()
+
+        assert data["disk_read_mbps"] == 0.0
+        assert data["disk_write_mbps"] == 0.0
+        # Cumulative counters stay available alongside the rates.
+        assert data["disk_read_bytes"] == 3000
+        assert data["disk_write_bytes"] == 4000
+
+    @patch("app.services.dashboard.psutil")
+    def test_second_sample_computes_mbps(self, mock_psutil):
+        from app.services import dashboard as dash_mod
+        from app.services.dashboard import sample_disk_rates
+
+        mock_psutil.disk_io_counters.return_value = MagicMock(read_bytes=0, write_bytes=0)
+        with patch("app.services.dashboard.time.monotonic", return_value=100.0):
+            sample_disk_rates()
+
+        # +10 MiB read and +5 MiB written over 10s -> 1.0 / 0.5 MB/s.
+        mock_psutil.disk_io_counters.return_value = MagicMock(read_bytes=10 * 1024 * 1024, write_bytes=5 * 1024 * 1024)
+        with patch("app.services.dashboard.time.monotonic", return_value=110.0):
+            data = sample_disk_rates()
+
+        assert data["disk_read_mbps"] == 1.0
+        assert data["disk_write_mbps"] == 0.5
+        assert data["disk_read_bytes"] == 10 * 1024 * 1024
+        assert data["disk_write_bytes"] == 5 * 1024 * 1024
+        assert dash_mod._last_disk_sample["timestamp"] == 110.0
+
+    @patch("app.services.dashboard.psutil")
+    def test_counter_reset_clamped_to_zero(self, mock_psutil):
+        from app.services.dashboard import sample_disk_rates
+
+        mock_psutil.disk_io_counters.return_value = MagicMock(read_bytes=9 * 1024 * 1024, write_bytes=9 * 1024 * 1024)
+        with patch("app.services.dashboard.time.monotonic", return_value=100.0):
+            sample_disk_rates()
+
+        # Reboot/wrap: counters drop below the previous sample -> clamp to 0, never negative.
+        mock_psutil.disk_io_counters.return_value = MagicMock(read_bytes=100, write_bytes=100)
+        with patch("app.services.dashboard.time.monotonic", return_value=110.0):
+            data = sample_disk_rates()
+
+        assert data["disk_read_mbps"] == 0.0
+        assert data["disk_write_mbps"] == 0.0
+
+    @patch("app.services.dashboard.psutil")
+    def test_none_counters_keeps_state(self, mock_psutil):
+        from app.services import dashboard as dash_mod
+        from app.services.dashboard import sample_disk_rates
+
+        mock_psutil.disk_io_counters.return_value = None
+
+        with patch("app.services.dashboard.time.monotonic", return_value=100.0):
+            data = sample_disk_rates()
+
+        assert data["disk_read_mbps"] == 0.0
+        assert data["disk_write_mbps"] == 0.0
+        assert data["disk_read_bytes"] == 0
+        assert data["disk_write_bytes"] == 0
+        assert dash_mod._last_disk_sample is None
+
+    @patch("app.services.dashboard.psutil", new=MagicMock(spec=["net_io_counters"]))
+    def test_missing_attribute_degrades(self):
+        """Restricted containers: disk_io_counters attribute absent entirely."""
+        from app.services import dashboard as dash_mod
+        from app.services.dashboard import sample_disk_rates
+
+        data = sample_disk_rates()
+
+        assert data == {
+            "disk_read_mbps": 0.0,
+            "disk_write_mbps": 0.0,
+            "disk_read_bytes": 0,
+            "disk_write_bytes": 0,
+        }
+        assert dash_mod._last_disk_sample is None
+
+    @patch("app.services.dashboard.psutil")
+    def test_raising_counters_degrades(self, mock_psutil):
+        """Restricted containers: disk_io_counters() raises -> degrade, no exception."""
+        from app.services import dashboard as dash_mod
+        from app.services.dashboard import sample_disk_rates
+
+        mock_psutil.disk_io_counters.side_effect = OSError("no /proc/diskstats")
+
+        data = sample_disk_rates()
+
+        assert data["disk_read_mbps"] == 0.0
+        assert data["disk_write_mbps"] == 0.0
+        assert dash_mod._last_disk_sample is None
 
 
 class TestArchiveSnapshot:
@@ -908,6 +1093,7 @@ class TestGetSystemInfoExtraPaths:
         mock_psutil.virtual_memory.return_value = MagicMock(total=4 * 1024**3, used=2 * 1024**3)
         mock_psutil.disk_usage.return_value = MagicMock(total=100 * 1024**3, used=50 * 1024**3)
         mock_psutil.net_io_counters.return_value = MagicMock(bytes_sent=500, bytes_recv=500)
+        mock_psutil.disk_io_counters.return_value = MagicMock(read_bytes=3000, write_bytes=4000)
 
         db, mock_result = _mock_db()
         mock_result.scalar.return_value = 3
@@ -932,6 +1118,7 @@ class TestGetSystemInfoExtraPaths:
         mock_psutil.virtual_memory.return_value = MagicMock(total=4 * 1024**3, used=2 * 1024**3)
         mock_psutil.disk_usage.return_value = MagicMock(total=100 * 1024**3, used=50 * 1024**3)
         mock_psutil.net_io_counters.return_value = MagicMock(bytes_sent=500, bytes_recv=500)
+        mock_psutil.disk_io_counters.return_value = MagicMock(read_bytes=3000, write_bytes=4000)
 
         db, mock_result = _mock_db()
         mock_result.scalar.return_value = 0
@@ -1101,6 +1288,7 @@ class TestCollectAndPushMetricsExtraPaths:
         mock_psutil.virtual_memory.return_value = MagicMock(percent=50.0)
         mock_psutil.disk_usage.return_value = MagicMock(percent=60.0)
         mock_psutil.net_io_counters.return_value = MagicMock(bytes_sent=1000, bytes_recv=2000)
+        mock_psutil.disk_io_counters.return_value = MagicMock(read_bytes=3000, write_bytes=4000)
 
         mock_router.push_event = AsyncMock(side_effect=Exception("SSE push failed"))
 
@@ -1519,6 +1707,7 @@ class _AlertStateReset:
         saved_degraded = dash_mod._collection_degraded
         saved_last_metrics = dict(dash_mod._last_metrics)
         saved_net_sample = dash_mod._last_net_sample
+        saved_disk_sample = dash_mod._last_disk_sample
 
         dash_mod._active_alerts.clear()
         dash_mod._alerts_signature = ()
@@ -1526,6 +1715,7 @@ class _AlertStateReset:
         dash_mod._collection_degraded = False
         dash_mod._last_metrics.clear()
         dash_mod._last_net_sample = None
+        dash_mod._last_disk_sample = None
 
         yield
 
@@ -1537,6 +1727,7 @@ class _AlertStateReset:
         dash_mod._last_metrics.clear()
         dash_mod._last_metrics.update(saved_last_metrics)
         dash_mod._last_net_sample = saved_net_sample
+        dash_mod._last_disk_sample = saved_disk_sample
 
 
 class TestPsutilDegradation(_AlertStateReset):
@@ -1559,10 +1750,13 @@ class TestPsutilDegradation(_AlertStateReset):
         assert result["memory_used_mb"] is None
         assert result["disk_total_gb"] is None
         assert result["disk_used_gb"] is None
-        # network degrades to zeros; DB/Redis probes still run
+        # network and disk I/O degrade to zeros; DB/Redis probes still run
         assert result["network_in_kbps"] == 0.0
         assert result["network_out_kbps"] == 0.0
         assert result["network"]["bytes_sent"] == 0
+        assert result["disk_read_mbps"] == 0.0
+        assert result["disk_write_mbps"] == 0.0
+        assert result["disk"]["read_bytes"] == 0
         assert result["database"]["redis_connected"] is True
         assert result["alerts"] == []
 
@@ -1580,6 +1774,21 @@ class TestPsutilDegradation(_AlertStateReset):
         }
         # no sample state is kept while psutil is absent
         assert dash_mod._last_net_sample is None
+
+    @patch("app.services.dashboard.psutil", None)
+    def test_sample_disk_rates_degraded(self):
+        from app.services import dashboard as dash_mod
+        from app.services.dashboard import sample_disk_rates
+
+        data = sample_disk_rates()
+        assert data == {
+            "disk_read_mbps": 0.0,
+            "disk_write_mbps": 0.0,
+            "disk_read_bytes": 0,
+            "disk_write_bytes": 0,
+        }
+        # no sample state is kept while psutil is absent
+        assert dash_mod._last_disk_sample is None
 
     @patch("app.services.dashboard.event_router")
     @patch("app.services.dashboard.redis_set", new_callable=AsyncMock)
@@ -1599,6 +1808,8 @@ class TestPsutilDegradation(_AlertStateReset):
         assert payload["memory_usage_percent"] is None
         assert payload["disk_usage_percent"] is None
         assert payload["network_in_kbps"] == 0.0
+        assert payload["disk_read_mbps"] == 0.0
+        assert payload["disk_write_mbps"] == 0.0
 
     @patch("app.services.dashboard.settings")
     @patch("app.services.dashboard.scheduler_manager")
@@ -1638,6 +1849,7 @@ class TestThresholdAlerts(_AlertStateReset):
         mock_psutil.virtual_memory.return_value = MagicMock(percent=50.0)
         mock_psutil.disk_usage.return_value = MagicMock(percent=60.0)
         mock_psutil.net_io_counters.return_value = MagicMock(bytes_sent=1000, bytes_recv=2000)
+        mock_psutil.disk_io_counters.return_value = MagicMock(read_bytes=3000, write_bytes=4000)
         mock_router.get_stats.return_value = {"total_connections": 5}
         mock_router.push_event = AsyncMock()
 
@@ -1678,6 +1890,7 @@ class TestThresholdAlerts(_AlertStateReset):
         mock_psutil.virtual_memory.return_value = MagicMock(percent=50.0)
         mock_psutil.disk_usage.return_value = MagicMock(percent=60.0)
         mock_psutil.net_io_counters.return_value = MagicMock(bytes_sent=1000, bytes_recv=2000)
+        mock_psutil.disk_io_counters.return_value = MagicMock(read_bytes=3000, write_bytes=4000)
         mock_router.get_stats.return_value = {"total_connections": 0}
         mock_router.push_event = AsyncMock()
 
@@ -1704,6 +1917,7 @@ class TestThresholdAlerts(_AlertStateReset):
         mock_psutil.virtual_memory.return_value = MagicMock(percent=50.0)
         mock_psutil.disk_usage.return_value = MagicMock(percent=60.0)
         mock_psutil.net_io_counters.return_value = MagicMock(bytes_sent=1000, bytes_recv=2000)
+        mock_psutil.disk_io_counters.return_value = MagicMock(read_bytes=3000, write_bytes=4000)
         mock_router.get_stats.return_value = {"total_connections": 0}
         mock_router.push_event = AsyncMock()
 
@@ -1726,6 +1940,7 @@ class TestThresholdAlerts(_AlertStateReset):
         mock_psutil.virtual_memory.return_value = MagicMock(percent=50.0)
         mock_psutil.disk_usage.return_value = MagicMock(percent=60.0)
         mock_psutil.net_io_counters.return_value = MagicMock(bytes_sent=1000, bytes_recv=2000)
+        mock_psutil.disk_io_counters.return_value = MagicMock(read_bytes=3000, write_bytes=4000)
         mock_router.get_stats.return_value = {"total_connections": 0}
         mock_router.push_event = AsyncMock()
 
@@ -1753,6 +1968,7 @@ class TestThresholdAlerts(_AlertStateReset):
         mock_psutil.virtual_memory.return_value = MagicMock(percent=50.0)
         mock_psutil.disk_usage.return_value = MagicMock(percent=60.0)
         mock_psutil.net_io_counters.return_value = MagicMock(bytes_sent=1000, bytes_recv=2000)
+        mock_psutil.disk_io_counters.return_value = MagicMock(read_bytes=3000, write_bytes=4000)
         mock_router.get_stats.return_value = {"total_connections": 1500}
         mock_router.push_event = AsyncMock()
 
@@ -1790,6 +2006,7 @@ class TestThresholdAlerts(_AlertStateReset):
         mock_psutil.virtual_memory.return_value = MagicMock(total=4 * 1024**3, used=2 * 1024**3)
         mock_psutil.disk_usage.return_value = MagicMock(total=100 * 1024**3, used=50 * 1024**3)
         mock_psutil.net_io_counters.return_value = MagicMock(bytes_sent=500, bytes_recv=500)
+        mock_psutil.disk_io_counters.return_value = MagicMock(read_bytes=3000, write_bytes=4000)
 
         dash_mod._set_alert("redis_memory_high", "Redis memory usage above 80% of maxmemory")
 
@@ -1860,6 +2077,7 @@ class TestAdaptiveCollectInterval(_AlertStateReset):
         mock_psutil.virtual_memory.return_value = MagicMock(percent=50.0)
         mock_psutil.disk_usage.return_value = MagicMock(percent=60.0)
         mock_psutil.net_io_counters.return_value = MagicMock(bytes_sent=0, bytes_recv=0)
+        mock_psutil.disk_io_counters.return_value = MagicMock(read_bytes=3000, write_bytes=4000)
         mock_router.get_stats.return_value = {"total_connections": 0}
         mock_router.push_event = AsyncMock()
 

@@ -411,6 +411,29 @@ export interface SSEStats {
   events_pushed_24h: number;
 }
 
+// GET /api/v1/dashboard/business-metrics (admin only) — backend
+// schemas/dashboard.py BusinessMetricsResponse. One entry of the
+// category distribution list.
+export interface BusinessCategoryCount {
+  category_name: string;
+  count: number;
+}
+
+// All counters are system-wide (all tenants). Any unavailable sub-metric
+// degrades to 0 / empty list on the backend instead of erroring.
+export interface BusinessMetrics {
+  // Distinct users with an SSE connection within the last 24 hours.
+  active_users_24h: number;
+  // Items created since today 00:00 UTC.
+  items_today: number;
+  // Items grouped by category, sorted descending by count.
+  category_distribution: BusinessCategoryCount[];
+  // Total watchlist entries.
+  watchlist_total: number;
+  // SSE push events counted over the sliding 60-minute window.
+  events_pushed_1h: number;
+}
+
 // Category & Source types
 export interface Category {
   id: string;

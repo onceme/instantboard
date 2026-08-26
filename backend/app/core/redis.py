@@ -71,6 +71,15 @@ class RedisKeys:
     APIKEY_ROTATION = "apikey:rotation:{service}"
     APIKEY_LIMITED = "apikey:limited:{service}:{key_hash}"
     APIKEY_INVALID = "apikey:invalid:{service}:{key_hash}"
+    # Business metrics payload cached by DashboardService.get_business_metrics()
+    # and served by GET /dashboard/business-metrics (dashboard-tab.md §3.5). The
+    # aggregate JOIN/COUNT queries are expensive, so the whole response is cached
+    # for BUSINESS_METRICS_TTL seconds.
+    BUSINESS_METRICS = "dashboard:business_metrics"
+    # Per-minute buckets of SSE push events written by SSEEventRouter.push_event
+    # (core/sse_router.py) and summed over a sliding 60-minute window by
+    # DashboardService._events_pushed_window().
+    EVENTS_PUSHED_MINUTE = "dashboard:events_pushed:minute:{minute}"
 
     SEARCH_TTL = 300
     STREAM_HISTORY_LIMIT = 500
@@ -82,6 +91,12 @@ class RedisKeys:
     # Minute-bucket TTL: covers the bucket being written plus the previous one,
     # which is all the sliding 60s window reader ever needs.
     API_METRICS_MINUTE_TTL = 120
+    # Business metrics cache TTL (seconds) for BUSINESS_METRICS.
+    BUSINESS_METRICS_TTL = 60
+    # SSE push-event minute-bucket TTL. Unlike API_METRICS_MINUTE_TTL this must
+    # keep every bucket alive for the FULL 60-minute read window, so the oldest
+    # bucket the window ever reads (now - 59min) still exists when summed.
+    EVENTS_PUSHED_MINUTE_TTL = 62 * 60
 
     @staticmethod
     def session_key(session_id: str) -> str:
@@ -126,6 +141,10 @@ class RedisKeys:
     @staticmethod
     def api_metrics_minute_key(minute: int) -> str:
         return RedisKeys.API_METRICS_MINUTE.format(minute=minute)
+
+    @staticmethod
+    def events_pushed_minute_key(minute: int) -> str:
+        return RedisKeys.EVENTS_PUSHED_MINUTE.format(minute=minute)
 
     @staticmethod
     def sso_state_key(state_key: str) -> str:

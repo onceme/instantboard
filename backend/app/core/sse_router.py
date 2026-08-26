@@ -8,12 +8,33 @@ from enum import StrEnum
 
 from app.core.redis import (
     RedisKeys,
+    get_redis_client,
     redis_lrange,
     redis_publish,
     redis_push_history,
 )
 
 logger = logging.getLogger(__name__)
+
+
+async def _record_push_event_count() -> None:
+    """Count one pushed SSE event into a Redis minute bucket.
+
+    Single non-transactional pipeline, single round trip, fire-and-forget —
+    no exception may ever reach the publish path (mirrors
+    core/middleware.py::_record_request_stats). Reader side:
+    DashboardService._events_pushed_window() sums the sliding 60-minute window
+    for GET /dashboard/business-metrics (dashboard-tab.md §3.5).
+    """
+    try:
+        client = await get_redis_client()
+        minute_key = RedisKeys.events_pushed_minute_key(int(time.time()) // 60)
+        pipe = client.pipeline(transaction=False)
+        pipe.incr(minute_key)
+        pipe.expire(minute_key, RedisKeys.EVENTS_PUSHED_MINUTE_TTL)
+        await pipe.execute()
+    except Exception as e:
+        logger.debug(f"Failed to record SSE push event count: {e}")
 
 
 class SSEEventType(StrEnum):
@@ -131,6 +152,11 @@ class SSEEventRouter:
             await redis_publish(channel_key, message)
         except Exception as e:
             logger.warning(f"Redis Pub/Sub publish failed for {channel_key}: {e}, falling back to direct push")
+
+        # Business-metrics counter (dashboard-tab.md §3.5 "SSE推送事件数(1h)"):
+        # count every push_event regardless of publish success; failures inside
+        # the helper are only logged and never break the live push.
+        await _record_push_event_count()
 
         await self._on_redis_message(channel_key, message)
 

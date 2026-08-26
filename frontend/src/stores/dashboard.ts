@@ -1,6 +1,7 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
 import type {
+  BusinessMetrics,
   DashboardSystemInfo,
   ServiceHealth,
   DataSourceHealthSummary,
@@ -20,6 +21,7 @@ export const useDashboardStore = defineStore("dashboard", () => {
   const dataSources = ref<DataSourceHealthSummary | null>(null);
   const scheduler = ref<SchedulerStatusResponse | null>(null);
   const sseStats = ref<SSEStats | null>(null);
+  const businessMetrics = ref<BusinessMetrics | null>(null);
   const sseConnection = ref<SSEConnection | null>(null);
   const sseState = ref<SSEConnectionState>(SSEConnectionState.DISCONNECTED);
 
@@ -52,6 +54,20 @@ export const useDashboardStore = defineStore("dashboard", () => {
   async function fetchSSEStats() {
     const response = await apiGet<SSEStats>("/dashboard/sse-stats");
     sseStats.value = response.data;
+  }
+
+  async function fetchBusinessMetrics() {
+    // Admin-only endpoint; degrade silently (403 / network error keeps the
+    // panel hidden instead of breaking the dashboard). Contract:
+    // docs/dev-guide/design/dashboard-tab.md §3.5.
+    try {
+      const response = await apiGet<BusinessMetrics>(
+        "/dashboard/business-metrics",
+      );
+      businessMetrics.value = response.data;
+    } catch {
+      businessMetrics.value = null;
+    }
   }
 
   function updateSystemMetricFromSSE(data: Partial<DashboardSystemInfo>) {
@@ -153,6 +169,7 @@ export const useDashboardStore = defineStore("dashboard", () => {
     fetchDataSources();
     fetchScheduler();
     fetchSSEStats();
+    fetchBusinessMetrics();
     connectSSE();
   }
 
@@ -166,6 +183,7 @@ export const useDashboardStore = defineStore("dashboard", () => {
     dataSources,
     scheduler,
     sseStats,
+    businessMetrics,
     sseState,
     cpuHistory,
     memoryHistory,
@@ -174,6 +192,7 @@ export const useDashboardStore = defineStore("dashboard", () => {
     fetchDataSources,
     fetchScheduler,
     fetchSSEStats,
+    fetchBusinessMetrics,
     updateSystemMetricFromSSE,
     updateSourceHealthFromSSE,
     connectSSE,

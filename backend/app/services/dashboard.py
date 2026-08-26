@@ -17,9 +17,12 @@ from app.config import settings
 from app.core.constants import SYSTEM_TENANT_ID
 from app.core.redis import RedisKeys, redis_get, redis_set
 from app.core.sse_router import SSEEventType, event_router
+from app.models.category import Category
 from app.models.dashboard import DashboardSnapshot
+from app.models.item import Item
 from app.models.source import Source, SourceHealth
 from app.models.sse import SSEConnection as SSEConnectionModel
+from app.models.watchlist import WatchlistItem
 from app.scheduler.manager import scheduler_manager
 from app.services.source import SourceService
 
@@ -1003,6 +1006,126 @@ class DashboardService:
             "average_events_per_minute": round(avg_events_per_minute, 2),
             "avg_connection_duration_seconds": stats.get("avg_connection_duration_seconds", 0),
         }
+
+    async def _events_pushed_window(self) -> int:
+        """SSE push events emitted over the sliding 60-minute window ending now.
+
+        Sums the per-minute buckets written by SSEEventRouter.push_event
+        (core/sse_router.py::_record_push_event_count,
+        dashboard:events_pushed:minute:{minute}). Degraded Redis (no client, or
+        a read error) and missing/corrupt bucket values count as 0; never raises.
+        """
+        if self.redis is None:
+            return 0
+        try:
+            now_minute = int(time.time()) // 60
+            keys = [RedisKeys.events_pushed_minute_key(now_minute - offset) for offset in range(60)]
+            values = await self.redis.mget(keys)
+        except Exception as e:
+            logger.warning(f"Failed to read SSE events-pushed buckets from Redis: {e}")
+            return 0
+
+        total = 0
+        for value in values or []:
+            if value is None:
+                continue
+            try:
+                total += int(value)
+            except (TypeError, ValueError):
+                continue
+        return total
+
+    async def get_business_metrics(self) -> dict:
+        """Five business metrics for GET /dashboard/business-metrics (admin only).
+
+        Scope: **system-wide (all tenants)**, not per-tenant. Every dashboard
+        endpoint is admin-only and reports the aggregate operational picture, so
+        these counters deliberately omit tenant_id filters (per-tenant isolation
+        belongs to the feed endpoints). contract: dashboard-tab.md §3.5.
+
+        Metrics:
+          active_users_24h       distinct user_id with an sse_connections row
+                                 connected within the last 24 hours
+          items_today            items.created_at >= today 00:00 UTC
+          category_distribution  items grouped by category_id JOIN
+                                 categories.name, [{"category_name", count}],
+                                 sorted descending by count
+          watchlist_total        row count of watchlist_items
+          events_pushed_1h       sliding 60-minute sum of the SSE push-event
+                                 minute buckets (see _events_pushed_window)
+
+        The assembled payload is cached in Redis for BUSINESS_METRICS_TTL seconds
+        to keep the JOIN/COUNT queries off the hot request path. Any single
+        sub-query failing degrades that metric to 0 / empty list instead of
+        failing the endpoint. Never raises for degraded Redis.
+        """
+        cache_key = RedisKeys.BUSINESS_METRICS
+        try:
+            cached = await redis_get(cache_key)
+            if cached:
+                return json.loads(cached)
+        except Exception as e:
+            logger.warning(f"Failed to read business metrics cache: {e}")
+
+        active_users_24h = 0
+        items_today = 0
+        category_distribution: list[dict] = []
+        watchlist_total = 0
+
+        now = datetime.now(UTC)
+        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        day_ago = now - timedelta(hours=24)
+
+        try:
+            result = await self.db.execute(
+                select(func.count(func.distinct(SSEConnectionModel.user_id))).where(
+                    SSEConnectionModel.connected_at >= day_ago
+                )
+            )
+            active_users_24h = result.scalar() or 0
+        except Exception as e:
+            logger.warning(f"Failed to compute active users metric: {e}")
+
+        try:
+            result = await self.db.execute(select(func.count()).select_from(Item).where(Item.created_at >= day_start))
+            items_today = result.scalar() or 0
+        except Exception as e:
+            logger.warning(f"Failed to compute items-today metric: {e}")
+
+        try:
+            result = await self.db.execute(
+                select(Category.name, func.count(Item.id))
+                .select_from(Item)
+                .join(Category, Item.category_id == Category.id)
+                .group_by(Category.name)
+                .order_by(func.count(Item.id).desc())
+            )
+            category_distribution = [{"category_name": name, "count": count} for name, count in result.all()]
+        except Exception as e:
+            logger.warning(f"Failed to compute category distribution metric: {e}")
+
+        try:
+            result = await self.db.execute(select(func.count()).select_from(WatchlistItem))
+            watchlist_total = result.scalar() or 0
+        except Exception as e:
+            logger.warning(f"Failed to compute watchlist-total metric: {e}")
+
+        events_pushed_1h = await self._events_pushed_window()
+
+        metrics = {
+            "active_users_24h": active_users_24h,
+            "items_today": items_today,
+            "category_distribution": category_distribution,
+            "watchlist_total": watchlist_total,
+            "events_pushed_1h": events_pushed_1h,
+        }
+
+        try:
+            await redis_set(cache_key, json.dumps(metrics), ex=RedisKeys.BUSINESS_METRICS_TTL)
+        except Exception as e:
+            logger.warning(f"Failed to cache business metrics: {e}")
+
+        return metrics
 
     def _db_pool_utilization(self) -> tuple[int | None, int | None]:
         """Best-effort (checked_out, pool_size) snapshot of the DB connection pool.

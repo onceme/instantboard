@@ -179,6 +179,30 @@ class SSEStatsResponse(BaseModel):
     avg_connection_duration_seconds: float | None = None
 
 
+class BusinessCategoryCount(BaseModel):
+    category_name: str
+    count: int
+
+
+class BusinessMetricsResponse(BaseModel):
+    """GET /api/v1/dashboard/business-metrics (admin only, dashboard-tab.md §3.5).
+
+    All counters are system-wide (all tenants); any unavailable sub-metric
+    degrades to 0 / empty list rather than erroring the whole response.
+    """
+
+    # Distinct user_id that opened an SSE connection within the last 24 hours.
+    active_users_24h: int = 0
+    # Items with created_at >= today 00:00 UTC.
+    items_today: int = 0
+    # Items grouped by category (name JOIN), sorted descending by count.
+    category_distribution: list[BusinessCategoryCount] = Field(default_factory=list)
+    # Total rows in watchlist_items.
+    watchlist_total: int = 0
+    # SSE push events counted over the sliding 60-minute window ending now.
+    events_pushed_1h: int = 0
+
+
 class SystemMetricUpdate(BaseModel):
     cpu_usage_percent: float | None = None
     memory_usage_percent: float | None = None

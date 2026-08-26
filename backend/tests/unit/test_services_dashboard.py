@@ -2390,3 +2390,153 @@ class TestMetricsLoopSnapshotCleanup:
         assert mock_collect.await_count == 2
         mock_cleanup.assert_awaited_once_with(session)
         assert any("removed 7 rows" in str(call) for call in mock_logger.info.call_args_list)
+
+
+class TestGetBusinessMetrics:
+    """GET /dashboard/business-metrics — five system-wide business metrics
+    (dashboard-tab.md §3.5). db.execute is invoked 4 times, in order:
+    active users, items today, category distribution, watchlist total."""
+
+    @staticmethod
+    def _exec_results(active_users, items_today, category_rows, watchlist_total):
+        r_active = MagicMock()
+        r_active.scalar.return_value = active_users
+        r_items = MagicMock()
+        r_items.scalar.return_value = items_today
+        r_cat = MagicMock()
+        r_cat.all.return_value = category_rows
+        r_watch = MagicMock()
+        r_watch.scalar.return_value = watchlist_total
+        return [r_active, r_items, r_cat, r_watch]
+
+    @patch("app.services.dashboard.redis_set", new_callable=AsyncMock)
+    @patch("app.services.dashboard.redis_get", new_callable=AsyncMock, return_value=None)
+    async def test_all_metrics_computed(self, _mock_get, mock_redis_set):
+        db, _ = _mock_db()
+        db.execute = AsyncMock(side_effect=self._exec_results(7, 15, [("Finance", 10), ("Tech", 5)], 3))
+        redis = _mock_redis()
+        redis.mget = AsyncMock(return_value=["10", "20", None, "5"] + [None] * 56)
+
+        service = DashboardService(db, redis)
+        metrics = await service.get_business_metrics()
+
+        assert metrics["active_users_24h"] == 7
+        assert metrics["items_today"] == 15
+        assert metrics["category_distribution"] == [
+            {"category_name": "Finance", "count": 10},
+            {"category_name": "Tech", "count": 5},
+        ]
+        assert metrics["watchlist_total"] == 3
+        assert metrics["events_pushed_1h"] == 35
+
+        # Four DB queries, in the documented order.
+        assert db.execute.await_count == 4
+        # Minute-bucket window reads exactly 60 buckets ending at the current minute.
+        keys = redis.mget.await_args.args[0]
+        assert len(keys) == 60
+        assert keys[0] == RedisKeys.events_pushed_minute_key(int(time.time()) // 60)
+        # Result cached with the 60s TTL.
+        mock_redis_set.assert_awaited_once()
+        assert mock_redis_set.await_args.kwargs["ex"] == RedisKeys.BUSINESS_METRICS_TTL
+
+    @patch("app.services.dashboard.redis_set", new_callable=AsyncMock)
+    @patch("app.services.dashboard.redis_get", new_callable=AsyncMock)
+    async def test_cache_hit_skips_queries(self, mock_redis_get, mock_redis_set):
+        cached = {
+            "active_users_24h": 2,
+            "items_today": 4,
+            "category_distribution": [{"category_name": "News", "count": 1}],
+            "watchlist_total": 9,
+            "events_pushed_1h": 11,
+        }
+        mock_redis_get.return_value = json.dumps(cached)
+        db, _ = _mock_db()
+        redis = _mock_redis()
+
+        service = DashboardService(db, redis)
+        metrics = await service.get_business_metrics()
+
+        assert metrics == cached
+        # A cache hit must not touch the DB, the minute buckets, or refresh the cache.
+        db.execute.assert_not_awaited()
+        redis.mget.assert_not_called()
+        mock_redis_set.assert_not_awaited()
+
+    @patch("app.services.dashboard.redis_set", new_callable=AsyncMock)
+    @patch("app.services.dashboard.redis_get", new_callable=AsyncMock, return_value=None)
+    async def test_subquery_failures_degrade_individually(self, _mock_get, _mock_set):
+        # Every DB query fails and the Redis window read errors out: each metric
+        # degrades to 0 / empty instead of bubbling an exception.
+        db, _ = _mock_db()
+        db.execute = AsyncMock(side_effect=Exception("DB down"))
+        redis = AsyncMock()
+        redis.mget = AsyncMock(side_effect=Exception("Redis down"))
+
+        service = DashboardService(db, redis)
+        metrics = await service.get_business_metrics()
+
+        assert metrics["active_users_24h"] == 0
+        assert metrics["items_today"] == 0
+        assert metrics["category_distribution"] == []
+        assert metrics["watchlist_total"] == 0
+        assert metrics["events_pushed_1h"] == 0
+
+    @patch("app.services.dashboard.redis_set", new_callable=AsyncMock)
+    @patch("app.services.dashboard.redis_get", new_callable=AsyncMock, return_value=None)
+    async def test_no_redis_client_events_window_zero(self, _mock_get, _mock_set):
+        # Without a Redis client the DB metrics still compute; the SSE window is 0.
+        db, _ = _mock_db()
+        db.execute = AsyncMock(side_effect=self._exec_results(1, 2, [], 3))
+
+        service = DashboardService(db, None)
+        metrics = await service.get_business_metrics()
+
+        assert metrics["active_users_24h"] == 1
+        assert metrics["items_today"] == 2
+        assert metrics["category_distribution"] == []
+        assert metrics["watchlist_total"] == 3
+        assert metrics["events_pushed_1h"] == 0
+
+    async def test_events_window_skips_invalid_values(self):
+        db, _ = _mock_db()
+        redis = AsyncMock()
+        redis.mget = AsyncMock(return_value=["5", "not-a-number", None, "7"])
+
+        service = DashboardService(db, redis)
+        total = await service._events_pushed_window()
+        assert total == 12
+
+
+class TestBusinessMetricsEndpoint:
+    """Route-level behaviour of GET /api/v1/dashboard/business-metrics."""
+
+    @patch("app.services.dashboard.redis_set", new_callable=AsyncMock)
+    @patch("app.services.dashboard.redis_get", new_callable=AsyncMock, return_value=None)
+    async def test_admin_success_returns_envelope(self, _mock_get, _mock_set):
+        from app.api.v1.dashboard import get_business_metrics
+
+        db, _ = _mock_db()
+        db.execute = AsyncMock(side_effect=Exception("degraded"))
+        redis = AsyncMock()
+        redis.mget = AsyncMock(return_value=[])
+
+        resp = await get_business_metrics(user={"role": "admin"}, db=db, redis_client=redis)
+
+        assert resp.success is True
+        assert resp.data["active_users_24h"] == 0
+        assert resp.data["items_today"] == 0
+        assert resp.data["category_distribution"] == []
+        assert resp.data["watchlist_total"] == 0
+        assert resp.data["events_pushed_1h"] == 0
+
+    async def test_admin_role_passes_gate(self):
+        from app.api.v1.dashboard import require_admin
+
+        assert await require_admin({"role": "admin"}) == {"role": "admin"}
+
+    async def test_non_admin_forbidden(self):
+        from app.api.v1.dashboard import require_admin
+        from app.core.exceptions import Forbidden
+
+        with pytest.raises(Forbidden):
+            await require_admin({"role": "user"})

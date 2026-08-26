@@ -8,6 +8,7 @@ import DataSourcesHealth from "@/components/dashboard/DataSourcesHealth.vue";
 import SchedulerPanel from "@/components/dashboard/SchedulerPanel.vue";
 import SSEStats from "@/components/dashboard/SSEStats.vue";
 import MetricsChart from "@/components/dashboard/MetricsChart.vue";
+import BusinessMetrics from "@/components/dashboard/BusinessMetrics.vue";
 
 const dashboardStore = useDashboardStore();
 
@@ -34,6 +35,7 @@ onUnmounted(() => {
         <ServicesHealth />
         <SSEStats />
         <MetricsChart />
+        <BusinessMetrics />
       </div>
     </div>
   </div>

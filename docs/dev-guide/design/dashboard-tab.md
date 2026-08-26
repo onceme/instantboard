@@ -131,15 +131,21 @@ graph TD
 
 ### 3.5 业务指标
 
-> ⚠️ **未实现**：以下五项业务指标后端全部缺失，无采集无端点。
+> ✅ **已实现**（`GET /api/v1/dashboard/business-metrics`，admin only；`DashboardService.get_business_metrics()`。整体响应在 Redis 缓存 60s（`dashboard:business_metrics`，`BUSINESS_METRICS_TTL`）——缓存未命中才计算、命中直接返回；任一子查询失败仅使该指标降级为 0/空列表，不影响其余指标，端点整体不报错。前端 `BusinessMetrics.vue` 面板渲染于 Dashboard 右列末端，见 §3.8.2）：
 
-| 指标 | 状态 |
-|------|------|
-| 活跃用户数 | ⚠️ 未实现 |
-| 今日新增数据条目数 | ⚠️ 未实现 |
-| 各分类数据量分布 | ⚠️ 未实现 |
-| 自选列表总条目数 | ⚠️ 未实现 |
-| SSE推送事件数 (1h) | ⚠️ 未实现 |
+| 指标 | 口径 | 状态 |
+|------|------|------|
+| 活跃用户数 | `sse_connections` 近 24h 内连接过的去重 `user_id` 数（`active_users_24h`） | ✅ |
+| 今日新增数据条目数 | `items` 表 `created_at` >= 当日 0 点（UTC）计数（`items_today`） | ✅ |
+| 各分类数据量分布 | `items` 按 `category_id` GROUP BY JOIN `categories.name`，按 count 降序，返回 `[{category_name, count}]`（`category_distribution`） | ✅ |
+| 自选列表总条目数 | `watchlist_items` 全表计数（`watchlist_total`） | ✅ |
+| SSE推送事件数 (1h) | 分钟桶 `dashboard:events_pushed:minute:{minute}` 滑窗 60 分钟求和（`events_pushed_1h`） | ✅ |
+
+> **口径说明**：
+> - 五项全部为**系统全局（全租户）口径**，不按请求租户过滤——dashboard 各端点均为 admin only 的运维视角，租户隔离由信息流端点负责
+> - 分类分布以 `categories.name` 聚合（同名分类跨租户会合并计数，属全局口径的预期行为）
+> - SSE 推送事件数：写侧为 `SSEEventRouter.push_event` 内的单条非事务 pipeline `INCR` + `EXPIRE 3720s`（`core/sse_router.py::_record_push_event_count`，fire-and-forget，同 `RequestLoggingMiddleware` 的分钟桶模式——异常仅记日志，绝不阻塞推送）；桶 TTL 取 **62 分钟**而非 120s，是因为读侧需要完整 60 分钟窗口内的桶都存活。读侧对 `[now−59min, now]` 共 60 个桶 `MGET` 求和，Redis 降级 / 无桶 / 脏值计 0
+> - `business_metric_update` SSE 推送事件类型仍未实现（见 §3.7.1），当前仅 REST 基线（前端 `store.init()` 拉取一次，admin 场景渲染、错误静默）
 
 ### 3.6 指标采集方式汇总
 
@@ -221,6 +227,8 @@ graph LR
       subgraph right["右列"]
         SVH["ServicesHealth<br/>PG/Redis/Scheduler/SSE 服务卡片"]
         SSESt["SSEStats<br/>SSE连接统计"]
+        MC["MetricsChart<br/>CPU/内存实时趋势(30分钟)"]
+        BM["BusinessMetrics<br/>业务指标: 四指标卡 + 分类分布条形"]
       end
     end
     HP --> cols

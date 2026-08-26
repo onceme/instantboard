@@ -827,6 +827,37 @@ Response 200:
   }
 ```
 
+#### GET `/api/v1/dashboard/business-metrics` — 业务指标（dashboard-tab.md §3.5）
+
+```
+Response 200:
+  {
+    "success": true,
+    "data": {
+      "active_users_24h": 7,
+      "items_today": 15,
+      "category_distribution": [
+        { "category_name": "财经", "count": 10 },
+        { "category_name": "科技", "count": 5 }
+      ],
+      "watchlist_total": 3,
+      "events_pushed_1h": 35
+    }
+    // 五指标口径（全部为系统全局口径, 不按租户过滤）:
+    //   active_users_24h       sse_connections 近 24h 连接过的去重 user_id 数
+    //   items_today            items.created_at >= 当日 0 点 (UTC) 计数
+    //   category_distribution  items 按 category_id GROUP BY join categories.name,
+    //                          按 count 降序
+    //   watchlist_total        watchlist_items 全表计数
+    //   events_pushed_1h       SSE 推送事件滑窗 60 分钟分钟桶求和
+    //                          (dashboard:events_pushed:minute:{minute}, 桶 TTL 62 分钟,
+    //                          写侧为 sse_router.push_event 的 fire-and-forget INCR)
+    // 整体响应在 Redis 缓存 60s (dashboard:business_metrics); 缓存未命中才算,
+    // 命中直接返回。任一子查询失败仅使该指标降级为 0/空列表, 不影响其余指标,
+    // 端点整体不报错。非 admin 返回 403。
+  }
+```
+
 ### 3.8 SSE 推送端点设计
 
 #### GET `/api/v1/stream/{category}` — SSE 实时推送

@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.dependencies import get_current_tenant, get_db, get_redis, require_admin
 from app.schemas.base import SuccessResponse
 from app.schemas.dashboard import (
+    BusinessMetricsResponse,
     DataSourceHealthDetailResponse,
     DataSourceHealthResponse,
     SchedulerStatusResponse,
@@ -101,4 +102,17 @@ async def get_sse_stats(
 ):
     service = DashboardService(db, redis_client)
     data = await service.get_sse_stats()
+    return SuccessResponse(success=True, data=data)
+
+
+@router.get("/business-metrics", response_model=SuccessResponse[BusinessMetricsResponse])
+async def get_business_metrics(
+    user: dict = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+    redis_client: Redis = Depends(get_redis),
+):
+    # Admin-only system-wide business metrics (dashboard-tab.md §3.5); the
+    # service degrades each sub-metric independently and never raises.
+    service = DashboardService(db, redis_client)
+    data = await service.get_business_metrics()
     return SuccessResponse(success=True, data=data)

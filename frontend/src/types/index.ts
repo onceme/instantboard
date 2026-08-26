@@ -259,6 +259,21 @@ export const SUBCATEGORY_MAP: Record<
 };
 
 // Dashboard types
+// API request stats group of GET /dashboard/system — backend
+// app/services/dashboard.py get_api_request_stats() fed by
+// RequestLoggingMiddleware. All zeros on fresh start / Redis downgrade.
+export interface DashboardApiStats {
+  // Requests/s over a sliding 60s window.
+  qps: number;
+  // Average response time (ms) over the same 60s window.
+  avg_response_ms: number;
+  // 4xx / 5xx share of windowed requests, 0..1 ratios (frontend shows %).
+  error_rate_4xx: number;
+  error_rate_5xx: number;
+  // Cumulative requests since the Redis totals key was created.
+  requests_total: number;
+}
+
 export interface DashboardSystemInfo {
   version: string;
   uptime_seconds: number;
@@ -276,6 +291,9 @@ export interface DashboardSystemInfo {
   disk_write_mbps?: number;
   network_in_kbps?: number;
   network_out_kbps?: number;
+  // Optional for backward compatibility with older backends that do not
+  // report the api group yet.
+  api?: DashboardApiStats;
   api_version?: string;
 }
 

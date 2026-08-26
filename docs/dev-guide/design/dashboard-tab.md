@@ -1,5 +1,5 @@
 ---
-version: 1.4
+version: 1.5
 author: designer
 date: 2026-08-26
 status: draft
@@ -51,7 +51,16 @@ cross_refs: [frontend.md, api.md, database.md, data-flow.md, architecture.md, da
 | 磁盘使用率/总量 | psutil | 数字 |
 | 数据库连通性 | 会话探测 | 状态 |
 
-> ⚠️ **未实现**：QPS、平均响应时间、错误率 (4xx/5xx)、API 状态灯 — 请求统计中间件只把数据写入 Redis（`SYSTEM_METRICS` / `dashboard:request_metrics:{minute}`），**没有任何端点读取展示**（见 §3.6.2）。
+> ✅ **已实现**（QPS、平均响应时间、4xx/5xx 错误率；API 状态灯仍未实现）：
+> - `GET /api/v1/dashboard/system` 响应的 `api` 分组暴露 `qps` / `avg_response_ms` / `error_rate_4xx` / `error_rate_5xx`（0..1 比值）/ `requests_total`（`schemas/dashboard.py` `ApiRequestStats`）；前端 SystemStatus 渲染为"API 状态"区域（错误率 ×100 显示百分比）
+> - **统计口径**：`RequestLoggingMiddleware` 每请求单条 pipeline 原子递增 Redis 计数器（见 §3.6.2，跨多 api worker 精确），`DashboardService.get_api_request_stats()` 读取上一分钟 + 当前分钟两个桶，按**滑动 60s 窗口**计算：
+>   - 上一分钟桶的权重为 (60 − 当前分钟已过秒数) / 60，当前（进行中）分钟全量计入
+>   - `qps` = 窗口内请求数 / 60
+>   - `avg_response_ms` = 窗口内响应时间累计 / 窗口内请求数
+>   - `error_rate_4xx` / `error_rate_5xx` = 窗口内 4xx / 5xx 计数 / 窗口内请求数
+>   - `requests_total` = Redis 侧累计值（`dashboard:api_metrics:totals`，无 TTL，api 重启不归零）
+> - 中间件未写过数据（新启动）或 Redis 降级/不可用时全部字段回退为 0，端点不报错
+> - 健康检查（/api/v1/health）、SSE（/api/v1/stream）与超过 60s 的慢请求不计入统计
 
 #### 3.1.2 Worker 心跳监控
 
@@ -155,10 +164,16 @@ graph TD
 
 ```python
 # core/middleware.py — RequestLoggingMiddleware
-# 1. 每请求计时，将 QPS/平均响应时间/状态码分布等 **JSON 合并写入**
-#    Redis `SYSTEM_METRICS`（dashboard 模块读取的来源之一）
-# 2. 每累计 1000 次请求，写一次 `dashboard:request_metrics:{minute}` 字符串
-# （注意：这些统计数据目前没有任何 Dashboard 端点读取展示）
+# 每请求计时后，用 **单条非事务 pipeline（一次 RTT，fire-and-forget）** 原子递增
+# Redis 计数器；中间件自身任何异常仅记日志，绝不影响响应返回。
+#   1. HINCRBY      dashboard:api_metrics:totals          requests_total 1
+#   2. HINCRBY      dashboard:api_metrics:minute:{minute} count 1
+#   3. HINCRBYFLOAT dashboard:api_metrics:minute:{minute} latency_ms <duration_ms>
+#   4. HINCRBY      dashboard:api_metrics:minute:{minute} count_2xx|4xx|5xx 1
+#   5. EXPIRE       dashboard:api_metrics:minute:{minute} 120
+# totals key 无 TTL（跨进程/重启累计）；分钟桶 TTL 120s，读侧只需上一分钟+当前分钟。
+# （这些统计由 DashboardService.get_api_request_stats() 读取并经
+#   GET /dashboard/system 的 `api` 分组展示，见 §3.1.1）
 ```
 
 ### 3.7 实时更新策略
@@ -199,7 +214,7 @@ graph LR
     HP["HealthPanel — 顶部全宽: 整体状态灯 + 关键数字摘要"]
     subgraph cols["双列 flex 区域"]
       subgraph left["左列"]
-        SS["SystemStatus<br/>版本/运行时长/环境/CPU/内存/磁盘"]
+        SS["SystemStatus<br/>版本/运行时长/环境/CPU/内存/磁盘/API状态"]
         DSH["DataSourcesHealth<br/>数据源健康表格"]
         SP["SchedulerPanel<br/>调度器任务表 + worker 心跳新鲜度"]
       end
@@ -289,7 +304,7 @@ graph LR
 ## 6. 与其他模块的依赖
 
 - → [api.md](api.md): Dashboard API端点 (`/api/v1/dashboard/*`，含 `data-sources/{source_id}` 详情、`/services`、`/scheduler`、`/sse-stats`)、SSE事件定义
-- → [database.md](database.md): source_health表、dashboard_snapshots表、sse_connections表；Redis Key（`SYSTEM_METRICS`、`dashboard:request_metrics:*`）
+- → [database.md](database.md): source_health表、dashboard_snapshots表、sse_connections表；Redis Key（`SYSTEM_METRICS`、`dashboard:api_metrics:totals`、`dashboard:api_metrics:minute:{minute}`）
 - → [frontend.md](frontend.md): DashboardView组件层级、布局设计
 - → [data-flow.md](data-flow.md): SSE推送机制、Redis Pub/Sub分发
 - → [architecture.md](architecture.md): dashboard模块职责划分

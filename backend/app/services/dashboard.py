@@ -338,6 +338,77 @@ class DashboardService:
             return None, "invalid heartbeat payload: not a JSON object"
         return payload, None
 
+    async def get_api_request_stats(self) -> dict:
+        """API request statistics for the `api` group of GET /dashboard/system.
+
+        Reads the minute buckets RequestLoggingMiddleware writes
+        (core/middleware.py _record_request_stats) and derives them over a
+        sliding 60s window ending now: the previous minute's bucket overlaps
+        the window by (60 - seconds elapsed in the current minute) seconds, so
+        its count/latency/error totals are scaled by that fraction before being
+        added to the full current (partial) minute. Fields:
+          qps               windowed request count / 60
+          avg_response_ms   windowed latency sum / windowed request count
+          error_rate_4xx    windowed 4xx count / windowed request count (0..1)
+          error_rate_5xx    same for 5xx (0..1)
+          requests_total    cumulative since the Redis totals key was created
+
+        Degrades to all zeros when Redis is unavailable or the middleware has
+        not written anything yet (fresh start); never raises.
+        """
+        zeros = {
+            "qps": 0.0,
+            "avg_response_ms": 0.0,
+            "error_rate_4xx": 0.0,
+            "error_rate_5xx": 0.0,
+            "requests_total": 0,
+        }
+        if self.redis is None:
+            return zeros
+
+        try:
+            now = int(time.time())
+            minute = now // 60
+            pipe = self.redis.pipeline(transaction=False)
+            pipe.hgetall(RedisKeys.api_metrics_minute_key(minute - 1))
+            pipe.hgetall(RedisKeys.api_metrics_minute_key(minute))
+            pipe.hget(RedisKeys.API_METRICS_TOTALS, "requests_total")
+            prev_bucket, cur_bucket, requests_total_raw = await pipe.execute()
+        except Exception as e:
+            logger.warning(f"Failed to read API request metrics from Redis: {e}")
+            return zeros
+
+        def _num(bucket: dict | None, field: str) -> float:
+            try:
+                return float((bucket or {}).get(field, 0) or 0)
+            except (TypeError, ValueError):
+                return 0.0
+
+        # Fraction of the previous minute's bucket that lies inside the window.
+        prev_fraction = (60 - now % 60) / 60
+
+        window_count = _num(prev_bucket, "count") * prev_fraction + _num(cur_bucket, "count")
+
+        try:
+            requests_total = int(requests_total_raw or 0)
+        except (TypeError, ValueError):
+            requests_total = 0
+
+        if window_count <= 0:
+            return {**zeros, "requests_total": requests_total}
+
+        window_latency = _num(prev_bucket, "latency_ms") * prev_fraction + _num(cur_bucket, "latency_ms")
+        window_4xx = _num(prev_bucket, "count_4xx") * prev_fraction + _num(cur_bucket, "count_4xx")
+        window_5xx = _num(prev_bucket, "count_5xx") * prev_fraction + _num(cur_bucket, "count_5xx")
+
+        return {
+            "qps": round(window_count / 60, 2),
+            "avg_response_ms": round(window_latency / window_count, 2),
+            "error_rate_4xx": round(window_4xx / window_count, 4),
+            "error_rate_5xx": round(window_5xx / window_count, 4),
+            "requests_total": requests_total,
+        }
+
     async def get_system_info(self, start_time: datetime) -> dict:
         uptime = int((datetime.now(UTC) - start_time).total_seconds())
 
@@ -433,6 +504,10 @@ class DashboardService:
                 "redis_connected": redis_connected,
                 "redis_memory_used_mb": round(redis_memory_mb, 1) if redis_memory_mb else None,
             },
+            # API request stats (QPS / latency / error rates) collected by
+            # RequestLoggingMiddleware; all-zero when nothing was written yet
+            # or Redis is unavailable (dashboard-tab.md §3.1.1).
+            "api": await self.get_api_request_stats(),
         }
 
         return result

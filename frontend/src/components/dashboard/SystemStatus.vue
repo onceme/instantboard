@@ -1,6 +1,10 @@
 <script setup lang="ts">
 import { useDashboardStore } from "@/stores/dashboard";
-import { formatPercent, formatUptime } from "@/utils/format";
+import {
+  formatLargeNumber,
+  formatPercent,
+  formatUptime,
+} from "@/utils/format";
 import { computed } from "vue";
 
 const dashboardStore = useDashboardStore();
@@ -18,6 +22,9 @@ const diskPercent = computed(() => {
   if (!systemInfo.value) return 0;
   return (systemInfo.value.disk_used_gb / systemInfo.value.disk_total_gb) * 100;
 });
+// API request stats group (QPS / latency / error rates); absent on older
+// backends, all-zero on fresh start or Redis downgrade.
+const apiStats = computed(() => systemInfo.value?.api ?? null);
 </script>
 
 <template>
@@ -88,6 +95,37 @@ const diskPercent = computed(() => {
           systemInfo.network_in_kbps
             ? `${systemInfo.network_in_kbps} KB/s`
             : "--"
+        }}</span>
+      </div>
+    </div>
+
+    <div v-if="apiStats" class="api-row">
+      <div class="api-item">
+        <span class="api-label">QPS</span>
+        <span class="api-value">{{ apiStats.qps.toFixed(2) }}</span>
+      </div>
+      <div class="api-item">
+        <span class="api-label">平均响应</span>
+        <span class="api-value"
+          >{{ apiStats.avg_response_ms.toFixed(1) }} ms</span
+        >
+      </div>
+      <div class="api-item">
+        <span class="api-label">4xx错误率</span>
+        <span class="api-value"
+          >{{ ((apiStats.error_rate_4xx || 0) * 100).toFixed(2) }}%</span
+        >
+      </div>
+      <div class="api-item">
+        <span class="api-label">5xx错误率</span>
+        <span class="api-value"
+          >{{ ((apiStats.error_rate_5xx || 0) * 100).toFixed(2) }}%</span
+        >
+      </div>
+      <div class="api-item">
+        <span class="api-label">累计请求</span>
+        <span class="api-value">{{
+          formatLargeNumber(apiStats.requests_total || 0)
         }}</span>
       </div>
     </div>
@@ -189,6 +227,30 @@ const diskPercent = computed(() => {
 }
 
 .network-value {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.api-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-light);
+}
+
+.api-item {
+  display: flex;
+  gap: 6px;
+}
+
+.api-label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.api-value {
   font-size: 12px;
   color: var(--text-secondary);
 }

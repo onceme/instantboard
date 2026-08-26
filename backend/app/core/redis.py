@@ -53,6 +53,12 @@ class RedisKeys:
     WATCHLIST = "t:{tenant_id}:watchlist:{user_id}"
     SOURCE_HEALTH = "source_health:{source_id}"
     SYSTEM_METRICS = "dashboard:system_metrics"
+    # API request stats written by RequestLoggingMiddleware (core/middleware.py)
+    # and read by DashboardService.get_api_request_stats() for the `api` group of
+    # GET /dashboard/system. Totals accumulate across api restarts (no TTL); the
+    # per-minute buckets expire on their own (see API_METRICS_MINUTE_TTL).
+    API_METRICS_TOTALS = "dashboard:api_metrics:totals"
+    API_METRICS_MINUTE = "dashboard:api_metrics:minute:{minute}"
     SSO_STATE = "sso_state:{state_key}"
     IP_BLACKLIST = "ip_blacklist"
     SEARCH = "t:{tenant_id}:search:{query_hash}"
@@ -73,6 +79,9 @@ class RedisKeys:
     # Also used by the api side as the freshness threshold when judging worker
     # health from the heartbeat (app/services/dashboard.py).
     WORKER_HEARTBEAT_TTL = 45
+    # Minute-bucket TTL: covers the bucket being written plus the previous one,
+    # which is all the sliding 60s window reader ever needs.
+    API_METRICS_MINUTE_TTL = 120
 
     @staticmethod
     def session_key(session_id: str) -> str:
@@ -113,6 +122,10 @@ class RedisKeys:
     @staticmethod
     def source_health_key(source_id: str) -> str:
         return RedisKeys.SOURCE_HEALTH.format(source_id=source_id)
+
+    @staticmethod
+    def api_metrics_minute_key(minute: int) -> str:
+        return RedisKeys.API_METRICS_MINUTE.format(minute=minute)
 
     @staticmethod
     def sso_state_key(state_key: str) -> str:

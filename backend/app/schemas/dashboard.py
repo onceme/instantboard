@@ -45,6 +45,18 @@ class SystemAlert(BaseModel):
     triggered_at: str
 
 
+class ApiRequestStats(BaseModel):
+    # Requests/s over a sliding 60s window (see DashboardService.get_api_request_stats).
+    qps: float = 0.0
+    # Average response time in ms over the same 60s window.
+    avg_response_ms: float = 0.0
+    # 4xx / 5xx share of windowed requests, 0..1 ratios.
+    error_rate_4xx: float = 0.0
+    error_rate_5xx: float = 0.0
+    # Cumulative requests since the Redis totals key was created.
+    requests_total: int = 0
+
+
 class SystemInfoResponse(BaseModel):
     version: str = Field(default="1.0.0")
     uptime_seconds: int
@@ -59,6 +71,8 @@ class SystemInfoResponse(BaseModel):
     disk: DiskInfo | None = None
     network: NetworkInfo | None = None
     database: DatabaseStatus | None = None
+    # API request stats; all zeros when the middleware has not written anything yet.
+    api: ApiRequestStats = Field(default_factory=ApiRequestStats)
     cpu_count: int | None = None
     cpu_usage_percent: float | None = None
     memory_total_mb: int | None = None

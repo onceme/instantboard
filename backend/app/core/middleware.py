@@ -1,7 +1,5 @@
-import json
 import logging
 import time
-from collections import deque
 
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -9,14 +7,65 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from app.config import settings
-from app.core.redis import RedisKeys, redis_get, redis_hset, redis_set
+from app.core.redis import RedisKeys, get_redis_client
 
 logger = logging.getLogger("instantboard")
 
-_request_log: deque = deque(maxlen=1000)
-_error_count: int = 0
+# Per-process request counter used solely for the periodic milestone log line. The
+# shared request statistics shown on the dashboard live in Redis (written by
+# _record_request_stats), so they survive multiple api workers and restarts.
 _total_request_count: int = 0
-_total_response_time_ms: float = 0.0
+MILESTONE_LOG_EVERY = 1000
+
+# Requests slower than this are excluded from the stats (long polls / stuck
+# clients would skew latency averages).
+SLOW_REQUEST_THRESHOLD_MS = 60000
+
+
+def _status_bucket(status_code: int) -> str | None:
+    """Minute-bucket hash field for the status class; only 2xx/4xx/5xx are bucketed."""
+    if 200 <= status_code < 300:
+        return "count_2xx"
+    if 400 <= status_code < 500:
+        return "count_4xx"
+    if 500 <= status_code < 600:
+        return "count_5xx"
+    return None
+
+
+async def _record_request_stats(duration_ms: float, status_code: int) -> None:
+    """Record one completed request into Redis: single pipeline, single round trip.
+
+    Fire-and-forget by contract — no exception may ever reach the request path.
+
+    Key layout (all under the `dashboard:` prefix, see RedisKeys):
+      dashboard:api_metrics:totals           hash   cumulative `requests_total`
+                                                    (no TTL; survives api restarts)
+      dashboard:api_metrics:minute:{minute}  hash   per-minute bucket with fields
+                                                    count / latency_ms (sum) /
+                                                    count_2xx / count_4xx /
+                                                    count_5xx, TTL 120s (refreshed
+                                                    on every write)
+
+    Counters are incremented atomically in Redis, so the statistics stay correct
+    across multiple api worker processes. Reader side:
+    DashboardService.get_api_request_stats() (GET /dashboard/system `api` group).
+    """
+    try:
+        client = await get_redis_client()
+        minute_key = RedisKeys.api_metrics_minute_key(int(time.time()) // 60)
+
+        pipe = client.pipeline(transaction=False)
+        pipe.hincrby(RedisKeys.API_METRICS_TOTALS, "requests_total", 1)
+        pipe.hincrby(minute_key, "count", 1)
+        pipe.hincrbyfloat(minute_key, "latency_ms", duration_ms)
+        bucket = _status_bucket(status_code)
+        if bucket:
+            pipe.hincrby(minute_key, bucket, 1)
+        pipe.expire(minute_key, RedisKeys.API_METRICS_MINUTE_TTL)
+        await pipe.execute()
+    except Exception as e:
+        logger.debug(f"Failed to record request metrics in Redis: {e}")
 
 
 def setup_cors(app):
@@ -54,74 +103,14 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
                 skip = True
                 break
 
-        if not skip and duration_ms < 60000:
-            global _total_request_count, _error_count, _total_response_time_ms
-
+        if not skip and duration_ms < SLOW_REQUEST_THRESHOLD_MS:
+            global _total_request_count
             _total_request_count += 1
-            _total_response_time_ms += duration_ms
 
-            if status_code >= 400:
-                _error_count += 1
+            if _total_request_count % MILESTONE_LOG_EVERY == 0:
+                logger.info(f"Request metrics milestone: {_total_request_count} requests served by this process")
 
-            try:
-                minute_key = int(time.time()) // 60
-
-                metrics_key = RedisKeys.SYSTEM_METRICS
-                current_metrics = await redis_get(metrics_key)
-                metrics_data = {}
-                if current_metrics:
-                    try:
-                        metrics_data = json.loads(current_metrics)
-                    except (json.JSONDecodeError, TypeError):
-                        metrics_data = {}
-
-                metrics_data["request_count_total"] = _total_request_count
-                metrics_data["error_count_total"] = _error_count
-                metrics_data["avg_response_time_ms"] = round(_total_response_time_ms / max(_total_request_count, 1), 2)
-                metrics_data["error_rate"] = round(_error_count / max(_total_request_count, 1) * 100, 2)
-
-                if _total_request_count % 1000 == 0:
-                    avg_ms = round(_total_response_time_ms / _total_request_count, 2)
-                    err_rate = round(_error_count / _total_request_count * 100, 2)
-                    logger.info(
-                        f"Request metrics milestone: {_total_request_count} requests, "
-                        f"avg_response={avg_ms}ms, error_rate={err_rate}%"
-                    )
-
-                    await redis_hset(
-                        metrics_key,
-                        mapping={
-                            "avg_response_time_ms": str(avg_ms),
-                            "error_rate": str(err_rate),
-                            "request_count": str(_total_request_count),
-                        },
-                    )
-
-                    minute_metrics_key = f"dashboard:request_metrics:{minute_key}"
-                    await redis_hset(
-                        minute_metrics_key,
-                        mapping={
-                            "avg_response_ms": str(round(duration_ms, 1)),
-                            "status_code": str(status_code),
-                            "method": request.method,
-                            "path": path,
-                        },
-                    )
-                    await redis_set(
-                        minute_metrics_key,
-                        json.dumps(
-                            {
-                                "avg_response_ms": round(duration_ms, 1),
-                                "status_code": status_code,
-                                "method": request.method,
-                                "path": path,
-                            }
-                        ),
-                        ex=3600,
-                    )
-
-            except Exception as e:
-                logger.debug(f"Failed to record request metrics in Redis: {e}")
+            await _record_request_stats(duration_ms, status_code)
 
         return response
 

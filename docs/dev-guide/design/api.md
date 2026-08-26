@@ -712,12 +712,21 @@ Response 200:
       "network": { "bytes_sent": 0, "bytes_recv": 0, "packets_sent": 0, "packets_recv": 0 },
       "database": { "postgres_connections": 12, "postgres_active_queries": 1,
                     "redis_connected": true, "redis_memory_used_mb": 128.5 },
+      "api": {
+        "qps": 12.5,
+        "avg_response_ms": 84.3,
+        "error_rate_4xx": 0.012,
+        "error_rate_5xx": 0.004,
+        "requests_total": 48210
+      },
       "cpu_count": 4, "cpu_usage_percent": 23.5,
       "memory_total_mb": 8192, "memory_used_mb": 2048,
       "disk_total_gb": 100, "disk_used_gb": 45
     }
-    // SystemInfoResponse 为"嵌套分组 (cpu/memory/disk/network/database) + 扁平字段"并存
-    // (schemas/dashboard.py:34-49)
+    // SystemInfoResponse 为"嵌套分组 (cpu/memory/disk/network/database/api) + 扁平字段"并存
+    // (schemas/dashboard.py:34-49)。api 分组为滑动 60s 窗口的请求统计（QPS/平均响应/
+    // 4xx/5xx 错误率比值 0..1/累计请求数），数据源为 RequestLoggingMiddleware 写入的
+    // Redis 分钟桶；无数据或 Redis 降级时全部为 0（见 dashboard-tab.md §3.1.1）
   }
 ```
 

@@ -180,6 +180,148 @@ class TestGetSystemInfo:
         }
 
 
+class TestGetApiRequestStats:
+    """API request stats (QPS / latency / error rates) read from Redis minute buckets.
+
+    The reader derives them over a sliding 60s window: the previous minute bucket is
+    weighted by the fraction of that minute still inside the window, then merged with
+    the current (partial) minute. The clock is frozen for deterministic assertions.
+    get_api_request_stats() itself keeps no module-level state, so the `patch` context
+    manager fully restores everything; no cross-test leakage.
+    """
+
+    # 1700000000 // 60 = 28333333 and 1700000000 % 60 = 20, so the previous minute
+    # bucket overlaps the window by (60 - 20) / 60 == 2/3.
+    FROZEN_NOW = 1700000000
+
+    zero_stats = {
+        "qps": 0.0,
+        "avg_response_ms": 0.0,
+        "error_rate_4xx": 0.0,
+        "error_rate_5xx": 0.0,
+        "requests_total": 0,
+    }
+
+    def _service(self, execute_result=None, execute_side_effect=None, redis_none=False):
+        db, _ = _mock_db()
+        if redis_none:
+            return DashboardService(db, None), None
+        redis = _mock_redis()
+        pipe = MagicMock()
+        pipe.hgetall = MagicMock()
+        pipe.hget = MagicMock()
+        if execute_side_effect is not None:
+            pipe.execute = AsyncMock(side_effect=execute_side_effect)
+        else:
+            pipe.execute = AsyncMock(return_value=execute_result)
+        redis.pipeline = MagicMock(return_value=pipe)
+        return DashboardService(db, redis), pipe
+
+    async def test_sliding_window_computation(self):
+        prev_bucket = {"count": "90", "latency_ms": "9000.0", "count_4xx": "3", "count_5xx": "6"}
+        cur_bucket = {"count": "30", "latency_ms": "6000.0", "count_4xx": "3", "count_5xx": "0"}
+        service, pipe = self._service(execute_result=[prev_bucket, cur_bucket, "5000"])
+
+        with patch("app.services.dashboard.time.time", return_value=self.FROZEN_NOW):
+            result = await service.get_api_request_stats()
+
+        # window_count = 90*(2/3)+30 = 90 -> qps = 90/60
+        # window_latency = 9000*(2/3)+6000 = 12000 -> avg = 12000/90
+        # window_4xx = 3*(2/3)+3 = 5 ; window_5xx = 6*(2/3)+0 = 4
+        assert result == {
+            "qps": 1.5,
+            "avg_response_ms": 133.33,
+            "error_rate_4xx": 0.0556,
+            "error_rate_5xx": 0.0444,
+            "requests_total": 5000,
+        }
+
+        # Read contract: previous + current minute bucket, then the totals hash.
+        minute = self.FROZEN_NOW // 60
+        hgetall_keys = [call.args[0] for call in pipe.hgetall.call_args_list]
+        assert hgetall_keys == [
+            RedisKeys.api_metrics_minute_key(minute - 1),
+            RedisKeys.api_metrics_minute_key(minute),
+        ]
+        assert pipe.hget.call_args.args == (RedisKeys.API_METRICS_TOTALS, "requests_total")
+
+    async def test_empty_buckets_return_zeros(self):
+        service, _ = self._service(execute_result=[{}, {}, None])
+        with patch("app.services.dashboard.time.time", return_value=self.FROZEN_NOW):
+            result = await service.get_api_request_stats()
+        assert result == self.zero_stats
+
+    async def test_redis_none_returns_zeros(self):
+        service, _ = self._service(redis_none=True)
+        result = await service.get_api_request_stats()
+        assert result == self.zero_stats
+
+    async def test_redis_error_returns_zeros(self):
+        service, _ = self._service(execute_side_effect=Exception("redis down"))
+        with patch("app.services.dashboard.time.time", return_value=self.FROZEN_NOW):
+            result = await service.get_api_request_stats()
+        assert result == self.zero_stats
+
+    async def test_missing_fields_tolerated(self):
+        # Buckets lacking latency / status fields must not raise; the missing fields
+        # are treated as zero.
+        prev_bucket = {"count": "60"}
+        cur_bucket = {"count": "60", "latency_ms": "6000"}
+        service, _ = self._service(execute_result=[prev_bucket, cur_bucket, "100"])
+        with patch("app.services.dashboard.time.time", return_value=self.FROZEN_NOW):
+            result = await service.get_api_request_stats()
+        assert result["qps"] == 1.67
+        assert result["avg_response_ms"] == 60.0
+        assert result["error_rate_4xx"] == 0.0
+        assert result["error_rate_5xx"] == 0.0
+        assert result["requests_total"] == 100
+
+    @patch("app.services.dashboard.settings")
+    @patch("app.services.dashboard.psutil")
+    async def test_get_system_info_includes_api_group(self, mock_psutil, mock_settings):
+        from app.services import dashboard as dash_mod
+
+        mock_settings.env = "development"
+        mock_psutil.cpu_percent.return_value = 10.0
+        mock_psutil.cpu_count.return_value = 2
+        mock_psutil.virtual_memory.return_value = MagicMock(total=4 * 1024**3, used=2 * 1024**3)
+        mock_psutil.disk_usage.return_value = MagicMock(total=100 * 1024**3, used=50 * 1024**3)
+        mock_psutil.net_io_counters.return_value = MagicMock(bytes_sent=500, bytes_recv=500)
+        mock_psutil.disk_io_counters.return_value = MagicMock(read_bytes=100, write_bytes=100)
+
+        db, mock_result = _mock_db()
+        mock_result.scalar.return_value = 0
+
+        prev_bucket = {"count": "90", "latency_ms": "9000.0", "count_4xx": "3", "count_5xx": "6"}
+        cur_bucket = {"count": "30", "latency_ms": "6000.0", "count_4xx": "3", "count_5xx": "0"}
+        redis = _mock_redis()
+        pipe = MagicMock()
+        pipe.hgetall = MagicMock()
+        pipe.hget = MagicMock()
+        pipe.execute = AsyncMock(return_value=[prev_bucket, cur_bucket, "5000"])
+        redis.pipeline = MagicMock(return_value=pipe)
+
+        service = DashboardService(db, redis)
+        # get_system_info() runs the network/disk samplers which mutate module-level
+        # sample state — save/restore so this test cannot leak into the others.
+        saved_net = dash_mod._last_net_sample
+        saved_disk = dash_mod._last_disk_sample
+        try:
+            with patch("app.services.dashboard.time.time", return_value=self.FROZEN_NOW):
+                result = await service.get_system_info(datetime.now(UTC))
+        finally:
+            dash_mod._last_net_sample = saved_net
+            dash_mod._last_disk_sample = saved_disk
+
+        assert result["api"] == {
+            "qps": 1.5,
+            "avg_response_ms": 133.33,
+            "error_rate_4xx": 0.0556,
+            "error_rate_5xx": 0.0444,
+            "requests_total": 5000,
+        }
+
+
 class TestGetServicesHealth:
     @patch("app.services.dashboard.settings")
     @patch("app.services.dashboard.event_router")

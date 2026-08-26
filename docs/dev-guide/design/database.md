@@ -320,7 +320,8 @@ CREATE INDEX idx_dashboard_snapshots_time ON dashboard_snapshots(tenant_id, time
 | **数据源健康缓存** | `source_health:{source_id}` | ⚠️ 混用两种格式 | 300s / 无 | 采集路径写 JSON 字符串 `ex=300`（collectors/base.py:186）；创建数据源时写 Hash 且**无 TTL**（services/source.py:277-285）——格式不一致，待统一修复 |
 | **自选列表缓存** | `t:{tenant_id}:watchlist:{user_id}` | — | — | 见下方未实现标注 |
 | **系统指标缓存** | `dashboard:system_metrics` | Hash | 10s | 实时系统指标 |
-| **请求指标** | `dashboard:request_metrics:{minute}` | String | 3600s | RequestLoggingMiddleware 按分钟统计（core/middleware.py） |
+| **请求指标（累计）** | `dashboard:api_metrics:totals` | Hash | ⚠️ 无 TTL | RequestLoggingMiddleware 每请求 `HINCRBY requests_total 1`；`GET /dashboard/system` `api` 分组读取（跨 api 重启不归零） |
+| **请求指标（分钟桶）** | `dashboard:api_metrics:minute:{minute}` | Hash | 120s | 字段 `count` / `latency_ms`(响应时间累计) / `count_2xx` / `count_4xx` / `count_5xx`；中间件每请求单条 pipeline 原子递增（跨多 worker 精确），读侧按滑动 60s 窗口合并上一分钟+当前分钟计算 QPS/平均响应/错误率（core/middleware.py + services/dashboard.py） |
 | **调度器心跳** | `scheduler:worker:heartbeat` | String | 45s | worker 每 15s 续期（3× 间隔）；API 侧以此为新鲜度阈值判断 worker 健康 |
 | **Token 黑名单** | `token_blacklist:{jti}` | String | token 剩余有效期 | access/refresh 撤销（core/security.py:75） |
 | **管理员防爆破** | `admin_login:fail:{email}` / `lock:{email}` | String（计数/锁） | 15min | email 维度：5 次失败触发锁定（详见 admin-login.md §7） |

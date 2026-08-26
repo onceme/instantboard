@@ -84,3 +84,67 @@ describe("disk I/O rates", () => {
     expect(wrapper.find(".disk-io-row").exists()).toBe(false);
   });
 });
+
+/**
+ * API request stats group (dashboard-tab.md §3.1.1): GET /dashboard/system now
+ * returns an `api` group {qps, avg_response_ms, error_rate_4xx, error_rate_5xx,
+ * requests_total} built by RequestLoggingMiddleware -> Redis minute buckets.
+ * The section renders the values as-is (all-zero defaults are legitimate on a
+ * fresh start / Redis downgrade) and stays hidden when the backend does not
+ * report the group at all.
+ */
+describe("API request stats", () => {
+  const api = {
+    qps: 1.17,
+    avg_response_ms: 121.43,
+    error_rate_4xx: 0.0123,
+    error_rate_5xx: 0.004,
+    requests_total: 12345,
+  };
+
+  it("renders QPS, latency, error rates and cumulative requests", () => {
+    const wrapper = mountWithSystemInfo(makeSystemInfo({ api }));
+
+    const items = wrapper.findAll(".api-row .api-item");
+    expect(items).toHaveLength(5);
+    expect(items[0].text()).toContain("QPS");
+    expect(items[0].text()).toContain("1.17");
+    expect(items[1].text()).toContain("平均响应");
+    expect(items[1].text()).toContain("121.4 ms");
+    expect(items[2].text()).toContain("4xx错误率");
+    expect(items[2].text()).toContain("1.23%");
+    expect(items[3].text()).toContain("5xx错误率");
+    expect(items[3].text()).toContain("0.40%");
+    expect(items[4].text()).toContain("累计请求");
+    expect(items[4].text()).toContain("12.3K");
+  });
+
+  it("renders all-zero defaults on a fresh start (no error state)", () => {
+    const wrapper = mountWithSystemInfo(
+      makeSystemInfo({
+        api: {
+          qps: 0,
+          avg_response_ms: 0,
+          error_rate_4xx: 0,
+          error_rate_5xx: 0,
+          requests_total: 0,
+        },
+      }),
+    );
+
+    const values = wrapper
+      .findAll(".api-row .api-value")
+      .map((v) => v.text());
+    expect(values).toEqual(["0.00", "0.0 ms", "0.00%", "0.00%", "0"]);
+  });
+
+  it("omits the api row when the backend does not report the group", () => {
+    const wrapper = mountWithSystemInfo(makeSystemInfo());
+    expect(wrapper.find(".api-row").exists()).toBe(false);
+  });
+
+  it("omits the api row without system info", () => {
+    const wrapper = mountWithSystemInfo(null);
+    expect(wrapper.find(".api-row").exists()).toBe(false);
+  });
+});

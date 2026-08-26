@@ -174,6 +174,7 @@ export const useDashboardStore = defineStore("dashboard", () => {
     fetchDataSources,
     fetchScheduler,
     fetchSSEStats,
+    updateSystemMetricFromSSE,
     updateSourceHealthFromSSE,
     connectSSE,
     disconnectSSE,

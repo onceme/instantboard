@@ -186,7 +186,7 @@ graph TD
 
 | 图表 | 状态 |
 |------|------|
-| 实时趋势线 (CPU/内存) | ⚠️ 未实现 — store 维护 `cpuHistory/memoryHistory` 数组但无组件渲染；`MetricsChart`/`ResourceUsage` 组件不存在 |
+| 实时趋势线 (CPU/内存) | ✅ `MetricsChart.vue`（DashboardView 右列，SSEStats 下方）：双数据集折线图（CPU % `--accent` #3b82f6 / 内存 % 紫 #8b5cf6），Y 轴固定 0-100%，X 轴为采样时刻（HH:MM:SS）；数据源为 store `cpuHistory`/`memoryHistory` 的 computed 派生，SSE `system_metric_update` push 后图表自动刷新（`animation: false` 无动画更新）；窗口 60 点 × 30s 采样 = 最近 30 分钟（标题据此命名），历史为空时显示占位文案不渲染画布 |
 | 状态指示灯 | ✅ HealthPanel 内整体健康状态 |
 | 数据表格 | ✅ DataSourcesHealth |
 
@@ -226,9 +226,13 @@ graph LR
 #### 3.8.3 图表渲染优化
 
 ```javascript
-// 策略（设计目标，实际渲染组件待实现）:
-// - Chart.js instance 缓存，增量 update('none') 无动画刷新
-// - 数据窗口保留最近60个点，旧点自动移除
+// 策略（✅ 已借 MetricsChart + ChartWrapper 达成）:
+// - Chart.js instance 复用：vue-chartjs 监听 data 变化后对既有实例增量
+//   update（不销毁重建）；MetricsChart options 设 animation: false，
+//   等效 update('none') 无动画刷新
+// - 数据窗口保留最近 60 个点，旧点自动移除：
+//   store push+shift 截断（60 × 30s = 30 分钟），
+//   ChartWrapper.pushDataPoint 亦内置 60 点上界
 // - 前端 store 已维护 60 点滚动历史窗口
 ```
 

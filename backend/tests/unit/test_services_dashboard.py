@@ -1,12 +1,25 @@
+import asyncio
 import json
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
+from operator import lt
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy.sql.dml import Delete
 
 from app.core.redis import RedisKeys
-from app.services.dashboard import DashboardService, start_metrics_collection, stop_metrics_collection
+from app.models.dashboard import DashboardSnapshot
+from app.services.dashboard import (
+    SNAPSHOT_CLEANUP_INTERVAL_SECONDS,
+    SNAPSHOT_RETENTION_DAYS,
+    DashboardService,
+    cleanup_old_snapshots,
+    snapshot_cleanup_due,
+    start_metrics_collection,
+    stop_metrics_collection,
+)
 
 
 def _mock_db():
@@ -1868,3 +1881,152 @@ class TestAdaptiveCollectInterval(_AlertStateReset):
         await service.collect_and_push_metrics(datetime.now(UTC))
         assert dash_mod._cpu_high_streak == 0
         assert dash_mod.get_collect_interval() == 30
+
+
+# ---------------------------------------------------------------------------
+# Snapshot retention: dashboard_snapshots rows older than SNAPSHOT_RETENTION_DAYS
+# are deleted once per 24h, piggy-backed on the metrics collection loop.
+# Contract: docs/dev-guide/design/dashboard-tab.md §3.9.3 "存储优化".
+# ---------------------------------------------------------------------------
+
+
+class TestCleanupOldSnapshots:
+    """cleanup_old_snapshots: DELETE targets the snapshot `timestamp` column
+    with the retention cutoff and reports the deleted row count."""
+
+    async def test_deletes_rows_older_than_retention_and_returns_count(self):
+        db, mock_result = _mock_db()
+        mock_result.rowcount = 42
+
+        deleted = await cleanup_old_snapshots(db)
+
+        assert deleted == 42
+        db.commit.assert_awaited_once()
+
+        stmt = db.execute.call_args.args[0]
+        assert isinstance(stmt, Delete)
+        assert stmt.table.name == DashboardSnapshot.__tablename__
+
+        condition = stmt.whereclause
+        # The table has no created_at column: the filter must use `timestamp`.
+        assert condition.left.name == "timestamp"
+        assert condition.operator is lt
+        expected_cutoff = datetime.now(UTC) - timedelta(days=SNAPSHOT_RETENTION_DAYS)
+        assert abs((condition.right.value - expected_cutoff).total_seconds()) < 5
+
+    async def test_custom_retention_days(self):
+        db, mock_result = _mock_db()
+        mock_result.rowcount = 3
+
+        deleted = await cleanup_old_snapshots(db, retention_days=7)
+
+        assert deleted == 3
+        condition = db.execute.call_args.args[0].whereclause
+        expected_cutoff = datetime.now(UTC) - timedelta(days=7)
+        assert abs((condition.right.value - expected_cutoff).total_seconds()) < 5
+
+    async def test_non_positive_rowcount_returns_zero(self):
+        db, mock_result = _mock_db()
+        mock_result.rowcount = -1  # some drivers report -1 when nothing matched
+
+        assert await cleanup_old_snapshots(db) == 0
+
+    async def test_db_error_propagates_to_caller(self):
+        db, _ = _mock_db()
+        db.execute = AsyncMock(side_effect=RuntimeError("DB down"))
+
+        with pytest.raises(RuntimeError, match="DB down"):
+            await cleanup_old_snapshots(db)
+
+
+class TestSnapshotCleanupThrottle:
+    """24h throttle (snapshot_cleanup_due): the first run is due immediately,
+    afterwards only once the interval has elapsed."""
+
+    def test_first_run_is_due(self):
+        assert snapshot_cleanup_due(None, time.monotonic()) is True
+
+    def test_not_due_before_interval(self):
+        last = time.monotonic()
+        assert snapshot_cleanup_due(last, last + SNAPSHOT_CLEANUP_INTERVAL_SECONDS - 1) is False
+
+    def test_due_once_interval_elapsed(self):
+        last = time.monotonic()
+        assert snapshot_cleanup_due(last, last + SNAPSHOT_CLEANUP_INTERVAL_SECONDS) is True
+
+    def test_custom_interval(self):
+        assert snapshot_cleanup_due(100.0, 110.0, interval=10.0) is True
+        assert snapshot_cleanup_due(100.0, 105.0, interval=10.0) is False
+
+
+class TestMetricsLoopSnapshotCleanup:
+    """Cleanup rides on the metrics collection loop: due on the very first
+    iteration, throttled afterwards, and a failure is only logged — it must
+    never interrupt collection."""
+
+    @staticmethod
+    def _session_ctx(session):
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=session)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        return ctx
+
+    @patch("app.core.redis.get_redis_client", new_callable=AsyncMock, return_value=None)
+    @patch("app.db.session.async_session_factory")
+    async def test_cleanup_failure_does_not_interrupt_collection(self, mock_factory, _mock_redis):
+        session = AsyncMock()
+        mock_factory.return_value = self._session_ctx(session)
+
+        with (
+            patch(
+                "app.services.dashboard.asyncio.sleep",
+                new_callable=AsyncMock,
+                side_effect=[None, asyncio.CancelledError()],
+            ),
+            patch.object(DashboardService, "collect_and_push_metrics", new_callable=AsyncMock) as mock_collect,
+            patch.object(DashboardService, "archive_snapshot", new_callable=AsyncMock) as mock_archive,
+            patch(
+                "app.services.dashboard.cleanup_old_snapshots",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("cleanup boom"),
+            ) as mock_cleanup,
+            patch("app.services.dashboard.logger") as mock_logger,
+        ):
+            task = await start_metrics_collection(datetime.now(UTC))
+            await task  # must complete via CancelledError, not crash on the failure
+
+        # Iteration 1 collected metrics, attempted the first-run cleanup and then
+        # reached iteration 2 (sleep #2) despite the cleanup failure.
+        mock_collect.assert_awaited_once()
+        mock_cleanup.assert_awaited_once_with(session)
+        mock_archive.assert_not_awaited()
+        assert any("snapshot cleanup failed" in str(call) for call in mock_logger.warning.call_args_list)
+
+    @patch("app.core.redis.get_redis_client", new_callable=AsyncMock, return_value=None)
+    @patch("app.db.session.async_session_factory")
+    async def test_cleanup_runs_once_then_throttled(self, mock_factory, _mock_redis):
+        session = AsyncMock()
+        mock_factory.return_value = self._session_ctx(session)
+
+        with (
+            patch(
+                "app.services.dashboard.asyncio.sleep",
+                new_callable=AsyncMock,
+                side_effect=[None, None, asyncio.CancelledError()],
+            ),
+            patch.object(DashboardService, "collect_and_push_metrics", new_callable=AsyncMock) as mock_collect,
+            patch(
+                "app.services.dashboard.cleanup_old_snapshots",
+                new_callable=AsyncMock,
+                return_value=7,
+            ) as mock_cleanup,
+            patch("app.services.dashboard.logger") as mock_logger,
+        ):
+            task = await start_metrics_collection(datetime.now(UTC))
+            await task
+
+        # Two collection iterations, but cleanup only on the first one — the
+        # second runs seconds, not 24h, after the successful cleanup.
+        assert mock_collect.await_count == 2
+        mock_cleanup.assert_awaited_once_with(session)
+        assert any("removed 7 rows" in str(call) for call in mock_logger.info.call_args_list)

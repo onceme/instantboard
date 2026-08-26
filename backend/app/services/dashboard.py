@@ -3,10 +3,10 @@ import json
 import logging
 import platform
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from redis.asyncio import Redis
-from sqlalchemy import and_, func, or_, select, text
+from sqlalchemy import and_, delete, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -62,6 +62,14 @@ ALERT_THRESHOLDS = {
 COLLECT_INTERVAL_SECONDS = 30
 COLLECT_INTERVAL_DEGRADED_SECONDS = 60
 HIGH_CPU_STREAK_THRESHOLD = 3
+
+# Snapshot retention (dashboard-tab.md §3.9.3): dashboard_snapshots rows older
+# than SNAPSHOT_RETENTION_DAYS are deleted once per day, piggy-backed on the
+# metrics collection loop. The retention window is overridable via the
+# DASHBOARD_SNAPSHOT_RETENTION_DAYS env var (see app/config.py); failures are
+# logged and never interrupt metrics collection.
+SNAPSHOT_RETENTION_DAYS = settings.dashboard_snapshot_retention_days
+SNAPSHOT_CLEANUP_INTERVAL_SECONDS = 24 * 60 * 60
 
 # Worker heartbeat contract (writer: app/scheduler/worker.py heartbeat_loop). In
 # prod (SCHEDULER_ENABLED=false in the api process) the worker publishes
@@ -142,6 +150,35 @@ def _clear_alert(code: str) -> None:
 def get_collect_interval() -> int:
     """Current collection loop interval (degraded to 60s under sustained high CPU)."""
     return COLLECT_INTERVAL_DEGRADED_SECONDS if _collection_degraded else COLLECT_INTERVAL_SECONDS
+
+
+def snapshot_cleanup_due(
+    last_cleanup_time: float | None,
+    now: float,
+    interval: float = SNAPSHOT_CLEANUP_INTERVAL_SECONDS,
+) -> bool:
+    """24h throttle check for the snapshot retention run (dashboard-tab.md §3.9.3).
+
+    True when cleanup has never run in this process (first loop iteration runs it
+    right away) or at least `interval` seconds elapsed since the last successful run.
+    """
+    return last_cleanup_time is None or (now - last_cleanup_time) >= interval
+
+
+async def cleanup_old_snapshots(db: AsyncSession, retention_days: int | None = None) -> int:
+    """Delete dashboard_snapshots rows older than the retention window.
+
+    Filters on the snapshot `timestamp` column (the table has no created_at).
+    Returns the number of deleted rows. Raises on DB errors — the collection loop
+    treats that as non-fatal (log, keep collecting) and retries on the next cycle.
+    """
+    days = SNAPSHOT_RETENTION_DAYS if retention_days is None else retention_days
+    cutoff = datetime.now(UTC) - timedelta(days=days)
+    stmt = delete(DashboardSnapshot).where(DashboardSnapshot.timestamp < cutoff)
+    result = await db.execute(stmt)
+    await db.commit()
+    deleted = result.rowcount
+    return deleted if isinstance(deleted, int) and deleted > 0 else 0
 
 
 def _metric_changed(current: float | None, previous: float | None, threshold: float) -> bool:
@@ -1101,6 +1138,9 @@ async def start_metrics_collection(start_time: datetime, tenant_id: str = str(SY
 
         archive_interval = 300
         last_archive_time = time.monotonic()
+        # Snapshot retention throttle: None = never run, so the first loop
+        # iteration purges stale rows immediately (dashboard-tab.md §3.9.3).
+        last_cleanup_time: float | None = None
 
         while True:
             try:
@@ -1128,6 +1168,18 @@ async def start_metrics_collection(start_time: datetime, tenant_id: str = str(SY
                         except Exception as e:
                             logger.warning(f"Dashboard snapshot archive failed: {e}")
 
+                    if snapshot_cleanup_due(last_cleanup_time, now):
+                        try:
+                            deleted = await cleanup_old_snapshots(session)
+                            last_cleanup_time = now
+                            logger.info(
+                                f"Dashboard snapshot cleanup: removed {deleted} rows older than {SNAPSHOT_RETENTION_DAYS} days"
+                            )
+                        except Exception as e:
+                            # Non-fatal: retention failures must never interrupt the
+                            # metrics collection loop (dashboard-tab.md §3.9.3).
+                            logger.warning(f"Dashboard snapshot cleanup failed: {e}")
+
             except asyncio.CancelledError:
                 logger.info("Dashboard metrics collection cancelled")
                 break
@@ -1137,7 +1189,7 @@ async def start_metrics_collection(start_time: datetime, tenant_id: str = str(SY
 
     global _metrics_collection_task
     _metrics_collection_task = asyncio.create_task(_periodic_loop())
-    logger.info("Dashboard metrics collection started (interval=30s, archive=5min)")
+    logger.info("Dashboard metrics collection started (interval=30s, archive=5min, snapshot-cleanup=24h)")
     return _metrics_collection_task
 
 

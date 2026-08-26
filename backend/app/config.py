@@ -144,6 +144,10 @@ class Settings(BaseSettings):
     # Scheduler
     scheduler_enabled: bool = Field(default=True, alias="SCHEDULER_ENABLED")
 
+    # Dashboard snapshot retention (docs/dev-guide/design/dashboard-tab.md §3.9.3):
+    # the metrics collection loop purges dashboard_snapshots rows older than this.
+    dashboard_snapshot_retention_days: int = Field(default=30, alias="DASHBOARD_SNAPSHOT_RETENTION_DAYS")
+
     @property
     def is_production(self) -> bool:
         return self.env == "production"

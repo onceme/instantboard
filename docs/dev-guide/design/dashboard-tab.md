@@ -228,6 +228,7 @@ graph LR
 | **Redis INFO单次** | 一次INFO命令获取内存/客户端信息 | ✅ |
 | **增量推送** | 仅推送变化>5%字段 | ✅ |
 | **归档降频** | dashboard_snapshots 每 5 分钟归档 1 行（≈288 行/天） | ✅ |
+| **快照保留** | dashboard_snapshots 超 30 天自动清理（24h 节流，随采集循环执行，见 §3.9.3） | ✅ |
 
 #### 3.9.2 前端资源优化
 
@@ -237,7 +238,11 @@ graph LR
 
 - dashboard_snapshots 每 5 分钟归档 1 行 → 每天约 288 行
 - 趋势数据不存 PG，仅前端内存/Redis 滚动窗口
-> ⚠️ **未实现**：「超过 30 天的 dashboard_snapshots 自动清理」无对应任务。
+- ✅ **已实现**：「超过 30 天的 dashboard_snapshots 自动清理」（`services/dashboard.py` `cleanup_old_snapshots`）：
+  piggyback 在指标采集循环（`start_metrics_collection`）中，由内存节流 `snapshot_cleanup_due` 控制——首轮循环立即执行一次，之后每满 24h（`SNAPSHOT_CLEANUP_INTERVAL_SECONDS`）最多执行一次；
+  保留窗口 `SNAPSHOT_RETENTION_DAYS = 30`，可用配置 `DASHBOARD_SNAPSHOT_RETENTION_DAYS` 覆盖；
+  过滤列为快照的 `timestamp`（该表无 created_at），`DELETE … WHERE timestamp < now() - retention` 并提交，返回删除行数；
+  清理失败仅记 warning 日志、不中断指标采集（保留 `last_cleanup_time` 不更新，下一轮重试）。
 
 ## 4. 关键决策
 
@@ -248,7 +253,7 @@ graph LR
 | 图表库 | Chart.js (vue-chartjs + ChartWrapper) | 轻量 |
 | 推送策略 | 增量推送 + REST 基线 | 带宽节省 |
 | 归档频率 | 每 5 分钟 1 次（约 288 行/天） | 存储成本可接受 |
-| 采集架构 | 单个 asyncio 循环 (30s采集 + 300s归档) | 实现简单，替代原三组 APScheduler 设计 |
+| 采集架构 | 单个 asyncio 循环 (30s采集 + 300s归档 + 24h快照清理) | 实现简单，替代原三组 APScheduler 设计 |
 
 ## 5. 边界情况
 

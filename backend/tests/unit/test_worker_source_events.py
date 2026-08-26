@@ -47,14 +47,38 @@ def _created_event(source_id=None, interval=120, is_active=True):
 
 
 class TestHandleSourceStatusEvent:
+    @pytest.fixture(autouse=True)
+    def _stub_tenant_settings(self):
+        # Keep unit tests DB-free: runtime enable/create events read tenant
+        # settings through this helper (P2-16 refresh overrides).
+        with patch.object(
+            worker_mod, "_load_tenant_settings_for", new_callable=AsyncMock, return_value={}
+        ) as mock_settings:
+            yield mock_settings
+
     async def test_enabled_adds_job_from_payload(self):
         event = _enabled_event()
         with patch.object(worker_mod, "scheduler_manager") as mock_mgr:
             mock_mgr.add_source_job = AsyncMock()
             mock_mgr.remove_source_job = AsyncMock()
             await worker_mod.handle_source_status_event(event)
-            mock_mgr.add_source_job.assert_awaited_once_with(event["source"])
+            mock_mgr.add_source_job.assert_awaited_once_with(event["source"], {})
             mock_mgr.remove_source_job.assert_not_awaited()
+
+    async def test_enabled_passes_tenant_settings_to_job(self):
+        """Refresh overrides loaded for the source's tenant flow into add_source_job."""
+        event = _enabled_event()
+        settings = {"refresh_overrides": {"finance": 60}}
+        with (
+            patch.object(worker_mod, "scheduler_manager") as mock_mgr,
+            patch.object(
+                worker_mod, "_load_tenant_settings_for", new_callable=AsyncMock, return_value=settings
+            ) as mock_settings,
+        ):
+            mock_mgr.add_source_job = AsyncMock()
+            await worker_mod.handle_source_status_event(event)
+            mock_settings.assert_awaited_once_with(event["source"]["tenant_id"])
+            mock_mgr.add_source_job.assert_awaited_once_with(event["source"], settings)
 
     async def test_enabled_without_payload_falls_back_to_db(self):
         """Defensive path: if an enable event ever lacks the full source dict, the
@@ -69,7 +93,7 @@ class TestHandleSourceStatusEvent:
             mock_load.return_value = db_payload
             await worker_mod.handle_source_status_event({"event": "source_enabled", "source_id": sid})
             mock_load.assert_awaited_once_with(sid)
-            mock_mgr.add_source_job.assert_awaited_once_with(db_payload)
+            mock_mgr.add_source_job.assert_awaited_once_with(db_payload, {})
 
     async def test_enabled_db_fallback_missing_source_skips(self):
         with (
@@ -100,7 +124,7 @@ class TestHandleSourceStatusEvent:
             mock_mgr.add_source_job = AsyncMock()
             mock_mgr.remove_source_job = AsyncMock()
             await worker_mod.handle_source_status_event(event)
-            mock_mgr.add_source_job.assert_awaited_once_with(event["source"])
+            mock_mgr.add_source_job.assert_awaited_once_with(event["source"], {})
             mock_mgr.remove_source_job.assert_not_awaited()
 
     async def test_created_inactive_not_scheduled(self):
@@ -121,7 +145,7 @@ class TestHandleSourceStatusEvent:
             mock_load.return_value = db_payload
             await worker_mod.handle_source_status_event({"event": "source_created", "source_id": sid})
             mock_load.assert_awaited_once_with(sid)
-            mock_mgr.add_source_job.assert_awaited_once_with(db_payload)
+            mock_mgr.add_source_job.assert_awaited_once_with(db_payload, {})
 
     async def test_created_db_fallback_inactive_skips(self):
         """_load_source_payload returns None for inactive sources -> nothing scheduled."""
@@ -186,6 +210,7 @@ class TestSourceEventListener:
         with (
             patch.object(worker_mod, "get_redis_client", new_callable=AsyncMock) as mock_get,
             patch.object(worker_mod, "scheduler_manager") as mock_mgr,
+            patch.object(worker_mod, "_load_tenant_settings_for", new_callable=AsyncMock, return_value={}),
         ):
             mock_get.return_value = redis_client
             mock_mgr.add_source_job = AsyncMock()
@@ -195,7 +220,7 @@ class TestSourceEventListener:
 
             pubsub.subscribe.assert_awaited_once_with("channel:dashboard")
             mock_mgr.remove_source_job.assert_awaited_once_with("src-off")
-            mock_mgr.add_source_job.assert_awaited_once_with(enabled["source"])
+            mock_mgr.add_source_job.assert_awaited_once_with(enabled["source"], {})
             pubsub.unsubscribe.assert_awaited_once_with("channel:dashboard")
             pubsub.aclose.assert_awaited_once()
 
@@ -210,11 +235,12 @@ class TestSourceEventListener:
         with (
             patch.object(worker_mod, "get_redis_client", new_callable=AsyncMock) as mock_get,
             patch.object(worker_mod, "scheduler_manager") as mock_mgr,
+            patch.object(worker_mod, "_load_tenant_settings_for", new_callable=AsyncMock, return_value={}),
         ):
             mock_get.return_value = redis_client
             mock_mgr.add_source_job = AsyncMock()
             await worker_mod.source_event_listener()
-            mock_mgr.add_source_job.assert_awaited_once_with(created["source"])
+            mock_mgr.add_source_job.assert_awaited_once_with(created["source"], {})
 
     async def test_listener_sets_subscribed_after_subscribe(self):
         pubsub = _mock_pubsub([])
@@ -313,10 +339,13 @@ class TestServiceToWorkerProtocol:
         channel, message = mock_publish.call_args.args
 
         # Now feed the published message straight into the worker handler.
-        with patch.object(worker_mod, "scheduler_manager") as mock_mgr:
+        with (
+            patch.object(worker_mod, "scheduler_manager") as mock_mgr,
+            patch.object(worker_mod, "_load_tenant_settings_for", new_callable=AsyncMock, return_value={}),
+        ):
             mock_mgr.add_source_job = AsyncMock()
             await worker_mod.handle_source_status_event(message)
-            mock_mgr.add_source_job.assert_awaited_once_with(message["source"])
+            mock_mgr.add_source_job.assert_awaited_once_with(message["source"], {})
 
         assert channel == "channel:dashboard"
         # Fields the worker's add_source_job strictly needs:
@@ -400,10 +429,13 @@ class TestServiceToWorkerProtocol:
         assert channel == "channel:dashboard"
         assert message["event"] == "source_created"
 
-        with patch.object(worker_mod, "scheduler_manager") as mock_mgr:
+        with (
+            patch.object(worker_mod, "scheduler_manager") as mock_mgr,
+            patch.object(worker_mod, "_load_tenant_settings_for", new_callable=AsyncMock, return_value={}),
+        ):
             mock_mgr.add_source_job = AsyncMock()
             await worker_mod.handle_source_status_event(message)
-            mock_mgr.add_source_job.assert_awaited_once_with(message["source"])
+            mock_mgr.add_source_job.assert_awaited_once_with(message["source"], {})
 
         # Fields the worker's add_source_job strictly needs:
         assert message["source"]["refresh_interval_seconds"] == 300

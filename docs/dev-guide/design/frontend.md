@@ -31,6 +31,7 @@ frontend/src/
 │   ├── finance.ts
 │   ├── items.ts            # 条目手动打标: addItemTag / removeItemTag
 │   ├── sources.ts
+│   ├── tenant.ts           # 租户级分类覆盖: getTenantSettings / updateTenantSettings
 │   └── tech.ts
 ├── router/                 # 路由: / → Finance, /tech, /c/:slug, /dashboard, /settings, /login, /auth/callback, /ibadmin
 ├── views/                  # 共 8 个视图
@@ -64,7 +65,7 @@ frontend/src/
 │   ├── dashboard/          # 实际 6 个:
 │   │   ├── HealthPanel.vue / SystemStatus.vue / ServicesHealth.vue
 │   │   ├── DataSourcesHealth.vue / SSEStats.vue / ChartWrapper.vue
-│   ├── settings/           # CategoryEditor.vue / SourceEditor.vue / ProfileSettings.vue / ThemeToggle.vue
+│   ├── settings/           # CategoryEditor.vue / SourceEditor.vue / ProfileSettings.vue / TenantOverrides.vue / ThemeToggle.vue
 ├── stores/                 # Pinia 共 6 个:
 │   ├── auth.ts             # token/user/login-logout + 主题状态(theme/themeMode/colorScheme)
 │   ├── finance.ts          # quotes, watchlist, indices, commodities + 逐面板错误态
@@ -127,7 +128,7 @@ graph TD
 - **TechView**: TechSubNav + TopicFilter + CategoryPanel×4 / NewsFeed 双视图（见 [tech-tab.md](tech-tab.md)）；其中 NewsCard 支持三级标签手动标注——标签行"+"内联输入框打标、标签上"×"移除（乐观移除失败回滚，见 [content-categories.md](content-categories.md) §3.6.1）
 - **CategoryView**: /c/:slug 自定义分类通用信息流 — 按 slug 解析自定义分类（未命中显示 EmptyState），GET /categories/{id}/items 分页拉取（useInfiniteScroll 无限滚动，复用 NewsCard）；加载/错误/重试与 FinanceView 模式一致（见 [content-categories.md](content-categories.md) §3.3.1 Step 6）
 - **DashboardView**: HealthPanel + 双列 flex（左 SystemStatus/DataSourcesHealth，右 ServicesHealth/SSEStats）（见 [dashboard-tab.md](dashboard-tab.md)）
-- **SettingsView**: CategoryEditor / SourceEditor / ProfileSettings / ThemeToggle；CategoryEditor 为自定义分类行提供「重新分类」按钮（ConfirmationDialog 确认 → POST /categories/{id}/reclassify → 回显扫描/更新计数，失败走 ErrorAlert）
+- **SettingsView**: CategoryEditor / SourceEditor / ProfileSettings / TenantOverrides / ThemeToggle；CategoryEditor 为自定义分类行提供「重新分类」按钮（ConfirmationDialog 确认 → POST /categories/{id}/reclassify → 回显扫描/更新计数，失败走 ErrorAlert）；「租户覆盖」页签仅 `role === "admin"` 渲染（TenantOverrides.vue）——列出系统+自有分类并为每行提供刷新频率/颜色覆盖输入，加载时经 GET /tenant/settings 回填，保存时留空条目不写入 payload（整体替换语义 = 清除已有覆盖），400 展示 error.details[] 首条、403 降级提示无权限（见 [content-categories.md](content-categories.md) §3.4.4）
 - **LoginView**: SSO 按钮；SSOCallbackView 处理 /auth/callback；AdminLoginView 为 /ibadmin 独立入口
 
 ### 3.3 响应式布局策略

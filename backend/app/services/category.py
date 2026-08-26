@@ -30,6 +30,7 @@ from app.schemas.category import (
     SubCategoryResponse,
 )
 from app.services.tech import TechService
+from app.services.tenant import extract_overrides, load_tenant_settings
 
 logger = logging.getLogger(__name__)
 
@@ -82,14 +83,26 @@ def _slugify(name: str) -> str:
     return slug.strip("-")
 
 
-def _category_to_response(category: Category, source_count: int = 0) -> CategoryResponse:
+def _category_to_response(
+    category: Category,
+    source_count: int = 0,
+    color_overrides: dict[str, str] | None = None,
+) -> CategoryResponse:
+    # Tenant-level color override (tenants.settings.color_overrides, design
+    # content-categories.md §3.4.4): merged at response time only, the stored
+    # category row is never rewritten.
+    color = category.color or "#3B82F6"
+    if color_overrides:
+        override = color_overrides.get(category.slug)
+        if override:
+            color = override
     return CategoryResponse(
         id=str(category.id),
         name=category.name,
         slug=category.slug,
         description=category.description,
         icon=category.icon or "folder",
-        color=category.color or "#3B82F6",
+        color=color,
         type=category.type,
         refresh_interval_seconds=category.refresh_interval_seconds,
         is_active=category.is_active,
@@ -103,6 +116,14 @@ class CategoryService:
     def __init__(self, db: AsyncSession, redis: Redis):
         self.db = db
         self.redis = redis
+
+    async def _get_color_overrides(self, tenant_id: str) -> dict[str, str]:
+        # Tenant-level color overrides for response merging. load_tenant_settings
+        # degrades to {} on any error, so a settings read failure cannot break
+        # category listing — colors simply fall back to the stored values.
+        settings = await load_tenant_settings(self.db, tenant_id)
+        _, color_overrides = extract_overrides(settings)
+        return color_overrides
 
     async def list_categories(
         self,
@@ -146,7 +167,8 @@ class CategoryService:
         stmt = stmt.offset((page - 1) * page_size).limit(page_size)
         rows = (await self.db.execute(stmt)).all()
 
-        categories = [_category_to_response(row[0], row[1]) for row in rows]
+        color_overrides = await self._get_color_overrides(tenant_id)
+        categories = [_category_to_response(row[0], row[1], color_overrides) for row in rows]
 
         return PaginatedResponse(
             success=True,
@@ -171,9 +193,11 @@ class CategoryService:
         source_count_stmt = select(func.count()).select_from(Source).where(Source.category_id == category_id)
         source_count = (await self.db.execute(source_count_stmt)).scalar() or 0
 
+        color_overrides = await self._get_color_overrides(tenant_id)
+
         return SuccessResponse(
             success=True,
-            data=_category_to_response(category, source_count),
+            data=_category_to_response(category, source_count, color_overrides),
         )
 
     async def create_category(self, data: CategoryCreate, tenant_id: str) -> SuccessResponse[CategoryResponse]:

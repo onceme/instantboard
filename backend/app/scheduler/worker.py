@@ -24,6 +24,7 @@ from app.db.init_db import create_tables
 from app.db.session import async_session_factory
 from app.models.source import Source
 from app.scheduler.manager import scheduler_manager
+from app.services.tenant import load_all_tenant_settings, load_tenant_settings
 
 logging.basicConfig(
     level=settings.log_level,
@@ -62,10 +63,27 @@ async def _load_source_payload(source_id: str) -> dict | None:
             return None
         return {
             "id": str(source.id),
+            "tenant_id": str(source.tenant_id) if source.tenant_id else "",
             "category_slug": source.category.slug if source.category else "",
             "refresh_interval_seconds": source.refresh_interval_seconds,
             "source_type": source.source_type,
         }
+
+
+async def _load_tenant_settings_for(tenant_id: str) -> dict:
+    """Settings dict for one tenant; {} when missing/unreadable.
+
+    Never raises: runtime scheduling must not depend on settings readability
+    (interval resolution falls back to source interval → source_type default).
+    """
+    if not tenant_id:
+        return {}
+    try:
+        async with async_session_factory() as session:
+            return await load_tenant_settings(session, tenant_id)
+    except Exception as exc:
+        logger.warning(f"Failed to load tenant settings for {tenant_id}, scheduling with defaults: {exc}")
+        return {}
 
 
 async def handle_source_status_event(event_data: dict) -> None:
@@ -96,7 +114,12 @@ async def handle_source_status_event(event_data: dict) -> None:
             # Created inactive: nothing to schedule until an explicit enable.
             logger.info(f"{event}: source {source_id} is inactive, not scheduling")
             return
-        await scheduler_manager.add_source_job(source)
+        # Tenant-level refresh overrides are read from the DB on each source
+        # event (not bundled in the Redis payload), so an override saved after
+        # the source was created still applies on re-enable. The loader
+        # degrades to {} on any error, keeping scheduling unblocked.
+        tenant_settings = await _load_tenant_settings_for(str(source.get("tenant_id") or ""))
+        await scheduler_manager.add_source_job(source, tenant_settings)
         logger.info(f"Runtime scheduling: added collection job for source {source_id}")
 
     elif event in ("source_disabled", "source_deleted"):
@@ -276,7 +299,13 @@ async def main() -> None:
         active_sources = result.scalars().all()
         logger.info(f"Found {len(active_sources)} active data sources")
 
-    await scheduler_manager.schedule_all_active_sources(active_sources)
+    # One settings query for the whole rebuild; feed to interval resolution so
+    # tenant refresh_overrides apply from the first scheduled run. Degrades to
+    # {} inside load_all_tenant_settings on any error (defaults then apply).
+    async with async_session_factory() as session:
+        tenant_settings_map = await load_all_tenant_settings(session)
+
+    await scheduler_manager.schedule_all_active_sources(active_sources, tenant_settings_map)
     logger.info(f"Scheduled {len(active_sources)} active data sources for collection")
 
     stop_event = asyncio.Event()

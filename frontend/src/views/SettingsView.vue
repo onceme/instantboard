@@ -4,8 +4,9 @@ import { useAuthStore } from "@/stores/auth";
 import ProfileSettings from "@/components/settings/ProfileSettings.vue";
 import CategoryEditor from "@/components/settings/CategoryEditor.vue";
 import SourceEditor from "@/components/settings/SourceEditor.vue";
+import TenantOverrides from "@/components/settings/TenantOverrides.vue";
 
-type SettingsTab = "profile" | "categories" | "sources";
+type SettingsTab = "profile" | "categories" | "sources" | "tenant-overrides";
 
 interface SettingsTabDef {
   key: SettingsTab;
@@ -28,9 +29,18 @@ const authStore = useAuthStore();
 // matching the router guard
 const isAdminSession = computed(() => authStore.sessionEntry === "admin");
 
-const tabs = computed<SettingsTabDef[]>(() =>
-  isAdminSession.value ? ADMIN_TABS : PERSONAL_TABS,
-);
+// The override panel is role-gated, not entry-gated: only role=admin can PUT
+// /tenant/settings (members get 403), so the tab follows authStore.isAdmin and
+// is appended to whichever layout the session entry already shows
+const TENANT_TAB: SettingsTabDef = {
+  key: "tenant-overrides",
+  label: "租户覆盖",
+};
+
+const tabs = computed<SettingsTabDef[]>(() => {
+  const base = isAdminSession.value ? ADMIN_TABS : PERSONAL_TABS;
+  return authStore.isAdmin ? [...base, TENANT_TAB] : base;
+});
 
 // Default landing tab: the first admin section for admin sessions, profile for
 // SSO sessions. The entry only ever changes on login/logout, which always
@@ -56,6 +66,7 @@ const activeTab = ref<SettingsTab>(tabs.value[0].key);
       <ProfileSettings v-if="activeTab === 'profile'" />
       <CategoryEditor v-if="activeTab === 'categories'" />
       <SourceEditor v-if="activeTab === 'sources'" />
+      <TenantOverrides v-if="activeTab === 'tenant-overrides'" />
     </div>
   </div>
 </template>

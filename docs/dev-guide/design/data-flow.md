@@ -1,7 +1,7 @@
 ---
-version: 1.1
+version: 1.2
 author: designer
-date: 2026-08-24
+date: 2026-08-26
 status: reviewed
 cross_refs: [architecture.md, api.md, database.md, data-sources.md, content-categories.md]
 ---
@@ -360,12 +360,12 @@ graph TD
 | 频道名称 | 发布者 | 订阅者 | 消息内容 |
 |---------|--------|--------|---------|
 | `channel:finance` | FinanceService / 采集管道 | SSEEventRouter | quote_update / market_index_update / commodity_update / nav_estimate_update |
-| `channel:tech` | 采集管道 | SSEEventRouter | item_update |
+| `channel:tech` | 采集管道 | SSEEventRouter | item_update / topic_stats_update（条目入库触发 + 900s 窗口节流，见 tech-tab.md §3.8） |
 | `channel:dashboard` | SourceService / 调度器 / 指标采集 | SSEEventRouter **+ worker**（`scheduler/worker.py:111`） | SSE 事件：system_metric_update / source_health_update / source_created；源生命周期事件（键为 `event`）：source_enabled / source_disabled / source_deleted —— **注意：发布在 dashboard 频道，而非 admin** |
 | `channel:admin` | **无** | SSEEventRouter | 已被订阅但当前无任何发布者（保留备用） |
 | `channel:all` | — | SSEEventRouter（all 聚合） | 各频道消息向 `all` 订阅者二次投递 |
 
-> ⚠️ **未实现**：`topic_stats_update` / `db_metric_update` / `business_metric_update` / `alert_update` 均无后端发布者——后端 `SSEEventType`（`core/sse_router.py:14-22`）仅 8 种（item_update / quote_update / market_index_update / nav_estimate_update / commodity_update / system_metric_update / source_health_update / heartbeat），上述事件名仅存在于前端枚举死代码（`frontend/src/utils/sse.ts`）。亦不存在 `source_updated` 事件。
+> ⚠️ **未实现**：`db_metric_update` / `business_metric_update` / `alert_update` 无后端发布者——后端 `SSEEventType`（`core/sse_router.py`）共 9 种（item_update / quote_update / market_index_update / nav_estimate_update / commodity_update / system_metric_update / source_health_update / topic_stats_update / heartbeat），上述事件名仅存在于前端枚举死代码（`frontend/src/utils/sse.ts`）。亦不存在 `source_updated` 事件。（`topic_stats_update` 已实现：科技条目入库触发 + 900s 窗口节流，见 tech-tab.md §3.8）
 
 #### 3.5.2 消息格式
 

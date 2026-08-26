@@ -2,7 +2,8 @@
  * Tech store regression: the error state is written on failure (distinct from
  * the "No news" empty state) and cleared on retry; fetchNews must send the
  * backend-aligned query params domain/subcategory/tag/sort (the backend does
- * not recognize topic/subtopic/sort_by). init()/connectSSE() are never triggered.
+ * not recognize topic/subtopic/sort_by). SSE suites below capture the handler
+ * wiring via a fake SSEConnection; init() is never triggered.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
@@ -18,8 +19,29 @@ vi.mock("@/utils/api", async (importOriginal) => {
   };
 });
 
+const captured = vi.hoisted(() => ({
+  options: null as null | {
+    category: string;
+    eventHandlers?: Partial<Record<string, (data: unknown) => void>>;
+  },
+}));
+
+vi.mock("@/utils/sse.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/utils/sse.ts")>();
+  class FakeSSEConnection {
+    connect = vi.fn();
+    disconnect = vi.fn();
+    constructor(options: unknown) {
+      captured.options = options as typeof captured.options;
+    }
+  }
+  return { ...actual, SSEConnection: FakeSSEConnection };
+});
+
 import { apiGet } from "@/utils/api";
 import { useTechStore } from "@/stores/tech";
+import { SSEEventType } from "@/types";
+import type { TechTopic } from "@/types";
 
 const mockApiGet = vi.mocked(apiGet);
 
@@ -34,6 +56,7 @@ function okNews(items: unknown[] = []) {
 beforeEach(() => {
   setActivePinia(createPinia());
   vi.clearAllMocks();
+  captured.options = null;
 });
 
 describe("fetchNews error state", () => {
@@ -229,3 +252,58 @@ describe("hot topic tag filter", () => {
     expect(lastParams).not.toHaveProperty("tag");
   });
 });
+
+describe("topic_stats_update SSE handler (tech-tab.md §3.8)", () => {
+  function connectAndCaptureHandlers(store: ReturnType<typeof useTechStore>) {
+    store.connectSSE();
+    const options = captured.options;
+    expect(options, "connectSSE must construct an SSEConnection").not.toBeNull();
+    expect(options!.category).toBe("tech");
+    return options!.eventHandlers!;
+  }
+
+  it("wires topic_stats_update alongside item_update on the tech channel", () => {
+    const store = useTechStore();
+    const handlers = connectAndCaptureHandlers(store);
+
+    expect(handlers).toHaveProperty(SSEEventType.ITEM_UPDATE);
+    expect(handlers).toHaveProperty(SSEEventType.TOPIC_STATS_UPDATE);
+  });
+
+  it("replaces the topics list wholesale when the event arrives", () => {
+    const store = useTechStore();
+    const pushPayload: TechTopic[] = [
+      { tag: "ai", label: "人工智能", count: 42, last_active_at: "2026-08-26T08:00:00+00:00" },
+      { tag: "llm", label: "大语言模型", count: 7 },
+    ];
+    store.topics = [{ tag: "stale", label: "Stale", count: 1 }];
+    const handlers = connectAndCaptureHandlers(store);
+
+    handlers[SSEEventType.TOPIC_STATS_UPDATE]!(pushPayload);
+
+    // Wholesale replacement: the stale entry is gone, order/count come from the payload.
+    expect(store.topics).toEqual(pushPayload);
+    expect(store.topics.map((t) => t.tag)).toEqual(["ai", "llm"]);
+  });
+
+  it("applies an empty stats payload (clears hot topics)", () => {
+    const store = useTechStore();
+    store.topics = [{ tag: "ai", label: "AI", count: 9 }];
+    const handlers = connectAndCaptureHandlers(store);
+
+    handlers[SSEEventType.TOPIC_STATS_UPDATE]!([]);
+
+    expect(store.topics).toEqual([]);
+  });
+
+  it("ignores malformed non-array payloads", () => {
+    const store = useTechStore();
+    store.topics = [{ tag: "keep", label: "Keep", count: 3 }];
+    const handlers = connectAndCaptureHandlers(store);
+
+    handlers[SSEEventType.TOPIC_STATS_UPDATE]!({ topics: [] });
+
+    expect(store.topics).toEqual([{ tag: "keep", label: "Keep", count: 3 }]);
+  });
+});
+

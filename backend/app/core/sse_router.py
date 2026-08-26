@@ -45,6 +45,7 @@ class SSEEventType(StrEnum):
     COMMODITY_UPDATE = "commodity_update"
     SYSTEM_METRIC_UPDATE = "system_metric_update"
     SOURCE_HEALTH_UPDATE = "source_health_update"
+    TOPIC_STATS_UPDATE = "topic_stats_update"
     HEARTBEAT = "heartbeat"
 
 
@@ -63,7 +64,7 @@ class SSEConnection:
         self.last_event_at: datetime | None = None
         self.events_sent_count: int = 0
 
-    async def send_event(self, event_type: str, data: dict):
+    async def send_event(self, event_type: str, data: dict | list):
         try:
             await self.queue.put({"event_type": event_type, "data": data})
             self.last_event_at = datetime.now(UTC)
@@ -128,7 +129,7 @@ class SSEEventRouter:
         self._event_counter += 1
         return f"{int(time.time())}-{self._event_counter}"
 
-    async def push_event(self, category: str, event_type: SSEEventType, data: dict, tenant_id: str):
+    async def push_event(self, category: str, event_type: SSEEventType, data: dict | list, tenant_id: str):
         message = {
             "event_type": event_type.value if isinstance(event_type, SSEEventType) else event_type,
             "channel": category,
@@ -208,7 +209,7 @@ class SSEEventRouter:
             missed.append(event)
         return missed
 
-    async def push_to_client(self, client_id: str, event_type: SSEEventType, data: dict):
+    async def push_to_client(self, client_id: str, event_type: SSEEventType, data: dict | list):
         conn = self._connections.get(client_id)
         if conn and conn.is_active:
             event_type_str = event_type.value if isinstance(event_type, SSEEventType) else event_type

@@ -963,6 +963,89 @@ class TestRunCollectionExtended:
             assert _source_category_cache.get("src-cat") == "tech"
 
 
+# ── _run_collection – topic_stats_update trigger (tech-tab.md §3.8) ──
+class TestRunCollectionTopicStatsTrigger:
+    """After storing items, a tech source triggers publish_topic_stats_update;
+    non-tech sources never do (the per-tenant 900s throttle lives in SSEService)."""
+
+    async def _run_successful_collection(self, category_slug: str) -> AsyncMock:
+        mgr = None
+        mock_sse = AsyncMock()
+        mock_sse.publish_item_update = AsyncMock()
+        mock_sse.publish_source_health_update = AsyncMock()
+        mock_sse.publish_topic_stats_update = AsyncMock()
+
+        with patch("app.scheduler.manager.AsyncIOScheduler") as mock_cls:
+            mock_cls.return_value = _make_mock_scheduler()
+            mgr = AsyncSchedulerManager()
+
+            mock_source = MagicMock()
+            mock_source.is_active = True
+            mock_source.id = f"src-{category_slug}"
+            mock_source.name = "Trigger Source"
+            mock_source.source_type = "rss"
+            mock_source.config = {}
+            mock_source.tenant_id = "tenant-1"
+            mock_source.category = MagicMock()
+            mock_source.category.slug = category_slug
+            mock_source.category_id = "cat-1"
+
+            mock_session = AsyncMock()
+            mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+            mock_session.__aexit__ = AsyncMock(return_value=False)
+            mock_result = MagicMock()
+            mock_result.scalar_one_or_none.return_value = mock_source
+            mock_session.execute = AsyncMock(return_value=mock_result)
+            mock_session.add = MagicMock()
+            mock_session.commit = AsyncMock()
+
+            mock_collector = AsyncMock()
+            mock_collection_result = MagicMock()
+            mock_collection_result.success = True
+            mock_collection_result.items = [
+                {"title": "Item 1", "url": "http://x.com/1", "summary": "Sum", "published_at": "2024-01-01T00:00:00Z"}
+            ]
+            mock_collection_result.error = None
+            mock_collection_result.response_time_ms = 100
+            mock_collector.collect = AsyncMock(return_value=mock_collection_result)
+
+            mock_chain = AsyncMock()
+            mock_process_result = MagicMock()
+            mock_process_result.item = {
+                "title": "Item 1",
+                "url": "http://x.com/1",
+                "summary": "Sum",
+                "image_url": "",
+                "topic_tags": [],
+                "extra_data": {},
+                "priority": 5,
+                "published_at": "2024-01-01T00:00:00Z",
+            }
+            mock_process_result.errors = []
+            mock_chain.execute = AsyncMock(return_value=[mock_process_result])
+
+            with (
+                patch("app.db.session.async_session_factory", return_value=mock_session),
+                patch("app.collectors.get_collector", return_value=lambda: mock_collector),
+                patch("app.processors.create_default_processor_chain", return_value=mock_chain),
+                patch("app.services.sse.SSEService", return_value=mock_sse),
+                patch("app.scheduler.manager.event_router"),
+            ):
+                await mgr._run_collection(f"src-{category_slug}")
+
+        assert mgr._last_run_results[f"collect_src-{category_slug}"]["success"] is True
+        mock_sse.publish_item_update.assert_awaited_once()
+        return mock_sse
+
+    async def test_tech_source_triggers_topic_stats_push(self):
+        mock_sse = await self._run_successful_collection("tech")
+        mock_sse.publish_topic_stats_update.assert_awaited_once_with("tenant-1")
+
+    async def test_finance_source_does_not_trigger_topic_stats_push(self):
+        mock_sse = await self._run_successful_collection("finance")
+        mock_sse.publish_topic_stats_update.assert_not_awaited()
+
+
 # ── _update_health_after_collection ──────────────────────────────
 class TestUpdateHealthAfterCollection:
     async def test_health_created_when_none_exists(self):

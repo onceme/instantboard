@@ -1,7 +1,7 @@
 ---
-version: 1.1
+version: 1.2
 author: designer
-date: 2026-08-24
+date: 2026-08-26
 status: draft
 cross_refs: [frontend.md, api.md, data-sources.md, database.md, data-flow.md, content-categories.md]
 ---
@@ -304,7 +304,7 @@ if hn_score:
 | RSS新闻 (主流源) | 120-300s | SSE item_update |
 | RSS新闻 (低频源, 如NASA/Arxiv/EE Times) | 1800-86400s | SSE item_update |
 | HackerNews (RSS) | 120s | 经 hnrss.org RSS，非 Firebase API |
-| 话题统计 | 按需 (`GET /tech/topics`)，TechView 挂载时经 `init()` 拉取 | Redis 缓存 900s；**REST 拉取，无 SSE 推送**；前端 `HotTopics.vue` 展示 top 12 热门标签、点击过滤（见 §3.4.3） |
+| 话题统计 | 按需 (`GET /tech/topics`)，TechView 挂载时经 `init()` 拉取；科技条目入库后经 `topic_stats_update` SSE 推送 | Redis 缓存 900s；SSE 推送以条目入库触发 + 同租户 900s 窗口节流（见 §3.8）；前端 `HotTopics.vue` 展示 top 12 热门标签、点击过滤（见 §3.4.3） |
 
 **与财经对比**: 科技资讯刷新频率整体低于财经行情，因为新闻更新频率远低于市场行情。
 
@@ -333,10 +333,11 @@ if hn_score:
 | 事件类型 | 数据内容 | 触发条件 | 频率 |
 |---------|---------|---------|------|
 | `item_update` | `{id, title, summary, url, source_name, topic_tags, published_at, priority}`（**不含 category_id**，见 `scheduler/manager.py`） | 新条目入库 | 随采集 |
+| `topic_stats_update` | 话题统计数组（即 `GET /tech/topics` 的 `data` 字段：`[{tag, label, count, last_active_at}]`，载荷为数组本身） | 科技条目入库（`scheduler/manager.py::_run_collection` 成功分支，仅科技分类且至少 1 条入库后触发） | 同租户 900s 窗口节流 |
 | `source_health_update` | 完整行状态契约见 [data-flow.md](data-flow.md) §3.5.4 | 数据源健康状态变更 | 实时 |
 | `heartbeat` | `{timestamp}` | 保持连接 | 30s |
 
-> ⚠️ **未实现**：`topic_stats_update` — 后端无此事件（话题统计仅 REST + 900s 缓存，无定时推送）。
+> ✅ **已实现**：`topic_stats_update` — **节流口径：条目入库触发 + 900s 窗口节流**。触发点为科技源采集成功且至少 1 条入库（`scheduler/manager.py::_run_collection`）；`SSEService.publish_topic_stats_update` 以原子 `SET NX EX 900`（Redis 键 `tech:topic_stats_pushed:{tenant_id}`，见 [database.md](database.md) §3.2）保证同租户 15 分钟内至多推送一次，与 `GET /tech/topics` 的 900s 缓存窗口对齐。载荷复用 `TechService.get_topics` 的缓存读取路径（缓存缺失时计算一次），故推送内容与 REST 响应一致；统计加载失败时删除节流键，允许下次触发在窗口内重试。Redis 不可用时静默跳过（不推送、不报错）。前端 `stores/tech.ts` 收到事件后以载荷整体替换 `techStore.topics`（`HotTopics.vue` 随之刷新）。
 
 ## 4. 关键决策
 

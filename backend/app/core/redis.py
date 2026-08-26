@@ -80,6 +80,11 @@ class RedisKeys:
     # (core/sse_router.py) and summed over a sliding 60-minute window by
     # DashboardService._events_pushed_window().
     EVENTS_PUSHED_MINUTE = "dashboard:events_pushed:minute:{minute}"
+    # Throttle marker written by SSEService.publish_topic_stats_update (SET NX EX)
+    # so a tech source that stores items pushes at most one topic_stats_update per
+    # tenant per TOPIC_STATS_PUSHED_TTL window. Deleted early when the stats load
+    # fails so the next collection can retry within the window.
+    TOPIC_STATS_PUSHED = "tech:topic_stats_pushed:{tenant_id}"
 
     SEARCH_TTL = 300
     STREAM_HISTORY_LIMIT = 500
@@ -97,6 +102,10 @@ class RedisKeys:
     # keep every bucket alive for the FULL 60-minute read window, so the oldest
     # bucket the window ever reads (now - 59min) still exists when summed.
     EVENTS_PUSHED_MINUTE_TTL = 62 * 60
+    # topic_stats_update throttle window (seconds). Matches the 900s REST topics
+    # cache in TechService.get_topics so the pushed payload is never fresher than
+    # what GET /tech/topics serves (tech-tab.md §3.8).
+    TOPIC_STATS_PUSHED_TTL = 900
 
     @staticmethod
     def session_key(session_id: str) -> str:
@@ -177,6 +186,10 @@ class RedisKeys:
     @staticmethod
     def stream_history_key(category: str) -> str:
         return RedisKeys.STREAM_HISTORY.format(category=category)
+
+    @staticmethod
+    def topic_stats_pushed_key(tenant_id: str) -> str:
+        return RedisKeys.TOPIC_STATS_PUSHED.format(tenant_id=tenant_id)
 
 
 async def redis_get(key: str) -> str | None:

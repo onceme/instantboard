@@ -509,6 +509,15 @@ class AsyncSchedulerManager:
                     "items_count": stored_count,
                 }
 
+                # topic_stats_update push (tech-tab.md §3.8): topic stats can only
+                # change when tech items were stored, so trigger after a successful
+                # tech-source collection that stored at least one item. The publish
+                # self-throttles to one push per tenant per 900s window (Redis SET NX)
+                # and skips silently when Redis is down, so the collection path never
+                # pays more than a cheap throttle check per run.
+                if category_slug == "tech" and stored_count > 0:
+                    await sse_service.publish_topic_stats_update(tenant_id)
+
                 await self._update_health_after_collection(source, collection_result)
 
         except Exception as e:

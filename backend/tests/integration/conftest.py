@@ -73,12 +73,17 @@ class MockRedis:
         self._purge_expired(key)
         return self._data.get(key)
 
-    async def set(self, key, value, ex=None):
+    async def set(self, key, value, ex=None, nx=False):
+        self._purge_expired(key)
+        # Real Redis SET NX returns None when the key already exists (live TTL).
+        if nx and key in self._data:
+            return None
         self._data[key] = value
         if ex is not None:
             self._expiry[key] = self._clock + ex
         else:
             self._expiry.pop(key, None)
+        return True
 
     async def delete(self, key):
         self._data.pop(key, None)

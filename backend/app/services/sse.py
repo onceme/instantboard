@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -9,7 +10,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 # Fix: default tenant of publish_source_health_update changed from "system" to
 # SYSTEM_TENANT_ID (kept as str for SSE JSON serialization).
+from app.core import redis as redis_mod
 from app.core.constants import SYSTEM_TENANT_ID
+from app.core.redis import RedisKeys
 from app.core.sse_router import SSEEventType, event_router
 from app.models.sse import SSEConnection as SSEConnectionModel
 
@@ -172,6 +175,69 @@ class SSEService:
             data=item_data,
             tenant_id=tenant_id,
         )
+
+    async def publish_topic_stats_update(self, tenant_id: str) -> bool:
+        """Publish a topic_stats_update event on the tech channel.
+
+        Contract: docs/dev-guide/design/tech-tab.md §3.8. Triggered by
+        scheduler/manager.py::_run_collection after a tech source stored at
+        least one item. Throttled to at most one push per tenant per
+        TOPIC_STATS_PUSHED_TTL (900s) window via an atomic SET NX EX on
+        RedisKeys.TOPIC_STATS_PUSHED. The payload is the topics array exactly
+        as served in the GET /tech/topics `data` field (TechService.get_topics:
+        Redis cache read path, computed once on a miss). Returns True when the
+        event was published. Never raises: Redis unavailable → skip silently;
+        stats load failure → release the throttle key so the next trigger can
+        retry within the window.
+        """
+        throttle_key = RedisKeys.topic_stats_pushed_key(tenant_id)
+        try:
+            client = await redis_mod.get_redis_client()
+            acquired = await client.set(
+                throttle_key,
+                "1",
+                ex=RedisKeys.TOPIC_STATS_PUSHED_TTL,
+                nx=True,
+            )
+        except Exception as e:
+            logger.debug(f"Topic stats throttle check failed for tenant {tenant_id}, skipping push: {e}")
+            return False
+
+        if not acquired:
+            logger.debug(f"topic_stats_update throttled for tenant {tenant_id} (900s window)")
+            return False
+
+        try:
+            topics = await self._load_topic_stats(tenant_id)
+        except Exception as e:
+            logger.warning(f"Failed to load topic stats for tenant {tenant_id}: {e}")
+            # Release the throttle slot so a transient DB failure does not
+            # swallow the whole 900s window; the next trigger may retry.
+            with contextlib.suppress(Exception):
+                await redis_mod.redis_delete(throttle_key)
+            return False
+
+        await event_router.push_event(
+            category="tech",
+            event_type=SSEEventType.TOPIC_STATS_UPDATE,
+            data=topics,
+            tenant_id=tenant_id,
+        )
+        return True
+
+    async def _load_topic_stats(self, tenant_id: str) -> list[dict]:
+        """Read topic stats through TechService.get_topics — the same code path
+        as GET /tech/topics (900s Redis cache; computed once on a miss).
+
+        The scheduler has no request session, so a dedicated one is opened here.
+        """
+        from app.db.session import async_session_factory
+        from app.services.tech import TechService
+
+        async with async_session_factory() as session:
+            redis_client = await redis_mod.get_redis_client()
+            service = TechService(session, redis_client)
+            return await service.get_topics(tenant_id)
 
     async def publish_quote_update(
         self,

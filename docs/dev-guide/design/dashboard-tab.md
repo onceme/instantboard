@@ -1,5 +1,5 @@
 ---
-version: 1.5
+version: 1.6
 author: designer
 date: 2026-08-26
 status: draft
@@ -192,7 +192,7 @@ graph TD
 | 数据源健康 | `source_health_update` | 实时 | 状态变更时立即推送（payload契约见 [data-flow.md](data-flow.md) §3.5.4） |
 | 心跳 | `heartbeat` | 30s | 固定 |
 
-> ⚠️ **未实现**：`db_metric_update`、`business_metric_update` — 后端 `SSEEventType` 仅 8 种事件（item_update/quote_update/market_index_update/nav_estimate_update/commodity_update/system_metric_update/source_health_update/heartbeat），不含这两种。
+> ⚠️ **未实现**：`db_metric_update`、`business_metric_update` — 后端 `SSEEventType` 共 9 种事件（item_update/quote_update/market_index_update/nav_estimate_update/commodity_update/system_metric_update/source_health_update/topic_stats_update/heartbeat），不含这两种。
 
 **增量推送优化**:
 - 只推送变化超过 5% 的指标字段，不全量推送

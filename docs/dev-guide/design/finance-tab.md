@@ -1,7 +1,7 @@
 ---
-version: 1.2
+version: 1.3
 author: designer
-date: 2026-08-24
+date: 2026-08-26
 status: draft
 cross_refs: [frontend.md, api.md, data-sources.md, database.md, data-flow.md]
 ---
@@ -367,7 +367,7 @@ graph TD
 
 > ⚠️ **已知契约冲突（待修复）**：后端 `market_index_update` / `commodity_update` 每次推送**整个数组**（`services/finance.py` push_event 直接传 `formatted` 列表），但前端 `stores/finance.ts` 的 `updateMarketIndexFromSSE` / `updateCommodityFromSSE` 按**单对象**消费（读 `data.symbol`），数组 payload 无法落位——这两个事件实际不生效。需统一为数组契约（前端整体替换）或后端改为逐条推送。
 
-> ⚠️ **未实现**：`alert_update` — 后端 `SSEEventType` 枚举（共 8 种事件）中不存在，仅前端类型定义残留。
+> ⚠️ **未实现**：`alert_update` — 后端 `SSEEventType` 枚举（共 9 种事件）中不存在，仅前端类型定义残留。
 
 详见 [api.md](api.md) SSE 端点定义。
 

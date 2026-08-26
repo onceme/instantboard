@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.core.constants import SYSTEM_TENANT_ID
+from app.core.redis import RedisKeys
 from app.core.sse_router import SSEEventType
 from app.models.source import SourceHealth
 from app.services.sse import SSEService, build_source_health_update_payload
@@ -359,3 +360,144 @@ class TestPublishCommodityUpdate:
             tenant_id="tenant-1",
         )
         mock_router.push_event.assert_called_once()
+
+
+class _FakeRedis:
+    """In-memory Redis stand-in with SET NX/EX semantics and a manual clock."""
+
+    def __init__(self):
+        self._data = {}
+        self._expiry = {}
+        self._clock = 0.0
+
+    def advance(self, seconds):
+        self._clock += seconds
+
+    def _purge_expired(self, key):
+        expires_at = self._expiry.get(key)
+        if expires_at is not None and self._clock >= expires_at:
+            self._data.pop(key, None)
+            self._expiry.pop(key, None)
+
+    async def set(self, key, value, ex=None, nx=False):
+        self._purge_expired(key)
+        if nx and key in self._data:
+            return None
+        self._data[key] = value
+        if ex is not None:
+            self._expiry[key] = self._clock + ex
+        else:
+            self._expiry.pop(key, None)
+        return True
+
+    async def get(self, key):
+        self._purge_expired(key)
+        return self._data.get(key)
+
+    async def delete(self, key):
+        self._data.pop(key, None)
+        self._expiry.pop(key, None)
+
+
+def _topics_payload():
+    return [
+        {"tag": "ai", "label": "AI", "count": 12, "last_active_at": "2026-08-26T00:00:00+00:00"},
+        {"tag": "llm", "label": "LLM", "count": 5, "last_active_at": "2026-08-25T00:00:00+00:00"},
+    ]
+
+
+class TestPublishTopicStatsUpdate:
+    """Contract: docs/dev-guide/design/tech-tab.md §3.8 topic_stats_update."""
+
+    @patch("app.services.sse.event_router")
+    async def test_publishes_topics_array_on_tech_channel(self, mock_router):
+        """Payload is the full topics array (GET /tech/topics `data` shape) on channel tech."""
+        mock_router.push_event = AsyncMock()
+        fake_redis = _FakeRedis()
+        payload = _topics_payload()
+
+        with (
+            patch("app.core.redis.get_redis_client", AsyncMock(return_value=fake_redis)),
+            patch.object(SSEService, "_load_topic_stats", AsyncMock(return_value=payload)) as loader,
+        ):
+            service = SSEService()
+            published = await service.publish_topic_stats_update("tenant-1")
+
+        assert published is True
+        loader.assert_awaited_once_with("tenant-1")
+        mock_router.push_event.assert_awaited_once_with(
+            category="tech",
+            event_type=SSEEventType.TOPIC_STATS_UPDATE,
+            data=payload,
+            tenant_id="tenant-1",
+        )
+
+    @patch("app.services.sse.event_router")
+    async def test_throttle_window_and_expiry(self, mock_router):
+        """First trigger publishes; within the 900s window it skips; after expiry it publishes again."""
+        mock_router.push_event = AsyncMock()
+        fake_redis = _FakeRedis()
+
+        with (
+            patch("app.core.redis.get_redis_client", AsyncMock(return_value=fake_redis)),
+            patch.object(SSEService, "_load_topic_stats", AsyncMock(return_value=_topics_payload())),
+        ):
+            service = SSEService()
+            assert await service.publish_topic_stats_update("tenant-1") is True
+            # Still inside the window → throttled.
+            fake_redis.advance(RedisKeys.TOPIC_STATS_PUSHED_TTL - 1)
+            assert await service.publish_topic_stats_update("tenant-1") is False
+            # Window expired → next trigger publishes again.
+            fake_redis.advance(2)
+            assert await service.publish_topic_stats_update("tenant-1") is True
+
+        assert mock_router.push_event.await_count == 2
+
+    @patch("app.services.sse.event_router")
+    async def test_throttle_is_per_tenant(self, mock_router):
+        """The throttle key is namespaced per tenant, so tenants do not block each other."""
+        mock_router.push_event = AsyncMock()
+        fake_redis = _FakeRedis()
+
+        with (
+            patch("app.core.redis.get_redis_client", AsyncMock(return_value=fake_redis)),
+            patch.object(SSEService, "_load_topic_stats", AsyncMock(return_value=_topics_payload())),
+        ):
+            service = SSEService()
+            assert await service.publish_topic_stats_update("tenant-a") is True
+            assert await service.publish_topic_stats_update("tenant-b") is True
+
+        assert mock_router.push_event.await_count == 2
+        assert RedisKeys.topic_stats_pushed_key("tenant-a") in fake_redis._data
+        assert RedisKeys.topic_stats_pushed_key("tenant-b") in fake_redis._data
+
+    @patch("app.services.sse.event_router")
+    async def test_redis_unavailable_skips_silently(self, mock_router):
+        """When Redis is down the push is skipped without raising and without publishing."""
+        mock_router.push_event = AsyncMock()
+
+        with patch("app.core.redis.get_redis_client", AsyncMock(side_effect=ConnectionError("redis down"))):
+            service = SSEService()
+            published = await service.publish_topic_stats_update("tenant-1")
+
+        assert published is False
+        mock_router.push_event.assert_not_awaited()
+
+    @patch("app.services.sse.event_router")
+    async def test_load_failure_releases_throttle(self, mock_router):
+        """On stats load failure the throttle key is deleted so the next trigger retries."""
+        mock_router.push_event = AsyncMock()
+        fake_redis = _FakeRedis()
+        throttle_key = RedisKeys.topic_stats_pushed_key("tenant-1")
+
+        with (
+            patch("app.core.redis.get_redis_client", AsyncMock(return_value=fake_redis)),
+            patch("app.core.redis.redis_delete", AsyncMock()) as mock_delete,
+            patch.object(SSEService, "_load_topic_stats", AsyncMock(side_effect=RuntimeError("db down"))),
+        ):
+            service = SSEService()
+            published = await service.publish_topic_stats_update("tenant-1")
+
+        assert published is False
+        mock_delete.assert_awaited_once_with(throttle_key)
+        mock_router.push_event.assert_not_awaited()

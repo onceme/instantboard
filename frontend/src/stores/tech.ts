@@ -125,6 +125,15 @@ export const useTechStore = defineStore("tech", () => {
     }
   }
 
+  function applyTopicStats(data: unknown) {
+    // topic_stats_update payload is the full topics array (same structure as the
+    // GET /tech/topics `data` field); replace the local list wholesale so counts
+    // and ordering match the backend without a REST round-trip.
+    if (Array.isArray(data)) {
+      topics.value = data as TechTopic[];
+    }
+  }
+
   function connectSSE() {
     const authStore = useAuthStore();
     const sseStore = useSSEStore();
@@ -141,6 +150,7 @@ export const useTechStore = defineStore("tech", () => {
       },
       eventHandlers: {
         [SSEEventType.ITEM_UPDATE]: (data) => addItemFromSSE(data as never),
+        [SSEEventType.TOPIC_STATS_UPDATE]: (data) => applyTopicStats(data),
       },
     });
 

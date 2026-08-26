@@ -1,7 +1,7 @@
 ---
-version: 1.2
+version: 1.3
 author: designer
-date: 2026-08-24
+date: 2026-08-26
 status: draft
 cross_refs: [architecture.md, api.md, database.md, data-flow.md, finance-tab.md, tech-tab.md, data-sources.md]
 ---
@@ -787,8 +787,11 @@ GET /api/v1/tech/topics → 返回标签列表+热度 (Redis缓存 TTL=900s/15mi
   GROUP BY tag
   ORDER BY count DESC
 
-SSE推送: ⚠️ 未实现——后端不存在 `topic_stats_update` 事件;
-  前端仅通过 API 请求 + 15分钟缓存刷新热门标签 (services/tech.py:348, redis ex=900)
+SSE推送: ✅ 已实现——`topic_stats_update` 事件 (tech 频道):
+  科技条目入库后触发 (scheduler/manager.py::_run_collection 成功分支),
+  同租户 900s 窗口节流 (Redis tech:topic_stats_pushed:{tenant_id} SET NX EX 900);
+  载荷为话题统计数组 (同 GET /tech/topics 的 data), 前端收事件后整体替换热门标签列表;
+  REST 口径不变: API 请求 + 15分钟缓存 (services/tech.py, redis ex=900; 详见 tech-tab.md §3.8)
 ```
 
 ## 4. 关键决策

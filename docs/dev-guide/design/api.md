@@ -1,7 +1,7 @@
 ---
-version: 1.1
+version: 1.2
 author: designer
-date: 2026-08-24
+date: 2026-08-26
 status: revised
 cross_refs: [architecture.md, database.md, frontend.md, security.md, data-flow.md, admin-login.md]
 ---
@@ -966,7 +966,21 @@ SSE Event Types:
      event: heartbeat
      data: { "timestamp": "2026-06-23T10:00:00Z" }
 
-  9. connected — 连接建立时立即发送的首个事件（sse.py:93-101, SSE 帧 id 固定为 "init"）
+  9. topic_stats_update — 科技话题统计更新 (tech channel)
+     event: topic_stats_update
+     data: [                             // 载荷即话题统计数组（同 GET /tech/topics 的 data 字段）
+       {
+         "tag": "ai",
+         "label": "人工智能",
+         "count": 42,
+         "last_active_at": "2026-08-26T08:00:00+00:00"
+       }
+     ]
+     // 触发：科技源条目入库后（调度器采集成功分支），同租户 900s 窗口节流
+     //（Redis tech:topic_stats_pushed:{tenant_id} SET NX EX 900；Redis 不可用静默跳过）
+     // 载荷复用 TechService.get_topics 的缓存读取路径，与 REST 响应一致（见 tech-tab.md §3.8）
+
+  10. connected — 连接建立时立即发送的首个事件（sse.py:93-101, SSE 帧 id 固定为 "init"）
      event: connected
      data: {
        "client_id": "{tenant_id}:{user_id}:{uuid}",

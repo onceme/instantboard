@@ -293,6 +293,58 @@ class TestSourceEventListener:
         pubsub.aclose.assert_awaited_once()
 
 
+class TestSchedulerResumeEvent:
+    """First-subscriber resume hook on the worker side (finance-tab.md §3.8.3):
+    the api process publishes `scheduler_resume` on channel:dashboard when its
+    SSE registry goes 0 → 1; the worker maps it to resume_paused_jobs()."""
+
+    def test_event_name_is_accepted(self):
+        assert worker_mod.SCHEDULER_RESUME_EVENT == "scheduler_resume"
+        assert "scheduler_resume" in worker_mod.WORKER_EVENT_NAMES
+        # Source lifecycle set stays intact (backward compat for other consumers).
+        expected_source_events = {"source_created", "source_enabled", "source_disabled", "source_deleted"}
+        assert set(worker_mod.SOURCE_EVENT_NAMES) == expected_source_events
+
+    async def test_resume_event_calls_resume_paused_jobs(self):
+        with patch.object(worker_mod, "scheduler_manager") as mock_mgr:
+            mock_mgr.resume_paused_jobs = AsyncMock(return_value=3)
+            mock_mgr.add_source_job = AsyncMock()
+            mock_mgr.remove_source_job = AsyncMock()
+            await worker_mod.handle_source_status_event({"event": "scheduler_resume", "reason": "first_sse_subscriber"})
+            mock_mgr.resume_paused_jobs.assert_awaited_once()
+            mock_mgr.add_source_job.assert_not_awaited()
+            mock_mgr.remove_source_job.assert_not_awaited()
+
+    async def test_resume_event_no_paused_jobs_is_noop(self):
+        with patch.object(worker_mod, "scheduler_manager") as mock_mgr:
+            mock_mgr.resume_paused_jobs = AsyncMock(return_value=0)
+            await worker_mod.handle_source_status_event({"event": "scheduler_resume"})
+            mock_mgr.resume_paused_jobs.assert_awaited_once()
+
+    async def test_listener_dispatches_scheduler_resume(self):
+        messages = [
+            {"type": "subscribe", "data": None},
+            # SSE-client traffic on the same channel must be ignored.
+            {"type": "message", "data": json.dumps({"event_type": "item_update", "data": {}})},
+            {"type": "message", "data": json.dumps({"event": "scheduler_resume", "reason": "first_sse_subscriber"})},
+        ]
+        pubsub = _mock_pubsub(messages)
+        redis_client = MagicMock()
+        redis_client.pubsub.return_value = pubsub
+
+        with (
+            patch.object(worker_mod, "get_redis_client", new_callable=AsyncMock) as mock_get,
+            patch.object(worker_mod, "scheduler_manager") as mock_mgr,
+        ):
+            mock_get.return_value = redis_client
+            mock_mgr.resume_paused_jobs = AsyncMock(return_value=0)
+
+            await worker_mod.source_event_listener()
+
+            mock_mgr.resume_paused_jobs.assert_awaited_once()
+            pubsub.unsubscribe.assert_awaited_once_with("channel:dashboard")
+
+
 class TestServiceToWorkerProtocol:
     """End-to-end protocol check at unit level: the exact payload SourceService
     publishes on enable/disable must be consumable by the worker handler."""

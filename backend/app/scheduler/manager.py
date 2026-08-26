@@ -28,7 +28,62 @@ SOURCE_TYPE_DEFAULT_INTERVALS = {
     "social": 600,
 }
 
+# Load-aware collection throttling (finance-tab.md §3.8.3). Thresholds:
+# more than SSE_LOAD_THRESHOLD active SSE connections, or Redis memory above
+# REDIS_MEM_LOAD_THRESHOLD of maxmemory, each slow collection down by
+# LOAD_MULTIPLIER. The signals never stack — the applied load multiplier is
+# capped at LOAD_MULTIPLIER (max, not product). It combines multiplicatively
+# with the health-based multiplier from adaptive_reschedule:
+#   effective interval = original × health multiplier × load multiplier
+SSE_LOAD_THRESHOLD = 500
+REDIS_MEM_LOAD_THRESHOLD = 0.8
+LOAD_MULTIPLIER = 2.0
+
 _source_category_cache: dict[str, str] = {}
+
+
+async def evaluate_load_multiplier() -> float:
+    """Load-driven collection throttling multiplier: ×1.0 or ×LOAD_MULTIPLIER.
+
+    Signals (cross-process: the api process exposes its SSE connection count as
+    the Redis gauge `sse:active_connections`, the worker reads it back; Redis
+    memory pressure is read straight from INFO memory):
+      - active SSE connections > SSE_LOAD_THRESHOLD        → ×LOAD_MULTIPLIER
+      - Redis used_memory/maxmemory > REDIS_MEM_LOAD_THRESHOLD → ×LOAD_MULTIPLIER
+    Both signals together still cap at ×LOAD_MULTIPLIER (they never stack).
+    A maxmemory of 0 means "no limit configured" — the memory signal is skipped.
+    Any signal read failure degrades to ×1.0: collect at the normal frequency
+    rather than throttle on missing or corrupt data (fail-open).
+    """
+    from app.core.redis import RedisKeys, get_redis_client
+
+    try:
+        client = await get_redis_client()
+    except Exception as e:
+        logger.debug(f"Load multiplier: Redis client unavailable ({e}), keeping frequency")
+        return 1.0
+
+    multiplier = 1.0
+
+    try:
+        raw = await client.get(RedisKeys.sse_active_connections_key())
+        if raw is not None and int(raw) > SSE_LOAD_THRESHOLD:
+            multiplier = LOAD_MULTIPLIER
+    except (TypeError, ValueError):
+        logger.debug("Load multiplier: unreadable SSE connection gauge value, ignoring signal")
+    except Exception as e:
+        logger.debug(f"Load multiplier: SSE connection gauge read failed ({e}), ignoring signal")
+
+    try:
+        info = await client.info("memory")
+        used_memory = info.get("used_memory") or 0
+        maxmemory = info.get("maxmemory") or 0
+        if maxmemory > 0 and used_memory / maxmemory > REDIS_MEM_LOAD_THRESHOLD:
+            multiplier = max(multiplier, LOAD_MULTIPLIER)
+    except Exception as e:
+        logger.debug(f"Load multiplier: Redis INFO memory failed ({e}), ignoring signal")
+
+    return multiplier
 
 
 def resolve_effective_interval(
@@ -83,6 +138,11 @@ class AsyncSchedulerManager:
         self._running = False
         self._original_intervals: dict[str, int] = {}
         self._adaptive_multipliers: dict[str, float] = {}
+        # Last applied load multiplier per job (system-wide signal from
+        # evaluate_load_multiplier, stored per job so interval recomputation
+        # stays local). Combined with _adaptive_multipliers (health) — the two
+        # multiply, see evaluate_load_multiplier.
+        self._load_multipliers: dict[str, float] = {}
         self._last_run_times: dict[str, datetime] = {}
         self._last_run_results: dict[str, dict] = {}
         # Adaptive pause switch: auto-pause jobs when there are no SSE subscribers.
@@ -124,6 +184,7 @@ class AsyncSchedulerManager:
 
         self._original_intervals[job_id] = interval_seconds
         self._adaptive_multipliers[job_id] = 1.0
+        self._load_multipliers[job_id] = 1.0
 
         self.scheduler.add_job(
             func,
@@ -162,6 +223,7 @@ class AsyncSchedulerManager:
             self.scheduler.remove_job(job_id)
             self._original_intervals.pop(job_id, None)
             self._adaptive_multipliers.pop(job_id, None)
+            self._load_multipliers.pop(job_id, None)
             _source_category_cache.pop(job_id.replace("collect_", ""), None)
             logger.info(f"Job {job_id} removed")
 
@@ -212,6 +274,44 @@ class AsyncSchedulerManager:
             job.reschedule(trigger=IntervalTrigger(seconds=interval_seconds))
             logger.info(f"Job {job_id} rescheduled to {interval_seconds}s")
 
+    async def resume_paused_jobs(self) -> int:
+        """Resume every collection job paused by the no-subscriber adaptive pause.
+
+        Triggered by the first-subscriber hook (core/sse_router.py
+        _signal_first_subscriber_resume) when the api SSE registry goes 0 → 1:
+        the embedded scheduler (dev) is called directly, the worker (prod)
+        receives a scheduler_resume event on channel:dashboard.
+
+        The paused set is NOT tracked as separate state: APScheduler's
+        job.pending is the same signal the no-subscriber pause relies on (a
+        paused job has next_run_time == None) and that get_jobs_status already
+        reports as "paused", so a second bookkeeping structure could only
+        drift. Only jobs this manager owns (_original_intervals) are touched.
+
+        Each resumed job is rescheduled on its current effective interval
+        (original × health multiplier × load multiplier) so a job paused while
+        throttled does not come back at a stale rate. Returns the number of
+        jobs resumed; a no-op (returns 0) when nothing is paused — including
+        the worker process, where adaptive pause is disabled and nothing ever
+        gets paused this way.
+        """
+        resumed = 0
+        for job in self.scheduler.get_jobs():
+            job_id = job.id
+            if not job.pending or job_id not in self._original_intervals:
+                continue
+            original = self._original_intervals[job_id]
+            health_multiplier = self._adaptive_multipliers.get(job_id, 1.0)
+            load_multiplier = self._load_multipliers.get(job_id, 1.0)
+            new_interval = int(original * health_multiplier * load_multiplier)
+            await self.resume_job(job_id)
+            await self.reschedule_job(job_id, new_interval)
+            resumed += 1
+
+        if resumed:
+            logger.info(f"Resumed {resumed} paused job(s): SSE subscribers returned")
+        return resumed
+
     async def get_jobs_status(self) -> list[dict]:
         jobs = self.scheduler.get_jobs()
         result = []
@@ -232,6 +332,7 @@ class AsyncSchedulerManager:
                     "pending": job.pending,
                     "original_interval": self._original_intervals.get(job_id, 0),
                     "adaptive_multiplier": self._adaptive_multipliers.get(job_id, 1.0),
+                    "load_multiplier": self._load_multipliers.get(job_id, 1.0),
                     "last_run": str(last_run) if last_run else None,
                     "last_run_success": last_run_result.get("success"),
                     "last_run_items_count": last_run_result.get("items_count", 0),
@@ -268,6 +369,39 @@ class AsyncSchedulerManager:
 
     async def setup_default_jobs(self) -> None:
         logger.info("Setting up default collection jobs")
+
+    async def _apply_load_multiplier(self, source_id: str) -> None:
+        """Re-evaluate the system load multiplier once per collection round.
+
+        Called at the start of every _run_collection round; when the freshly
+        evaluated multiplier (evaluate_load_multiplier: SSE connection gauge +
+        Redis memory pressure) differs from the one last applied to this job,
+        the job is rescheduled immediately on
+            original × health multiplier × NEW load multiplier.
+        Ordering with the health path: the health-driven adaptive_reschedule
+        runs at the END of the same round and reads the _load_multipliers
+        entry updated here, so the two reschedule paths compose instead of
+        overwriting each other's multiplier state.
+        """
+        job_id = f"collect_{source_id}"
+        original = self._original_intervals.get(job_id)
+        if original is None:
+            return
+
+        load_multiplier = await evaluate_load_multiplier()
+        if load_multiplier == self._load_multipliers.get(job_id, 1.0):
+            return
+
+        self._load_multipliers[job_id] = load_multiplier
+        health_multiplier = self._adaptive_multipliers.get(job_id, 1.0)
+        new_interval = int(original * health_multiplier * load_multiplier)
+        job = self.scheduler.get_job(job_id)
+        if job:
+            await self.reschedule_job(job_id, new_interval)
+        logger.info(
+            f"Job {job_id} load-rescheduled: load_multiplier={load_multiplier}, "
+            f"health_multiplier={health_multiplier}, interval={new_interval}s"
+        )
 
     async def adaptive_reschedule(self, source_id: str, health_status: str) -> None:
         job_id = f"collect_{source_id}"
@@ -307,7 +441,13 @@ class AsyncSchedulerManager:
             step_down = max(target_multiplier, current_multiplier / 2)
             target_multiplier = step_down
 
-        new_interval = int(original * target_multiplier)
+        # Combined multiplier: the health multiplier (this path) and the load
+        # multiplier (_apply_load_multiplier, evaluated per collection round) are
+        # stored separately and multiply at reschedule time —
+        #   effective interval = original × health multiplier × load multiplier
+        # Neither path overwrites the other's state.
+        load_multiplier = self._load_multipliers.get(job_id, 1.0)
+        new_interval = int(original * target_multiplier * load_multiplier)
         self._adaptive_multipliers[job_id] = target_multiplier
 
         if self.scheduler.get_job(job_id):
@@ -317,8 +457,8 @@ class AsyncSchedulerManager:
             await self.reschedule_job(job_id, new_interval)
             logger.info(
                 f"Job {job_id} adaptively rescheduled: "
-                f"status={health_status}, multiplier={target_multiplier}, "
-                f"interval={new_interval}s"
+                f"status={health_status}, health_multiplier={target_multiplier}, "
+                f"load_multiplier={load_multiplier}, interval={new_interval}s"
             )
 
     def _get_category_for_source(self, source_id: str) -> str:
@@ -362,6 +502,13 @@ class AsyncSchedulerManager:
         logger.info(f"Running collection for source {source_id}")
         job_id = f"collect_{source_id}"
         self._last_run_times[job_id] = datetime.now(UTC)
+
+        # Load-aware throttling (finance-tab.md §3.8.3): re-evaluate the system
+        # load multiplier once per round, BEFORE collecting, so a multiplier
+        # change takes effect for this source immediately and the health-driven
+        # adaptive_reschedule at the end of the round (which reads the same
+        # state) composes with it rather than racing it.
+        await self._apply_load_multiplier(source_id)
 
         try:
             from sqlalchemy import select

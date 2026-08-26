@@ -67,6 +67,12 @@ class RedisKeys:
     ADMIN_LOGIN_FAIL_IP = "admin_login:fail_ip:{ip}"
     ADMIN_LOGIN_LOCK_IP = "admin_login:lock_ip:{ip}"
     WORKER_HEARTBEAT = "scheduler:worker:heartbeat"
+    # Cross-process SSE load gauge: the api process writes its in-router active
+    # connection count here (core/sse_router.py register/unregister/heartbeat),
+    # the worker's scheduler reads it back as one input of the load-aware
+    # collection throttling multiplier (scheduler/manager.py
+    # evaluate_load_multiplier, finance-tab.md §3.8.3). Plain integer string.
+    SSE_ACTIVE_CONNECTIONS = "sse:active_connections"
     STREAM_HISTORY = "stream:history:{category}"
     APIKEY_ROTATION = "apikey:rotation:{service}"
     APIKEY_LIMITED = "apikey:limited:{service}:{key_hash}"
@@ -93,6 +99,11 @@ class RedisKeys:
     # Also used by the api side as the freshness threshold when judging worker
     # health from the heartbeat (app/services/dashboard.py).
     WORKER_HEARTBEAT_TTL = 45
+    # SSE active-connections gauge TTL: 2x the 30s heartbeat refresh interval so a
+    # live api process never lets the key lapse, while a dead api process makes
+    # the gauge disappear within one minute (the scheduler then degrades to the
+    # normal collection frequency instead of throttling on stale numbers).
+    SSE_ACTIVE_CONNECTIONS_TTL = 60
     # Minute-bucket TTL: covers the bucket being written plus the previous one,
     # which is all the sliding 60s window reader ever needs.
     API_METRICS_MINUTE_TTL = 120
@@ -182,6 +193,10 @@ class RedisKeys:
     @staticmethod
     def worker_heartbeat_key() -> str:
         return RedisKeys.WORKER_HEARTBEAT
+
+    @staticmethod
+    def sse_active_connections_key() -> str:
+        return RedisKeys.SSE_ACTIVE_CONNECTIONS
 
     @staticmethod
     def stream_history_key(category: str) -> str:

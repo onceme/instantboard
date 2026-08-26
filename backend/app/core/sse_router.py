@@ -37,6 +37,92 @@ async def _record_push_event_count() -> None:
         logger.debug(f"Failed to record SSE push event count: {e}")
 
 
+async def _sync_active_connections_gauge() -> None:
+    """Write the in-router active SSE connection count to Redis as a gauge.
+
+    The scheduler (a separate worker process in prod) cannot see this process's
+    connection registry, so the count is exposed through the Redis key
+    `sse:active_connections` and consumed by scheduler/manager.py's
+    evaluate_load_multiplier (finance-tab.md §3.8.3). Simple SET-of-full-count
+    with a TTL rather than INCR/DECR: every write is self-correcting (no drift
+    from lost decrements), and the TTL plus the heartbeat refresh guarantee the
+    gauge disappears shortly after the api process dies instead of throttling
+    collection forever on a stale number. Single api process assumption — with
+    multiple api replicas each would overwrite the others' count (same
+    limitation as the in-process registry itself, see dashboard-tab.md §3.8).
+
+    Refresh points: register()/unregister() for immediacy, the heartbeat loop
+    for TTL keep-alive between connection changes. Fire-and-forget: Redis
+    failures are logged and swallowed, never reaching the connect/disconnect path.
+    """
+    try:
+        client = await get_redis_client()
+        count = event_router.get_connections_count()
+        await client.set(
+            RedisKeys.sse_active_connections_key(),
+            count,
+            ex=RedisKeys.SSE_ACTIVE_CONNECTIONS_TTL,
+        )
+    except Exception as e:
+        logger.debug(f"Failed to sync SSE active connections gauge: {e}")
+
+
+async def _signal_first_subscriber_resume() -> None:
+    """The SSE subscriber registry just went 0 → 1: resume paused collection.
+
+    Reverses the no-subscriber adaptive pause (scheduler/manager.py
+    adaptive_reschedule). Two independent delivery paths, both idempotent
+    no-ops when nothing is paused:
+      - Dev (SCHEDULER_ENABLED=true): the scheduler runs in this process, so
+        resume the embedded scheduler directly (deferred import — the manager
+        imports this module at top level, so importing it back at module load
+        time would be circular).
+      - Always: publish `scheduler_resume` on channel:dashboard. This is the
+        prod delivery path (the scheduler lives in the worker process, whose
+        source_event_listener dispatches the event to resume_paused_jobs());
+        publishing it in dev as well is harmless and covers mixed setups.
+    Never raises: the connect path must not depend on the resume signal.
+    """
+    from app.config import settings
+
+    try:
+        if settings.scheduler_enabled:
+            from app.scheduler.manager import scheduler_manager
+
+            resumed = await scheduler_manager.resume_paused_jobs()
+            logger.info(f"First SSE subscriber: resumed {resumed} paused job(s) in embedded scheduler")
+    except Exception as e:
+        logger.debug(f"Embedded scheduler resume on first subscriber failed: {e}")
+
+    try:
+        await redis_publish(
+            RedisKeys.channel_key("dashboard"),
+            {
+                "event": "scheduler_resume",
+                "reason": "first_sse_subscriber",
+                "timestamp": datetime.now(UTC).isoformat(),
+            },
+        )
+    except Exception as e:
+        logger.debug(f"Failed to publish scheduler_resume event: {e}")
+
+
+def _spawn_background_hook(coro) -> None:
+    """Fire-and-forget a background coroutine from sync router methods.
+
+    register()/unregister() are synchronous; the gauge/resume side effects are
+    async and must never block or break them. When no event loop is running
+    (sync unit tests), the coroutine is closed and silently dropped. Spawned
+    tasks are short-lived and exception-safe by construction.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        coro.close()
+        return
+    loop.create_task(coro)
+
+
 class SSEEventType(StrEnum):
     ITEM_UPDATE = "item_update"
     QUOTE_UPDATE = "quote_update"
@@ -87,11 +173,25 @@ class SSEEventRouter:
         tenant_id: str,
         user_id: str | None = None,
     ) -> SSEConnection:
+        # Capture this BEFORE inserting the new connection so a 0 → 1 registry
+        # transition (first subscriber) is detectable; the resume hook reverses
+        # the no-subscriber adaptive pause (see _signal_first_subscriber_resume).
+        was_empty = self.get_connections_count() == 0
+
         conn = SSEConnection(client_id, categories, tenant_id, user_id=user_id)
         self._connections[client_id] = conn
         for category in categories:
             self._subscriptions.setdefault(category, set()).add(client_id)
         logger.info(f"SSE connection registered: {client_id} categories={categories}")
+
+        # System-level side effects — the cross-process load gauge and the
+        # first-subscriber resume hook — are properties of THE process-wide
+        # registry (the module singleton), so they only fire for it. Local
+        # instances (notably unit tests) stay side-effect free.
+        if self is event_router:
+            _spawn_background_hook(_sync_active_connections_gauge())
+            if was_empty:
+                _spawn_background_hook(_signal_first_subscriber_resume())
         return conn
 
     def unregister(self, client_id: str) -> SSEConnection | None:
@@ -105,6 +205,10 @@ class SSEEventRouter:
                     if not subscribers:
                         del self._subscriptions[category]
             logger.info(f"SSE connection unregistered: {client_id} events_sent={conn.events_sent_count}")
+            # Same rationale as in register(): only the process-wide registry
+            # drives the cross-process gauge.
+            if self is event_router:
+                _spawn_background_hook(_sync_active_connections_gauge())
         return conn
 
     def get_connection(self, client_id: str) -> SSEConnection | None:
@@ -282,6 +386,11 @@ class SSEEventRouter:
                     for conn in self.get_all_active_connections():
                         with contextlib.suppress(Exception):
                             await conn.send_event(SSEEventType.HEARTBEAT.value, heartbeat_data)
+                    # Keep the Redis connection gauge alive between connect/disconnect
+                    # events: the key's TTL (60s) is 2x this loop's default cadence, so
+                    # one refresh per cycle is enough and a dead api process still lets
+                    # the gauge expire promptly (degraded → normal collection frequency).
+                    await _sync_active_connections_gauge()
                 except asyncio.CancelledError:
                     logger.info("SSE heartbeat cancelled")
                     break

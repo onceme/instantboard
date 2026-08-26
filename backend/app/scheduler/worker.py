@@ -39,6 +39,16 @@ logger = logging.getLogger("instantboard.worker")
 # a worker restart.
 SOURCE_EVENT_NAMES = {"source_created", "source_enabled", "source_disabled", "source_deleted"}
 
+# First-subscriber resume signal published by the api process when its SSE
+# registry goes 0 → 1 (core/sse_router.py _signal_first_subscriber_resume),
+# reversing the no-subscriber adaptive pause across the process boundary
+# (finance-tab.md §3.8.3).
+SCHEDULER_RESUME_EVENT = "scheduler_resume"
+
+# Everything the dashboard-channel listener acts on (source lifecycle + the
+# scheduler resume hook); anything else on the channel is SSE-client traffic.
+WORKER_EVENT_NAMES = SOURCE_EVENT_NAMES | {SCHEDULER_RESUME_EVENT}
+
 # Heartbeat cadence: the worker rewrites its heartbeat every 15s with a TTL of
 # 3x that interval (RedisKeys.WORKER_HEARTBEAT_TTL = 45s). The api side treats
 # a heartbeat younger than 45s as a live worker. Contract:
@@ -96,6 +106,16 @@ async def handle_source_status_event(event_data: dict) -> None:
     any lost event.
     """
     event = event_data.get("event")
+
+    if event == SCHEDULER_RESUME_EVENT:
+        # First-subscriber resume hook (finance-tab.md §3.8.3). In the worker,
+        # adaptive pause is disabled (disable_adaptive_pause), so there are
+        # normally no paused jobs and this is a no-op returning 0 — but the hook
+        # stays functional if any job ever is paused. Semantics of
+        # disable_adaptive_pause are unchanged: it only governs the *pause* side.
+        resumed = await scheduler_manager.resume_paused_jobs()
+        logger.info(f"scheduler_resume event: resumed {resumed} paused job(s)")
+        return
 
     if event in ("source_enabled", "source_created"):
         source = event_data.get("source") or {}
@@ -159,7 +179,7 @@ async def source_event_listener(subscribed: asyncio.Event | None = None, listene
             except (TypeError, json.JSONDecodeError):
                 logger.warning("Invalid JSON in source status message, ignoring")
                 continue
-            if not isinstance(data, dict) or data.get("event") not in SOURCE_EVENT_NAMES:
+            if not isinstance(data, dict) or data.get("event") not in WORKER_EVENT_NAMES:
                 continue
             try:
                 await handle_source_status_event(data)

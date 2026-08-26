@@ -282,7 +282,8 @@ class ProcessorChain:
 |------|---------|---------|
 | 运行位置 | 内嵌 api 进程（`SCHEDULER_ENABLED=true`） | 独立 worker 容器：复用 backend 镜像（target: production）+ `command: python -m app.scheduler.worker`（docker-compose.prod.yml:97-117） |
 | api 侧调度器 | 与调度器同进程 | `SCHEDULER_ENABLED=false` 关闭，避免双调度器重复采集 |
-| 自适应暂停 | 启用：无 SSE 订阅者时暂停任务 | 禁用（`disable_adaptive_pause()`，worker 进程内无 SSE 连接注册表） |
+| 自适应暂停 | 启用：无 SSE 订阅者时暂停任务；首个订阅者到来（0→1）时 `resume_paused_jobs()` 恢复 | 禁用（`disable_adaptive_pause()`，worker 进程内无 SSE 连接注册表）——暂停侧禁用语义不变；恢复钩子仍生效但无暂停任务时是 no-op |
+| 负载降频 | `evaluate_load_multiplier()` 每轮评估：SSE 连接数 >500 或 Redis 内存 >80% → ×2（信号缺失 ×1.0 失败开放），与最终间隔 = 原始 × 健康 × 负载 | 同左：SSE 连接数为 api 进程写入 Redis 的 `sse:active_connections` gauge（跨进程信号），内存信号 `INFO memory` 直读（finance-tab.md §3.8.3） |
 | 可观测性 | 进程内日志 | Redis 心跳 `scheduler:worker:heartbeat`（15s 写入 / 45s TTL，契约见 infrastructure.md §3.5） |
 
 > ⚠️ **未实现**：任务级自动重试 / 指数退避（原 Celery 语义）与多 worker 水平扩展。当前失败处理为"记录健康状态 → 降频 → 下一调度周期重试"。
@@ -299,6 +300,15 @@ SOURCE_TYPE_DEFAULT_INTERVALS = {           # manager.py:16-28
     "web_scrape": 1800, "api": 60, "social": 600,
 }
 
+# 负载降频阈值 (finance-tab.md §3.8.3)
+SSE_LOAD_THRESHOLD = 500                # 活跃 SSE 连接数 (严格大于才触发)
+REDIS_MEM_LOAD_THRESHOLD = 0.8          # used_memory/maxmemory (maxmemory=0 跳过)
+LOAD_MULTIPLIER = 2.0                   # 上限倍率, 两信号取最大不叠加
+
+async def evaluate_load_multiplier() -> float: ...
+# 跨进程信号: api 进程写 sse:active_connections gauge (register/unregister + 30s 心跳,
+# TTL 60s, SET 全量自校正); worker 读 gauge + INFO memory. 信号读取失败 → ×1.0 失败开放.
+
 class AsyncSchedulerManager:
     # job_defaults: max_instances=1 (防重叠), misfire_grace_time=60, coalesce=True
     # add_job 传 next_run_time=now 使首次立即执行
@@ -307,12 +317,15 @@ class AsyncSchedulerManager:
 
     async def add_collection_job(self, source_id, interval_seconds, source_type): ...
     async def schedule_all_active_sources(self, sources): ...      # 启动时从 DB 全量重建
-    async def adaptive_reschedule(self, source_id, health_status): ...
+    async def adaptive_reschedule(self, source_id, health_status): ...   # 间隔=原始×健康×负载倍率
+    async def _apply_load_multiplier(self, source_id): ...         # _run_collection 每轮评估, 变化即重排该源
+    async def resume_paused_jobs(self) -> int: ...                 # 首个订阅者恢复钩子; 无暂停任务 no-op
 
 # app/scheduler/worker.py — 生产独立进程入口 (python -m app.scheduler.worker)
 # 1. create_tables() 建表
 # 2. disable_adaptive_pause() → scheduler.start()
-# 3. 订阅 channel:dashboard 的源生命周期事件 (先于全量重建, 防启动窗口丢事件)
+# 3. 订阅 channel:dashboard: 源生命周期事件 (source_created/enabled/disabled/deleted)
+#    + scheduler_resume 首个订阅者恢复事件 (WORKER_EVENT_NAMES; 先于全量重建, 防启动窗口丢事件)
 # 4. schedule_all_active_sources() 从 DB 全量重建任务
 # 5. heartbeat_loop: 每 15s 写心跳
 # 6. SIGTERM/SIGINT 优雅停机 (先停监听器, 再清心跳)
@@ -336,14 +349,22 @@ graph TD
     end
 
     subgraph Adaptive["自适应"]
-        Step6{"6. 无SSE订阅者?<br>(仅 api 内嵌调度器; worker 已禁用)"}
+        Step6{"6. 无SSE订阅者?<br>(仅 api 内嵌调度器; worker 已禁用暂停侧)"}
         Step6 -->|"是"| PauseTask["暂停对应任务"]
         Step6 -->|"否"| KeepRunning["继续运行"]
-        PauseTask --> Step7["7. 订阅者到来 → 恢复"]
+        PauseTask --> Step7["7. 首个订阅者到来(注册表0→1) → resume_paused_jobs()<br>开发: api 直接调用 / 生产: channel:dashboard scheduler_resume 事件 → worker"]
         Step8{"8. 健康状态恶化?"}
-        Step8 -->|"degraded"| ReduceFreq1["间隔 ×2.0"]
-        Step8 -->|"down"| ReduceFreq2["间隔 ×10.0"]
-        Step8 -->|"healthy"| Recover["multiplier 逐轮减半回调至 ×1.0"]
+        Step8 -->|"degraded"| ReduceFreq1["健康倍率 ×2.0"]
+        Step8 -->|"down"| ReduceFreq2["健康倍率 ×10.0"]
+        Step8 -->|"healthy"| Recover["健康倍率逐轮减半回调至 ×1.0"]
+        Step9{"9. 负载信号超标?<br>SSE连接数>500 或 Redis内存>80%"}
+        Step9 -->|"超标"| LoadThrottle["负载倍率 ×2.0 (取最大不叠加)"]
+        Step9 -->|"未超标/信号缺失"| LoadNormal["负载倍率 ×1.0 (失败开放)"]
+        ReduceFreq1 --> Combine["最终间隔 = 原始 × 健康倍率 × 负载倍率"]
+        ReduceFreq2 --> Combine
+        Recover --> Combine
+        LoadThrottle --> Combine
+        LoadNormal --> Combine
     end
 
     subgraph Shutdown["优雅停机"]
@@ -361,7 +382,7 @@ graph TD
 |---------|--------|--------|---------|
 | `channel:finance` | FinanceService / 采集管道 | SSEEventRouter | quote_update / market_index_update / commodity_update / nav_estimate_update |
 | `channel:tech` | 采集管道 | SSEEventRouter | item_update / topic_stats_update（条目入库触发 + 900s 窗口节流，见 tech-tab.md §3.8） |
-| `channel:dashboard` | SourceService / 调度器 / 指标采集 | SSEEventRouter **+ worker**（`scheduler/worker.py:111`） | SSE 事件：system_metric_update / source_health_update / source_created；源生命周期事件（键为 `event`）：source_enabled / source_disabled / source_deleted —— **注意：发布在 dashboard 频道，而非 admin** |
+| `channel:dashboard` | SourceService / 调度器 / 指标采集 / SSE 首个订阅者钩子 | SSEEventRouter **+ worker**（`scheduler/worker.py::source_event_listener`） | SSE 事件：system_metric_update / source_health_update / source_created；worker 消费的事件（键为 `event`，`WORKER_EVENT_NAMES`）：source_enabled / source_disabled / source_deleted（源生命周期）+ `scheduler_resume`（api SSE 注册表 0→1 时发布 → worker `resume_paused_jobs()`，见 finance-tab.md §3.8.3）——**注意：发布在 dashboard 频道，而非 admin** |
 | `channel:admin` | **无** | SSEEventRouter | 已被订阅但当前无任何发布者（保留备用） |
 | `channel:all` | — | SSEEventRouter（all 聚合） | 各频道消息向 `all` 订阅者二次投递 |
 

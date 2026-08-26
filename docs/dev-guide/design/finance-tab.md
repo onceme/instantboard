@@ -351,9 +351,13 @@ graph TD
 
 #### 3.8.3 动态频率调整（现状）
 
-- **无连接暂停**（部分实现）: `adaptive_reschedule` 在无任何 SSE 连接或该源分类无订阅者时暂停任务（`scheduler/manager.py`）；但**没有"首个订阅者到来时恢复"钩子**，且 **worker 进程直接禁用该机制**（`disable_adaptive_pause()`，因 SSE 连接注册表只在 api 进程，否则任务首轮后永久暂停）
+- **自适应暂停 / 首个订阅者恢复** ✅ 已实现: `adaptive_reschedule` 在无任何 SSE 连接或该源分类无订阅者时暂停任务（`scheduler/manager.py`，仅 api 内嵌调度器启用）；**首个订阅者到来（注册表 0→1）时恢复**——api 进程在 `register` 检测到 0→1 边缘即发出恢复信号：开发环境（内嵌调度器）直接调 `scheduler_manager.resume_paused_jobs()`（延迟 import 避免与 manager 的循环依赖），同时无条件发布 `scheduler_resume` 事件到 `channel:dashboard`（生产路径：`scheduler/worker.py` `WORKER_EVENT_NAMES` 分发，同样调 `resume_paused_jobs()`）。`resume_paused_jobs()` 以 APScheduler `job.pending` 为暂停集合（与无连接暂停同一状态，不做二次簿记），按"原始间隔 × 健康倍率 × 负载倍率"恢复并返回恢复数；无暂停任务是 no-op 返回 0，两条路径都幂等。**worker 进程仍禁用暂停侧**（`disable_adaptive_pause()`，因 SSE 连接注册表只在 api 进程，否则任务首轮后永久暂停）——该开关语义不变，只影响暂停侧，不影响负载降频与恢复钩子（恢复钩子在无暂停任务时自然 no-op）
 - **错误降频**（实际为健康度自适应）: 按数据源健康状态调整周期倍率 — healthy ×1.0 / degraded ×2.0 / down ×10.0，恢复时倍率逐次减半回落
-> ⚠️ **未实现**：「SSE连接数 > 500 或 Redis内存 > 80% → 自动降频」无任何实现。
+- **负载降频** ✅ 已实现（`scheduler/manager.py::evaluate_load_multiplier`，`_run_collection` 每轮评估一次）:
+  - **跨进程信号口径**: 生产环境调度在独立 worker 进程、SSE 连接表在 api 进程，负载信号走 Redis——api 进程在 SSE `register`/`unregister` 时把连接计数写为 `sse:active_connections` gauge（SET 全量计数自校正、TTL 60s、30s 心跳续期保活，api 挂掉后键过期即回落），另有 Redis 内存占比信号由 worker 直接 `INFO memory` 读取；开发环境同进程同样成立（读自己的 gauge）
+  - **判定与阈值**: 活跃连接数 > `SSE_LOAD_THRESHOLD`（**严格大于**，阈值 500）→ ×2；`used_memory/maxmemory` > `REDIS_MEM_LOAD_THRESHOLD`（阈值 0.8；`maxmemory=0` 表示未设上限，跳过内存信号）→ ×2；两信号同时超标**取最大不叠加**（`LOAD_MULTIPLIER=2.0` 即上限，不会出现 ×4）
+  - **与健康降频组合**: 健康倍率与负载倍率分开存储（`_adaptive_multipliers` / `_load_multipliers`），最终间隔 = 原始间隔 × 健康倍率 × 负载倍率；两条重排路径读同一份状态，顺序上每轮先评估负载（轮首）后走健康重排（轮末），互不覆盖
+  - **重排与失败开放**: 本轮评估值与该源当前值不同 → 立即重排该源（复用现有 `reschedule_job`）；信号读取失败（Redis 不可用/键过期/值脏）→ ×1.0，宁可正常频率也不错降频
 
 ### 3.9 SSE 事件类型定义 (财经频道, 现状)
 

@@ -53,7 +53,10 @@ class FakeE2ECollector(BaseCollector):
             {
                 "title": "SpaceX launches another Starlink batch",
                 "url": "https://e2e.example/news/starlink",
-                "summary": "SpaceX deployed more Starlink satellites to expand satellite internet coverage.",
+                # Wording matters: the categorizer matches keywords as plain
+                # case-insensitive substrings, so e.g. "coveRAGe" would tag this
+                # item ai/ai-agent and break the absolute /tech/topics counts.
+                "summary": "SpaceX deployed more Starlink satellites to extend satellite internet service.",
                 "published_at": published,
                 "extra_data": {},
             },

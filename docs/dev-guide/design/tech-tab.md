@@ -221,7 +221,8 @@ graph TD
     L3 --> note["…"]
 ```
 
-> ⚠️ **未实现**：三级标签 — `/tech/topics` 话题统计接口存在（`techStore.topics` 有请求），但**无任何组件消费**（零调用）；标签提取也不会产出三级动态标签（见 §3.4.2）。前端 `TechTopic` 类型仍按旧契约（含 level 字段）定义，待同步。
+> ✅ **热门话题标签展示（已实现）**：`/tech/topics` 话题统计结果由 `HotTopics.vue` 消费——按 `count` 降序取 top 12 渲染为可点击标签（含 count 徽标），点击经 `GET /tech/news?tag=` 过滤新闻流（JSONB containment，与 domain/subcategory 叠加），再点取消（见 §3.4.3）。前端 `TechTopic` 类型已与后端契约对齐（`{tag, label, count, last_active_at}`）。
+> ⚠️ **未实现**：三级动态标签的**产出** — 标签提取不会产出三级动态标签（见 §3.4.2，TF-IDF 特性范围）；当前热门标签展示的是已有一级/二级标签与基础标签（tech/general）的统计。
 
 #### 3.4.2 标签自动提取算法（现状）
 
@@ -236,7 +237,7 @@ graph TD
 > ⚠️ **未实现**：TF-IDF 辅助提取高频术语作为三级标签（原设计步骤2）；LLM 标注（原设计步骤3，本来就属未来增强）。
 > 注：`services/tech.py` 中还有一份 46 条的重复关键词表（`KEYWORD_TO_TAG`），其 `extract_topic_tags` 方法无人调用，属冗余代码。
 
-#### 3.4.3 TopicFilter UI 组件（现状）
+#### 3.4.3 TopicFilter 与热门话题标签（现状）
 
 ```mermaid
 %%{init: {"theme": "base", "themeVariables": {"primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#767676", "lineColor": "#767676", "arrowheadColor": "#767676", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#767676", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#767676", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#767676", "clusterBkg": "#ffffff", "clusterBdr": "#767676", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
@@ -244,9 +245,14 @@ graph TD
     TSN["TechSubNav (TechView顶部)<br/>一级领域切换: 全部 / 机器人 / AI / 嵌入式 / 太空"]
     TFC["TopicFilter<br/>平铺 24 个二级子分类标签"]
     TFC --> Interact["交互: 点击标签 → 单选过滤 (再点取消)"]
+    HT["HotTopics<br/>/tech/topics 结果按 count 降序取 top 12"]
+    HT --> HTInteract["交互: 点击 → GET /tech/news?tag= 过滤<br/>(与 domain/subcategory 叠加, 再点取消)"]
 ```
 
-> 与旧设计差异：一级领域切换在 **TechSubNav**（非 TopicFilter）；TopicFilter **单选**（非多选），无"展开更多"分组；无热门三级动态标签。
+> 与旧设计差异：一级领域切换在 **TechSubNav**（非 TopicFilter）；TopicFilter **单选**（非多选），无"展开更多"分组。
+>
+> ✅ **热门话题标签（已实现）**：`HotTopics.vue` 挂载于 TopicFilter 下方，消费 `techStore.topics`（TechView 挂载时经 `init()` → `fetchTopics()` 拉取，已复用）：按 `count` 降序取 top 12 渲染 `label` + count 徽标；点击经 `techStore.setTag` 切换 `activeTag` 并驱动 `/tech/news?tag=` 查询——服务端过滤使**面板/合并流两种视图同时生效**（合并流另在 `NewsFeed` 客户端再过滤，覆盖 SSE 注入的未过滤条目），再点同一标签取消；`TopicFilter` 的「全部」按钮同时清除标签过滤。加载中显示骨架占位，无话题数据不渲染。
+> ⚠️ 热门标签内容仍以现有一级/二级标签与基础标签为主——**三级动态标签的产出**属 TF-IDF 特性范围（未实现，见 §3.4.2）。
 
 ### 3.5 推荐算法/排序策略
 
@@ -289,7 +295,7 @@ if hn_score:
 | RSS新闻 (主流源) | 120-300s | SSE item_update |
 | RSS新闻 (低频源, 如NASA/Arxiv/EE Times) | 1800-86400s | SSE item_update |
 | HackerNews (RSS) | 120s | 经 hnrss.org RSS，非 Firebase API |
-| 话题统计 | 按需 (`GET /tech/topics`) | Redis 缓存 900s；**REST 拉取，无 SSE 推送** |
+| 话题统计 | 按需 (`GET /tech/topics`)，TechView 挂载时经 `init()` 拉取 | Redis 缓存 900s；**REST 拉取，无 SSE 推送**；前端 `HotTopics.vue` 展示 top 12 热门标签、点击过滤（见 §3.4.3） |
 
 **与财经对比**: 科技资讯刷新频率整体低于财经行情，因为新闻更新频率远低于市场行情。
 
@@ -303,6 +309,7 @@ if hn_score:
 |------|------|------|
 | `domain` | 一级标签 | robotics/ai/embedded/space，JSONB containment 过滤 (`topic_tags @>`) |
 | `subcategory` | 二级标签 | 同上 |
+| `tag` | 任意话题标签 | 热门标签点击过滤（`HotTopics.vue` 驱动），JSONB containment (`topic_tags @> '["{tag}"]'`)，与 domain/subcategory 叠加；空/空白值忽略 |
 | `sort` | hot \| time \| relevance | 见 §3.5.1 |
 | `source_id` | UUID | 指定数据源 |
 | `since` | ISO8601 | `published_at >= since` |
@@ -310,7 +317,7 @@ if hn_score:
 
 响应字段：`id, title, summary, url, source_name, source_id, category_id, topic_tags, domain_tag, published_at, fetched_at, image_url, priority, extra_data, hot_score` + 分页 meta。
 
-**过滤维度**：领域、子分类、数据源、时间范围均已实现（后端）；关键词全文搜索未实现。
+**过滤维度**：领域、子分类、话题标签（`tag`）、数据源、时间范围均已实现（后端）；关键词全文搜索未实现。
 
 ### 3.8 SSE 事件类型定义 (科技频道, 现状)
 

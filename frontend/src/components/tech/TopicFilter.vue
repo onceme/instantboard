@@ -30,6 +30,9 @@ function toggleTag(tag: string) {
 }
 
 function clearAll() {
+  // Direct write (no fetch of its own) so the hot-topic tag is cleared by the
+  // setDomain/setSubcategory refetches below instead of adding a third request
+  techStore.activeTag = "";
   techStore.setDomain("all");
   techStore.setSubcategory("");
 }

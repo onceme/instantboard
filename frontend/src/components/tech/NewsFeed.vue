@@ -31,6 +31,13 @@ const filteredItems = computed(() => {
     );
   }
 
+  if (techStore.activeTag) {
+    // SSE-pushed items bypass the server-side tag filter, so re-apply it here
+    items = items.filter((item) =>
+      item.topic_tags.includes(techStore.activeTag),
+    );
+  }
+
   return items;
 });
 </script>

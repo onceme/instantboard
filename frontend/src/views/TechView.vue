@@ -5,6 +5,7 @@ import TechSubNav from "@/components/tech/TechSubNav.vue";
 import CategoryPanel from "@/components/tech/CategoryPanel.vue";
 import NewsFeed from "@/components/tech/NewsFeed.vue";
 import TopicFilter from "@/components/tech/TopicFilter.vue";
+import HotTopics from "@/components/tech/HotTopics.vue";
 import ErrorAlert from "@/components/common/ErrorAlert.vue";
 
 const techStore = useTechStore();
@@ -39,6 +40,7 @@ function switchToGridMode() {
   <div class="tech-view">
     <TechSubNav />
     <TopicFilter />
+    <HotTopics />
 
     <ErrorAlert
       v-if="techStore.error"

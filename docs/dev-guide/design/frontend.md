@@ -58,10 +58,12 @@ frontend/src/
 │   │   ├── QuoteCard.vue / FinanceGrid.vue / FinanceSubNav.vue
 │   │   # ⚠️ 未实现: MarketTicker / WatchlistPanel / StockDetail / FundDetail /
 │   │   #   NAVCalculator / MarketIndexCard / CommodityCard / FinanceSearch / QuoteChart
-│   ├── tech/               # TopicFilter.vue / NewsFeed.vue / NewsCard.vue / TopicTag.vue /
-│   │   │                   # CategoryPanel.vue / TechSubNav.vue（补充）
-│   │   │                   # NewsCard: 标签行"+"内联打标、TopicTag"×"移除（乐观+回滚）、
-│   │   │                   #   image_url 缩略图（懒加载，@error 隐藏）
+ │   ├── tech/               # TopicFilter.vue / NewsFeed.vue / NewsCard.vue / TopicTag.vue /
+ │   │   │                   # CategoryPanel.vue / TechSubNav.vue（补充）/
+ │   │   │                   # HotTopics.vue（/tech/topics 结果 top 12 热门标签，count 徽标，
+ │   │   │                   #   点击 → /tech/news?tag= 过滤，再点取消；加载中骨架、无数据不渲染）
+ │   │   │                   # NewsCard: 标签行"+"内联打标、TopicTag"×"移除（乐观+回滚）、
+ │   │   │                   #   image_url 缩略图（懒加载，@error 隐藏）
 │   │   # ⚠️ 未实现: TrendChart（话题热度图）
 │   ├── dashboard/          # 实际 6 个:
 │   │   ├── HealthPanel.vue / SystemStatus.vue / ServicesHealth.vue
@@ -70,7 +72,7 @@ frontend/src/
 ├── stores/                 # Pinia 共 6 个:
 │   ├── auth.ts             # token/user/login-logout + 主题状态(theme/themeMode/colorScheme)
 │   ├── finance.ts          # quotes, watchlist, indices, commodities + 逐面板错误态
-│   ├── tech.ts             # news, topics
+ │   ├── tech.ts             # news, topics(+activeTag 热门标签过滤)
 │   ├── dashboard.ts        # system, services, sources, sse stats
 │   ├── settings.ts         # categories, sources（不含主题）
 │   └── sse.ts              # SSE 频道状态汇总
@@ -126,7 +128,7 @@ graph TD
 各视图布局摘要:
 
 - **FinanceView**: FinanceSubNav + FinanceGrid；右栏（≥1440px）WatchlistMini + FundNAV；Overview 面板目前只渲染 MarketIndices（见 [finance-tab.md](finance-tab.md)）
-- **TechView**: TechSubNav + TopicFilter + CategoryPanel×4 / NewsFeed 双视图（见 [tech-tab.md](tech-tab.md)）；其中 NewsCard 支持三级标签手动标注——标签行"+"内联输入框打标、标签上"×"移除（乐观移除失败回滚，见 [content-categories.md](content-categories.md) §3.6.1）——并在 `image_url` 非空时渲染缩略图（桌面 96×72、移动端 64×48，`loading="lazy"`，加载失败 `@error` 后隐藏；见 [tech-tab.md](tech-tab.md) §3.3.3）
+- **TechView**: TechSubNav + TopicFilter + HotTopics（热门标签 top 12，点击 → `/tech/news?tag=` 过滤）+ CategoryPanel×4 / NewsFeed 双视图（见 [tech-tab.md](tech-tab.md)）；其中 NewsCard 支持三级标签手动标注——标签行"+"内联输入框打标、标签上"×"移除（乐观移除失败回滚，见 [content-categories.md](content-categories.md) §3.6.1）——并在 `image_url` 非空时渲染缩略图（桌面 96×72、移动端 64×48，`loading="lazy"`，加载失败 `@error` 后隐藏；见 [tech-tab.md](tech-tab.md) §3.3.3）
 - **CategoryView**: /c/:slug 自定义分类通用信息流 — 按 slug 解析自定义分类（未命中显示 EmptyState），GET /categories/{id}/items 分页拉取（useInfiniteScroll 无限滚动，复用 NewsCard）；加载/错误/重试与 FinanceView 模式一致（见 [content-categories.md](content-categories.md) §3.3.1 Step 6）
 - **DashboardView**: HealthPanel + 双列 flex（左 SystemStatus/DataSourcesHealth，右 ServicesHealth/SSEStats）（见 [dashboard-tab.md](dashboard-tab.md)）
 - **SettingsView**: CategoryEditor / SourceEditor / ProfileSettings / TenantOverrides / ThemeToggle；CategoryEditor 的创建/编辑为完整表单——名称/描述/图标（`categoryIcons.ts` CATEGORY_ICON_OPTIONS 的 15 个精选 lucide 图标，默认 folder）/颜色（`<input type="color">`，默认 #3B82F6）/刷新频率（秒，客户端校验 ≥10，创建留空走后端默认 300、编辑留空保持不变）/关键词（逗号分隔 → keywords_filter 数组，空白项过滤；后端响应不回显关键词，编辑留空 = 保持不变）/slug（可选，创建留空由后端从名称生成），type 固定 custom，并为自定义分类行提供「重新分类」按钮（ConfirmationDialog 确认 → POST /categories/{id}/reclassify → 回显扫描/更新计数，失败走 ErrorAlert）；「租户覆盖」页签仅 `role === "admin"` 渲染（TenantOverrides.vue）——列出系统+自有分类并为每行提供刷新频率/颜色覆盖输入，加载时经 GET /tenant/settings 回填，保存时留空条目不写入 payload（整体替换语义 = 清除已有覆盖），400 展示 error.details[] 首条、403 降级提示无权限（见 [content-categories.md](content-categories.md) §3.4.4）；ProfileSettings 除主题/涨跌配色外还提供「关注话题」——按四大领域分组点选科技二级标签（`SUBCATEGORY_MAP` 24 项，多选切换、`aria-pressed`），挂载时经 GET /users/me/preferences 回显（回显同样经 `sanitizeFavoriteTags` 规范化），保存按钮经 PUT /users/me/preferences 整体替换（空选 = 清空；提交前经 `api/user.ts` `sanitizeFavoriteTags` 小写/去重/按 `^[a-z0-9-]{1,32}$` 过滤，非法标签不发送），成功显示「已保存」、失败行内展示错误信息；`favorite_tags` 是科技频道「相关性」排序的加权输入（见 [tech-tab.md](tech-tab.md) §3.5.1 与 [api.md](api.md) §3.2 用户偏好端点）
@@ -212,8 +214,10 @@ graph LR
 见 [tech-tab.md](tech-tab.md) 完整设计。
 
 **核心布局**:
-- 顶部: TechSubNav（一级领域）+ TopicFilter（二级标签单选）
+- 顶部: TechSubNav（一级领域）+ TopicFilter（二级标签单选）+ HotTopics（热门标签 top 12，点击 → `/tech/news?tag=` 过滤）
 - 主体: 四大领域 CategoryPanel（双视图可切换合并流 NewsFeed）
+
+> `TechTopic` 类型（`types/index.ts`）已与后端 `GET /tech/topics` 响应对齐为 `{tag, label, count, last_active_at?}`（删除了旧契约的 `level`/`trending_change`/`domain` 字段，此前无消费方）。
 
 ### 3.7 Tab3 Dashboard 界面详细设计
 

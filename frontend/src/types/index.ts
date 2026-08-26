@@ -199,10 +199,8 @@ export interface TechNewsItem {
 export interface TechTopic {
   tag: string;
   label: string;
-  level: 1 | 2 | 3;
   count: number;
-  trending_change?: number;
-  domain?: string;
+  last_active_at?: string | null;
 }
 
 export type TechDomain = "robotics" | "ai" | "embedded" | "space" | "all";

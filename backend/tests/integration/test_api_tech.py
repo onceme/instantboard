@@ -104,6 +104,50 @@ class TestTechNews:
         resp = client.get("/api/v1/tech/news?sort=invalid", headers=_headers())
         assert resp.status_code == 422
 
+    def test_news_with_tag(self, client, mock_tech_svc):
+        mock_tech_svc.get_news.return_value = {
+            "data": [],
+            "meta": {"total": 0, "page": 1, "page_size": 20},
+        }
+
+        resp = client.get("/api/v1/tech/news?tag=llm", headers=_headers())
+        assert resp.status_code == 200
+        assert mock_tech_svc.get_news.await_args.kwargs["tag"] == "llm"
+
+    def test_news_tag_stacks_with_domain(self, client, mock_tech_svc):
+        mock_tech_svc.get_news.return_value = {
+            "data": [],
+            "meta": {"total": 0, "page": 1, "page_size": 20},
+        }
+
+        resp = client.get("/api/v1/tech/news?domain=ai&tag=llm", headers=_headers())
+        assert resp.status_code == 200
+        kwargs = mock_tech_svc.get_news.await_args.kwargs
+        assert kwargs["domain"] == "ai"
+        assert kwargs["tag"] == "llm"
+
+    def test_news_empty_tag_forwarded_for_service_to_ignore(self, client, mock_tech_svc):
+        """Empty tag values reach the service (which ignores them) instead of
+        failing validation — same tolerant style as the other tag filters."""
+        mock_tech_svc.get_news.return_value = {
+            "data": [],
+            "meta": {"total": 0, "page": 1, "page_size": 20},
+        }
+
+        resp = client.get("/api/v1/tech/news?tag=", headers=_headers())
+        assert resp.status_code == 200
+        assert mock_tech_svc.get_news.await_args.kwargs["tag"] == ""
+
+    def test_news_without_tag_forwards_none(self, client, mock_tech_svc):
+        mock_tech_svc.get_news.return_value = {
+            "data": [],
+            "meta": {"total": 0, "page": 1, "page_size": 20},
+        }
+
+        resp = client.get("/api/v1/tech/news", headers=_headers())
+        assert resp.status_code == 200
+        assert mock_tech_svc.get_news.await_args.kwargs["tag"] is None
+
     def test_news_string_timestamps(self, client, mock_tech_svc):
         mock_tech_svc.get_news.return_value = {
             "data": [

@@ -69,6 +69,7 @@ def build_news_response(result: dict) -> PaginatedResponse[TechNewsResponse]:
 async def get_tech_news(
     domain: str | None = Query(default=None),
     subcategory: str | None = Query(default=None),
+    tag: str | None = Query(default=None),
     sort: str = Query(default="hot", pattern="^(hot|time|relevance)$"),
     source_id: str | None = Query(default=None),
     since: str | None = Query(default=None),
@@ -90,6 +91,7 @@ async def get_tech_news(
         tenant_id=tenant_id,
         domain=domain,
         subcategory=subcategory,
+        tag=tag,
         sort=sort,
         page=page,
         page_size=page_size,

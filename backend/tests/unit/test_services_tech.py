@@ -411,6 +411,87 @@ class TestGetNews:
         result = await service.get_news("tenant-1", domain="nonexistent")
         assert result is not None
 
+    async def test_get_news_with_tag_filter(self):
+        db, mock_result = _mock_db()
+        redis = _mock_redis()
+        cat = _make_category()
+
+        call_count = 0
+
+        async def execute_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            mock_r = MagicMock()
+            if call_count == 1:
+                mock_r.scalar_one_or_none.return_value = cat
+            elif call_count == 2:
+                mock_r.scalar.return_value = 0
+            elif call_count == 3:
+                scalars = MagicMock()
+                scalars.all.return_value = []
+                mock_r.scalars.return_value = scalars
+            return mock_r
+
+        db.execute = execute_side_effect
+
+        service = TechService(db, redis)
+        result = await service.get_news("tenant-1", tag="llm")
+        assert result is not None
+
+    async def test_get_news_with_tag_and_domain_stack(self):
+        db, mock_result = _mock_db()
+        redis = _mock_redis()
+        cat = _make_category()
+
+        call_count = 0
+
+        async def execute_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            mock_r = MagicMock()
+            if call_count == 1:
+                mock_r.scalar_one_or_none.return_value = cat
+            elif call_count == 2:
+                mock_r.scalar.return_value = 0
+            elif call_count == 3:
+                scalars = MagicMock()
+                scalars.all.return_value = []
+                mock_r.scalars.return_value = scalars
+            return mock_r
+
+        db.execute = execute_side_effect
+
+        service = TechService(db, redis)
+        result = await service.get_news("tenant-1", domain="ai", tag="llm")
+        assert result is not None
+
+    async def test_get_news_empty_tag_ignored(self):
+        db, mock_result = _mock_db()
+        redis = _mock_redis()
+        cat = _make_category()
+
+        call_count = 0
+
+        async def execute_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            mock_r = MagicMock()
+            if call_count == 1:
+                mock_r.scalar_one_or_none.return_value = cat
+            elif call_count == 2:
+                mock_r.scalar.return_value = 0
+            elif call_count == 3:
+                scalars = MagicMock()
+                scalars.all.return_value = []
+                mock_r.scalars.return_value = scalars
+            return mock_r
+
+        db.execute = execute_side_effect
+
+        service = TechService(db, redis)
+        result = await service.get_news("tenant-1", tag="")
+        assert result["meta"]["total"] == 0
+
 
 class TestGetTopics:
     @patch("app.services.tech.redis_get", new_callable=AsyncMock, return_value=None)

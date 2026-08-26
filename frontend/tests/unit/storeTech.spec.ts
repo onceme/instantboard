@@ -1,8 +1,8 @@
 /**
  * Tech store regression: the error state is written on failure (distinct from
  * the "No news" empty state) and cleared on retry; fetchNews must send the
- * backend-aligned query params domain/subcategory/sort (the backend does not
- * recognize topic/subtopic/sort_by). init()/connectSSE() are never triggered.
+ * backend-aligned query params domain/subcategory/tag/sort (the backend does
+ * not recognize topic/subtopic/sort_by). init()/connectSSE() are never triggered.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
@@ -149,5 +149,83 @@ describe("query params are backend-aligned", () => {
       "/tech/news",
       expect.objectContaining({ domain: "robotics", page: 1 }),
     );
+  });
+});
+
+describe("hot topic tag filter", () => {
+  it("sends tag when activeTag is set and omits it when empty", async () => {
+    mockApiGet.mockResolvedValue(okNews());
+    const store = useTechStore();
+    store.activeTag = "llm";
+
+    await store.fetchNews();
+
+    expect(mockApiGet).toHaveBeenCalledWith(
+      "/tech/news",
+      expect.objectContaining({ tag: "llm" }),
+    );
+
+    store.activeTag = "";
+    await store.fetchNews();
+
+    const lastParams = mockApiGet.mock.calls.at(-1)?.[1] as Record<
+      string,
+      unknown
+    >;
+    expect(lastParams).not.toHaveProperty("tag");
+  });
+
+  it("tag stacks with domain and subcategory in one request", async () => {
+    mockApiGet.mockResolvedValue(okNews());
+    const store = useTechStore();
+    store.currentDomain = "ai";
+    store.currentSubcategory = "llm";
+    store.activeTag = "gpt-5";
+
+    await store.fetchNews();
+
+    expect(mockApiGet).toHaveBeenCalledWith(
+      "/tech/news",
+      expect.objectContaining({
+        domain: "ai",
+        subcategory: "llm",
+        tag: "gpt-5",
+      }),
+    );
+  });
+
+  it("setTag activates the tag and refetches", async () => {
+    mockApiGet.mockResolvedValue(okNews());
+    const store = useTechStore();
+    store.currentPage = 3;
+
+    store.setTag("llm");
+    await mockApiGet.mock.results[0]?.value;
+
+    expect(store.activeTag).toBe("llm");
+    expect(store.currentPage).toBe(1);
+    expect(mockApiGet).toHaveBeenCalledWith(
+      "/tech/news",
+      expect.objectContaining({ tag: "llm", page: 1 }),
+    );
+  });
+
+  it("setTag on the active tag clears the filter", async () => {
+    mockApiGet.mockResolvedValue(okNews());
+    const store = useTechStore();
+
+    store.setTag("llm");
+    await mockApiGet.mock.results[0]?.value;
+    expect(store.activeTag).toBe("llm");
+
+    store.setTag("llm");
+    await mockApiGet.mock.results[1]?.value;
+
+    expect(store.activeTag).toBe("");
+    const lastParams = mockApiGet.mock.calls.at(-1)?.[1] as Record<
+      string,
+      unknown
+    >;
+    expect(lastParams).not.toHaveProperty("tag");
   });
 });

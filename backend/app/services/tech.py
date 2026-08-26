@@ -155,6 +155,7 @@ class TechService:
         tenant_id: str,
         domain: str | None = None,
         subcategory: str | None = None,
+        tag: str | None = None,
         sort: str = "hot",
         page: int = 1,
         page_size: int = 20,
@@ -183,6 +184,7 @@ class TechService:
             tenant_id=tenant_id,
             domain=domain,
             subcategory=subcategory,
+            tag=tag,
             sort=sort,
             page=page,
             page_size=page_size,
@@ -197,6 +199,7 @@ class TechService:
         tenant_id: str,
         domain: str | None = None,
         subcategory: str | None = None,
+        tag: str | None = None,
         sort: str = "hot",
         page: int = 1,
         page_size: int = 20,
@@ -232,6 +235,13 @@ class TechService:
 
         if subcategory:
             stmt = stmt.where(Item.topic_tags.contains([subcategory]))
+
+        # Hot topic tag filter (GET /tech/news?tag=...): same JSONB containment
+        # mechanism as domain/subcategory, stacking with them. Any tag value is
+        # accepted (it is a bound parameter, never interpolated); empty/blank tags
+        # are ignored, tags matching no item simply yield an empty page.
+        if tag and tag.strip():
+            stmt = stmt.where(Item.topic_tags.contains([tag.strip()]))
 
         if source_id:
             stmt = stmt.where(Item.source_id == source_id)

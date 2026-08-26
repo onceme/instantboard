@@ -636,6 +636,8 @@ GET    /api/v1/finance/watchlist/quotes         — 自选列表所有行情
 Query Params (api/v1/tech.py:19-31；原文档的 `topic` 参数不存在):
   domain: str (optional) — 按领域筛选
   subcategory: str (optional) — 按子分类筛选
+  tag: str (optional) — 按话题标签筛选（热门标签点击过滤；与 domain/subcategory 同层
+        JSONB containment 叠加 `topic_tags @> '["{tag}"]'`；空/空白值忽略）
   sort: str (default "hot") — "hot" | "time" | "relevance"
   source_id: uuid (optional)
   since: ISO8601 datetime (optional) — 只返回此时间之后的新闻

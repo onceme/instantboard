@@ -2,7 +2,9 @@ import { defineStore } from "pinia";
 import { ref } from "vue";
 import type { TechNewsItem, TechTopic, TechDomain, TechSort } from "@/types";
 import { SSEEventType } from "@/types";
-import { apiGet, getApiErrorMessage } from "@/utils/api";
+import { techApi } from "@/api/tech";
+import type { TechNewsParams } from "@/api/tech";
+import { getApiErrorMessage } from "@/utils/api";
 import { SSEConnection, SSEConnectionState } from "@/utils/sse.ts";
 import { useAuthStore } from "./auth";
 import { useSSEStore } from "./sse";
@@ -13,12 +15,16 @@ export const useTechStore = defineStore("tech", () => {
   const currentDomain = ref<TechDomain>("all");
   const currentSort = ref<TechSort>("hot");
   const currentSubcategory = ref<string>("");
+  // Hot topic tag filter (HotTopics.vue): sent as the `tag` query param and
+  // stacks with domain/subcategory (backend JSONB containment).
+  const activeTag = ref<string>("");
   const isFeedMode = ref(false);
   const sseConnection = ref<SSEConnection | null>(null);
   const sseState = ref<SSEConnectionState>(SSEConnectionState.DISCONNECTED);
   const currentPage = ref(1);
   const totalPages = ref(0);
   const isLoading = ref(false);
+  const topicsLoading = ref(false);
   // Error message on request failure, rendered by views via ErrorAlert (distinct from the "No news" empty state)
   const error = ref<string | null>(null);
 
@@ -31,6 +37,13 @@ export const useTechStore = defineStore("tech", () => {
 
   function setSubcategory(subcategory: string) {
     currentSubcategory.value = subcategory;
+    currentPage.value = 1;
+    fetchNews();
+  }
+
+  function setTag(tag: string) {
+    // Clicking the active tag again clears the filter (toggle semantics)
+    activeTag.value = activeTag.value === tag ? "" : tag;
     currentPage.value = 1;
     fetchNews();
   }
@@ -52,7 +65,7 @@ export const useTechStore = defineStore("tech", () => {
     // Clear the previous error on retry
     error.value = null;
     try {
-      const params: Record<string, unknown> = {
+      const params: TechNewsParams = {
         page: currentPage.value,
         page_size: 20,
         // Align with backend params: domain/subcategory/sort (the backend doesn't recognize topic/subtopic/sort_by)
@@ -65,8 +78,11 @@ export const useTechStore = defineStore("tech", () => {
       if (currentSubcategory.value) {
         params.subcategory = currentSubcategory.value;
       }
+      if (activeTag.value) {
+        params.tag = activeTag.value;
+      }
 
-      const response = await apiGet<TechNewsItem[]>("/tech/news", params);
+      const response = await techApi.news(params);
       if (currentPage.value === 1) {
         newsItems.value = response.data;
       } else {
@@ -86,12 +102,15 @@ export const useTechStore = defineStore("tech", () => {
   }
 
   async function fetchTopics() {
+    topicsLoading.value = true;
     try {
-      const response = await apiGet<TechTopic[]>("/tech/topics");
+      const response = await techApi.topics();
       topics.value = response.data;
     } catch (err) {
       // Topic loading failures are also written to error for display in views
       error.value = getApiErrorMessage(err, "加载话题失败，请稍后重试。");
+    } finally {
+      topicsLoading.value = false;
     }
   }
 
@@ -158,14 +177,17 @@ export const useTechStore = defineStore("tech", () => {
     currentDomain,
     currentSort,
     currentSubcategory,
+    activeTag,
     isFeedMode,
     sseState,
     isLoading,
+    topicsLoading,
     error,
     currentPage,
     totalPages,
     setDomain,
     setSubcategory,
+    setTag,
     setSort,
     setFeedMode,
     fetchNews,

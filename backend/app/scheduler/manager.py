@@ -39,6 +39,12 @@ SSE_LOAD_THRESHOLD = 500
 REDIS_MEM_LOAD_THRESHOLD = 0.8
 LOAD_MULTIPLIER = 2.0
 
+# Periodic market refresh job ids (finance-tab.md §3.8.2): warm the market
+# indices / commodities Redis caches and push SSE on the finance channel,
+# gated on at least one major market being open.
+MARKET_INDICES_REFRESH_JOB_ID = "market_indices_refresh"
+COMMODITIES_REFRESH_JOB_ID = "commodities_refresh"
+
 _source_category_cache: dict[str, str] = {}
 
 
@@ -150,6 +156,10 @@ class AsyncSchedulerManager:
         # in the api process). The worker process has no SSE connections, so it must disable
         # this, otherwise jobs get paused permanently after the first collection round.
         self.adaptive_pause_enabled = True
+        # Periodic market refresh switch (finance-tab.md §3.8.2): when off,
+        # add_market_refresh_jobs() registers nothing. Only governs registration;
+        # unrelated to the adaptive-pause / load-throttling switches above.
+        self.market_refresh_jobs_enabled = True
 
     def disable_adaptive_pause(self) -> None:
         # Called by the worker process before starting the scheduler: the SSE connection
@@ -255,6 +265,86 @@ class AsyncSchedulerManager:
         if not source_id:
             return
         await self.remove_job(f"collect_{source_id}")
+
+    async def add_market_refresh_jobs(self) -> None:
+        """Register the periodic market indices / commodities refresh jobs
+        (finance-tab.md §3.8.2).
+
+        Two interval jobs that warm the Redis display caches and push SSE on the
+        finance channel — the display-chain counterpart of the source collection
+        jobs (which only feed the generic items pipeline):
+          - market_indices_refresh: MARKET_INDICES_REFRESH_INTERVAL (default 30s)
+          - commodities_refresh: COMMODITIES_REFRESH_INTERVAL (default 60s)
+        The job bodies gate on market hours (skip silently while every major
+        market is closed), which replaces the originally designed
+        market_indices_off_hours low-frequency job. The originally designed
+        watchlist_quotes_realtime and nav_estimates jobs stay unimplemented —
+        watchlist quotes and NAV estimates remain on-demand (see finance-tab.md
+        §3.8.1). job_defaults apply from the scheduler-level config, same as
+        the source collection jobs.
+        """
+        if not self.market_refresh_jobs_enabled:
+            logger.info("Market refresh jobs disabled, not registering")
+            return
+
+        from app.config import settings
+
+        await self.add_job(
+            job_id=MARKET_INDICES_REFRESH_JOB_ID,
+            func=self._run_market_indices_refresh,
+            interval_seconds=settings.market_indices_refresh_interval,
+        )
+        await self.add_job(
+            job_id=COMMODITIES_REFRESH_JOB_ID,
+            func=self._run_commodities_refresh,
+            interval_seconds=settings.commodities_refresh_interval,
+        )
+
+    async def _run_market_indices_refresh(self) -> None:
+        await self._run_market_refresh(MARKET_INDICES_REFRESH_JOB_ID, "refresh_market_indices")
+
+    async def _run_commodities_refresh(self) -> None:
+        await self._run_market_refresh(COMMODITIES_REFRESH_JOB_ID, "refresh_commodities")
+
+    async def _run_market_refresh(self, job_id: str, refresh_method: str) -> None:
+        """Shared body for the market indices / commodities refresh jobs
+        (finance-tab.md §3.8.2).
+
+        Market-hours gate: run only while at least one major market is open —
+        off hours the refresh is skipped silently to save external API calls
+        (this gate replaces the originally designed market_indices_off_hours
+        low-frequency job). The refresh itself goes through
+        FinanceService.refresh_* (fetch with failover + cache write + SSE push
+        of the full array payload), scoped to the system tenant like the
+        dashboard metrics collection. Failures are logged only — a periodic job
+        must never be killed by one bad round; the next interval retries.
+        """
+        self._last_run_times[job_id] = datetime.now(UTC)
+        try:
+            from app.db.session import async_session_factory
+            from app.services.finance import FinanceService
+
+            async with async_session_factory() as session:
+                service = FinanceService(db=session, redis=None)
+                if not service.is_any_market_open():
+                    logger.debug(f"{job_id}: all major markets closed, skipping refresh")
+                    self._last_run_results[job_id] = {"success": True, "items_count": 0}
+                    return
+                refreshed = await getattr(service, refresh_method)(str(SYSTEM_TENANT_ID))
+
+            if refreshed:
+                logger.info(f"{job_id}: market data cache refreshed and pushed")
+                self._last_run_results[job_id] = {"success": True, "items_count": 0}
+            else:
+                logger.warning(f"{job_id}: refresh failed (failover chain returned no data)")
+                self._last_run_results[job_id] = {
+                    "success": False,
+                    "error": "all failover sources returned no data",
+                    "items_count": 0,
+                }
+        except Exception as e:
+            logger.error(f"{job_id} failed: {e}")
+            self._last_run_results[job_id] = {"success": False, "error": str(e), "items_count": 0}
 
     async def pause_job(self, job_id: str) -> None:
         job = self.scheduler.get_job(job_id)

@@ -92,7 +92,10 @@ DATA_TYPE_COMMODITY = "commodity"
 
 
 class FinanceService:
-    def __init__(self, db: AsyncSession, redis: Redis):
+    def __init__(self, db: AsyncSession, redis: Redis | None = None):
+        # redis is optional: the market indices/commodities refresh path only uses the
+        # module-level redis_get/redis_set helpers, so background (scheduler) callers can
+        # construct the service with a DB session alone.
         self.db = db
         self.redis = redis
 
@@ -211,11 +214,46 @@ class FinanceService:
             except (json.JSONDecodeError, TypeError):
                 pass
 
+        formatted = await self._refresh_market_indices(tenant_id)
+        if formatted is None:
+            raise ServiceUnavailable(message="Market indices data temporarily unavailable")
+        return formatted
+
+    async def refresh_market_indices(self, tenant_id: str) -> bool:
+        """Periodic refresh entry (market_indices_refresh job, finance-tab.md §3.8.2).
+
+        Shares the exact fetch + cache-write + SSE-push path with a get_market_indices
+        cache miss; returns success instead of raising so the scheduled job body can log
+        and move on. The cache is always rewritten (renews the TTL); the SSE push is
+        skipped when the payload is unchanged from the current cache.
+        """
+        return await self._refresh_market_indices(tenant_id, skip_unchanged_push=True) is not None
+
+    async def _refresh_market_indices(self, tenant_id: str, skip_unchanged_push: bool = False) -> list[dict] | None:
         results = await self._fetch_indices_with_failover(tenant_id)
 
         if not results:
-            raise ServiceUnavailable(message="Market indices data temporarily unavailable")
+            return None
 
+        formatted = self._format_market_indices(results)
+
+        cache_key = RedisKeys.market_indices_key(tenant_id)
+        previous = await redis_get(cache_key) if skip_unchanged_push else None
+        await redis_set(cache_key, json.dumps(formatted), ex=REDIS_TTL_MARKET_INDEX)
+
+        # Scheduled refresh (skip_unchanged_push=True) may skip the SSE push when nothing
+        # changed; the on-demand cache-miss path keeps pushing unconditionally.
+        if not (skip_unchanged_push and self._payload_unchanged(previous, formatted)):
+            await event_router.push_event(
+                "finance",
+                SSEEventType.MARKET_INDEX_UPDATE,
+                formatted,
+                tenant_id,
+            )
+
+        return formatted
+
+    def _format_market_indices(self, results: list[dict]) -> list[dict]:
         formatted = []
         for config in MARKET_INDICES_CONFIG:
             idx_data = None
@@ -238,16 +276,6 @@ class FinanceService:
                     "timestamp": idx_data.get("timestamp") if idx_data else None,
                 }
             )
-
-        await redis_set(cache_key, json.dumps(formatted), ex=REDIS_TTL_MARKET_INDEX)
-
-        await event_router.push_event(
-            "finance",
-            SSEEventType.MARKET_INDEX_UPDATE,
-            formatted,
-            tenant_id,
-        )
-
         return formatted
 
     async def get_commodities(self, tenant_id: str) -> list[dict]:
@@ -259,11 +287,44 @@ class FinanceService:
             except (json.JSONDecodeError, TypeError):
                 pass
 
+        formatted = await self._refresh_commodities(tenant_id)
+        if formatted is None:
+            raise ServiceUnavailable(message="Commodity data temporarily unavailable")
+        return formatted
+
+    async def refresh_commodities(self, tenant_id: str) -> bool:
+        """Periodic refresh entry (commodities_refresh job, finance-tab.md §3.8.2).
+
+        Shares the exact fetch + cache-write + SSE-push path with a get_commodities cache
+        miss; returns success instead of raising so the scheduled job body can log and
+        move on. The cache is always rewritten (renews the TTL); the SSE push is skipped
+        when the payload is unchanged from the current cache.
+        """
+        return await self._refresh_commodities(tenant_id, skip_unchanged_push=True) is not None
+
+    async def _refresh_commodities(self, tenant_id: str, skip_unchanged_push: bool = False) -> list[dict] | None:
         results = await self._fetch_commodities_with_failover(tenant_id)
 
         if not results:
-            raise ServiceUnavailable(message="Commodity data temporarily unavailable")
+            return None
 
+        formatted = self._format_commodities(results)
+
+        cache_key = RedisKeys.commodities_key(tenant_id)
+        previous = await redis_get(cache_key) if skip_unchanged_push else None
+        await redis_set(cache_key, json.dumps(formatted), ex=REDIS_TTL_COMMODITY)
+
+        if not (skip_unchanged_push and self._payload_unchanged(previous, formatted)):
+            await event_router.push_event(
+                "finance",
+                SSEEventType.COMMODITY_UPDATE,
+                formatted,
+                tenant_id,
+            )
+
+        return formatted
+
+    def _format_commodities(self, results: list[dict]) -> list[dict]:
         formatted = []
         for config in COMMODITIES_CONFIG:
             comm_data = None
@@ -283,17 +344,19 @@ class FinanceService:
                     "timestamp": comm_data.get("timestamp") if comm_data else None,
                 }
             )
-
-        await redis_set(cache_key, json.dumps(formatted), ex=REDIS_TTL_COMMODITY)
-
-        await event_router.push_event(
-            "finance",
-            SSEEventType.COMMODITY_UPDATE,
-            formatted,
-            tenant_id,
-        )
-
         return formatted
+
+    @staticmethod
+    def _payload_unchanged(cached: str | None, formatted: list[dict]) -> bool:
+        # Change detection for the periodic refresh: skip the SSE push when the freshly
+        # formatted payload equals the cached one. Any unreadable/missing cache counts as
+        # changed (push).
+        if not cached:
+            return False
+        try:
+            return json.loads(cached) == formatted
+        except (json.JSONDecodeError, TypeError):
+            return False
 
     async def get_fund_nav(self, tenant_id: str, symbol: str, estimate_type: str = "realtime") -> dict:
         nav_cache_key = RedisKeys.nav_key(tenant_id, symbol)
@@ -589,6 +652,15 @@ class FinanceService:
         now_time = now.time()
 
         return any(open_time <= now_time <= close_time for open_time, close_time in trading_hours)
+
+    def is_any_market_open(self) -> bool:
+        """True while at least one major market is in a trading window (weekdays only).
+
+        Gate signal for the periodic market refresh jobs (finance-tab.md §3.8.2): the job
+        body skips silently when every market is closed, saving external API calls. This
+        replaces the originally designed market_indices_off_hours low-frequency job.
+        """
+        return any(self._is_market_open(region) for region in MARKET_TIMEZONES)
 
     async def _get_cached_quote(self, tenant_id: str, symbol: str) -> dict | None:
         cache_key = RedisKeys.quote_key(tenant_id, symbol)

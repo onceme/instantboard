@@ -328,6 +328,11 @@ async def main() -> None:
     await scheduler_manager.schedule_all_active_sources(active_sources, tenant_settings_map)
     logger.info(f"Scheduled {len(active_sources)} active data sources for collection")
 
+    # Periodic market indices / commodities cache refresh (finance-tab.md §3.8.2):
+    # in production the worker owns the scheduler, so the jobs are registered here
+    # (the api process runs with SCHEDULER_ENABLED=false and registers nothing).
+    await scheduler_manager.add_market_refresh_jobs()
+
     stop_event = asyncio.Event()
 
     def _signal_handler() -> None:

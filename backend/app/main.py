@@ -78,6 +78,11 @@ async def lifespan(app: FastAPI):
 
         await scheduler_manager.schedule_all_active_sources(active_sources, tenant_settings_map)
         logger.info(f"Scheduled {len(active_sources)} active data sources")
+
+        # Periodic market indices / commodities cache refresh (finance-tab.md §3.8.2).
+        # Only the scheduler-owning process registers these: with SCHEDULER_ENABLED=false
+        # (prod api process) this block is skipped and the worker registers them instead.
+        await scheduler_manager.add_market_refresh_jobs()
     else:
         logger.info("Scheduler disabled")
 

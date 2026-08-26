@@ -320,6 +320,14 @@ class AsyncSchedulerManager:
     async def adaptive_reschedule(self, source_id, health_status): ...   # 间隔=原始×健康×负载倍率
     async def _apply_load_multiplier(self, source_id): ...         # _run_collection 每轮评估, 变化即重排该源
     async def resume_paused_jobs(self) -> int: ...                 # 首个订阅者恢复钩子; 无暂停任务 no-op
+    async def add_market_refresh_jobs(self): ...                   # 行情定时刷新任务组 (finance-tab.md §3.8.2):
+    #   market_indices_refresh (MARKET_INDICES_REFRESH_INTERVAL, 默认 30s) /
+    #   commodities_refresh (COMMODITIES_REFRESH_INTERVAL, 默认 60s)。
+    #   任务体: 开市门控 (FinanceService.is_any_market_open, 全休市静默跳过,
+    #   替代原设计 market_indices_off_hours) → 复用按需缓存未命中的拉取+写缓存+
+    #   SSE 推送路径 (载荷未变跳推送仍续缓存), 系统租户口径; 异常只记日志不杀任务。
+    #   开关 market_refresh_jobs_enabled; 开发内嵌 (main.py lifespan) 与生产
+    #   (worker.main) 两处注册, SCHEDULER_ENABLED=false 的 api 进程不注册。
 
 # app/scheduler/worker.py — 生产独立进程入口 (python -m app.scheduler.worker)
 # 1. create_tables() 建表
@@ -327,8 +335,9 @@ class AsyncSchedulerManager:
 # 3. 订阅 channel:dashboard: 源生命周期事件 (source_created/enabled/disabled/deleted)
 #    + scheduler_resume 首个订阅者恢复事件 (WORKER_EVENT_NAMES; 先于全量重建, 防启动窗口丢事件)
 # 4. schedule_all_active_sources() 从 DB 全量重建任务
-# 5. heartbeat_loop: 每 15s 写心跳
-# 6. SIGTERM/SIGINT 优雅停机 (先停监听器, 再清心跳)
+# 5. add_market_refresh_jobs() 注册行情定时刷新任务 (同开发内嵌调度器, finance-tab.md §3.8.2)
+# 6. heartbeat_loop: 每 15s 写心跳
+# 7. SIGTERM/SIGINT 优雅停机 (先停监听器, 再清心跳)
 ```
 
 #### 3.4.3 任务编排策略
@@ -380,7 +389,7 @@ graph TD
 
 | 频道名称 | 发布者 | 订阅者 | 消息内容 |
 |---------|--------|--------|---------|
-| `channel:finance` | FinanceService / 采集管道 | SSEEventRouter | quote_update / market_index_update / commodity_update / nav_estimate_update |
+| `channel:finance` | FinanceService / 采集管道 / 调度器行情刷新任务组（`scheduler/manager.py::_run_market_refresh`，指数 30s / 商品 60s、开市门控，见 finance-tab.md §3.8.2） | SSEEventRouter | quote_update / market_index_update / commodity_update / nav_estimate_update |
 | `channel:tech` | 采集管道 | SSEEventRouter | item_update / topic_stats_update（条目入库触发 + 900s 窗口节流，见 tech-tab.md §3.8） |
 | `channel:dashboard` | SourceService / 调度器 / 指标采集 / SSE 首个订阅者钩子 | SSEEventRouter **+ worker**（`scheduler/worker.py::source_event_listener`） | SSE 事件：system_metric_update / source_health_update / source_created；worker 消费的事件（键为 `event`，`WORKER_EVENT_NAMES`）：source_enabled / source_disabled / source_deleted（源生命周期）+ `scheduler_resume`（api SSE 注册表 0→1 时发布 → worker `resume_paused_jobs()`，见 finance-tab.md §3.8.3）——**注意：发布在 dashboard 频道，而非 admin** |
 | `channel:admin` | **无** | SSEEventRouter | 已被订阅但当前无任何发布者（保留备用） |

@@ -150,6 +150,10 @@ class TestLifespan:
                     mock_sched_mgr.start = AsyncMock()
                     mock_sched_mgr.shutdown = AsyncMock()
                     mock_sched_mgr.schedule_all_active_sources = AsyncMock()
+                    mock_sched_mgr.add_market_refresh_jobs = AsyncMock()
                     with patch("app.db.session.async_session_factory", return_value=mock_session):
                         async with main_mod.lifespan(_app):
                             mock_sched_mgr.start.assert_called_once()
+                            # market indices/commodities refresh jobs ride the embedded
+                            # scheduler (finance-tab.md §3.8.2)
+                            mock_sched_mgr.add_market_refresh_jobs.assert_awaited_once()

@@ -147,6 +147,11 @@ class Settings(BaseSettings):
 
     # Scheduler
     scheduler_enabled: bool = Field(default=True, alias="SCHEDULER_ENABLED")
+    # Periodic market indices / commodities cache refresh (finance-tab.md §3.8.2):
+    # interval jobs that re-fill the Redis cache and push SSE, gated on at least
+    # one major market being open.
+    market_indices_refresh_interval: int = Field(default=30, alias="MARKET_INDICES_REFRESH_INTERVAL")
+    commodities_refresh_interval: int = Field(default=60, alias="COMMODITIES_REFRESH_INTERVAL")
 
     # Dashboard snapshot retention (docs/dev-guide/design/dashboard-tab.md §3.9.3):
     # the metrics collection loop purges dashboard_snapshots rows older than this.

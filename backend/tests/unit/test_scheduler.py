@@ -555,6 +555,7 @@ class TestWorkerModule:
             with patch("app.scheduler.worker.scheduler_manager") as mock_mgr:
                 mock_mgr.start = AsyncMock()
                 mock_mgr.schedule_all_active_sources = AsyncMock()
+                mock_mgr.add_market_refresh_jobs = AsyncMock()
                 mock_session = AsyncMock()
                 mock_session.__aenter__ = AsyncMock(return_value=mock_session)
                 mock_session.__aexit__ = AsyncMock(return_value=False)
@@ -573,6 +574,10 @@ class TestWorkerModule:
                         from app.scheduler.worker import main
 
                         await main()
+
+                        # The worker owns the scheduler in prod, so it must also register
+                        # the market indices/commodities refresh jobs (finance-tab.md §3.8.2).
+                        mock_mgr.add_market_refresh_jobs.assert_awaited_once()
 
     async def test_worker_shutdown(self):
         with patch("app.scheduler.worker.scheduler_manager") as mock_mgr:

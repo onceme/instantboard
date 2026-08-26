@@ -330,24 +330,34 @@ graph TD
 
 ### 3.8 数据刷新策略
 
-#### 3.8.1 现状（按需拉取 + Redis 缓存 TTL）
+#### 3.8.1 现状（定时刷新 + 按需兜底，Redis 缓存 TTL）
 
 | 数据类型 | 刷新方式 | 缓存TTL (Redis) | 说明 |
 |---------|---------|---------------|------|
-| 市场指数 | 前端请求时按需拉取 | 60s | TTL 内命中缓存不发外部请求 |
-| 大宗商品 | 前端请求时按需拉取 | 60s | 同上 |
-| 个股/自选行情 | 请求时按需拉取 | 30s | 自选无后台周期推送 |
-| 基金NAV估值 | 请求时按需计算 | 120s | 只缓存 Redis |
+| 市场指数 | 30s 定时刷新（`MARKET_INDICES_REFRESH_INTERVAL` 可配）+ 缓存未命中按需兜底 | 60s | 定时任务暖缓存并推 SSE，开市门控（见 §3.8.2）；TTL 内命中缓存不发外部请求 |
+| 大宗商品 | 60s 定时刷新（`COMMODITIES_REFRESH_INTERVAL` 可配）+ 缓存未命中按需兜底 | 60s | 同上 |
+| 个股/自选行情 | 请求时按需拉取 | 30s | 自选无后台周期推送（`watchlist_quotes_realtime` 属后续特性） |
+| 基金NAV估值 | 请求时按需计算 | 120s | 只缓存 Redis（`nav_estimates` 定时估值属后续特性） |
 | 搜索结果 | 按需(用户触发) | 300s (5min) | |
 
-> ⚠️ **未实现**：「交易时段高频(30s/60s/120s)后台采集 + SSE 周期推送」整套策略；自选行情、指数、商品的定时推送任务均不存在。
+> ⚠️ **未实现**：自选行情（`watchlist_quotes_realtime`）与 NAV 估值（`nav_estimates`）的定时推送——两者仍按需，属后续特性。指数/商品的定时刷新 + SSE 推送已实现（见 §3.8.2）。
 
 #### 3.8.2 定时任务现状
 
-原设计的 `scheduler/jobs.py` 与 `FINANCE_SCHEDULE_CONFIG`（`market_indices_realtime` / `watchlist_quotes_realtime` / `commodities_realtime` / `nav_estimates` / `market_indices_off_hours`、`active_hours` / `pause_on_holiday`）**全部不存在**。实际调度：
+**统一采集任务**：每个数据源一个任务，ID 为 `collect_{source_id}`（`scheduler/manager.py`），周期取自 `source.refresh_interval_seconds`（经租户覆盖解析，见 content-categories.md §3.4.4），首次立即执行。金融种子源（东方财富 15s、yfinance 指数 30s、大宗商品 60s）确实会周期采集，但产出走通用 items 管道并被 `FilterProcessor` 过滤，**不进入行情展示链路**。
 
-- 统一任务模型：每个数据源一个任务，ID 为 `collect_{source_id}`（`scheduler/manager.py`），周期取自 `source.refresh_interval_seconds`，首次立即执行
-- 金融种子源（东方财富 15s、yfinance 指数 30s、大宗商品 60s）确实会周期采集，但产出走通用 items 管道并被 `FilterProcessor` 过滤，**不进入行情展示链路**
+**行情定时刷新任务组** ✅ 已实现（`scheduler/manager.py::add_market_refresh_jobs`；开发内嵌调度器在 `main.py` lifespan、生产在 `scheduler/worker.py::main()` 注册——`SCHEDULER_ENABLED=false` 的 api 进程不注册）：
+
+| 任务 ID | 间隔 | 任务体 |
+|--------|------|--------|
+| `market_indices_refresh` | 30s（`MARKET_INDICES_REFRESH_INTERVAL`） | 开市门控 → `FinanceService.refresh_market_indices` |
+| `commodities_refresh` | 60s（`COMMODITIES_REFRESH_INTERVAL`） | 开市门控 → `FinanceService.refresh_commodities` |
+
+- **开市门控**：`FinanceService.is_any_market_open()`（复用 `MARKET_TRADING_HOURS` / `_is_market_open`），任一主要市场开市才执行；全休市时静默跳过（省外部 API 调用）——替代原设计的 `market_indices_off_hours` 低频任务
+- **刷新路径**：与按需缓存未命中同一条路径（`_refresh_*`）——failover 拉取 → 格式化 → 写 Redis（`t:{tid}:market_indices` / `commodities`，TTL 60s）→ SSE 推送（`market_index_update` / `commodity_update`，数组载荷）；**载荷与缓存一致时跳过 SSE 推送但仍重写缓存续 TTL**。job_defaults 与源采集任务一致（调度器级 `max_instances=1` / `misfire_grace_time=60` / `coalesce=True`）
+- **容错**：全部 failover 源无数据返回 False，异常只记日志不杀任务，下一周期重试；`_last_run_results` 记录成败供 `get_jobs_status` 观测
+- **租户口径**：系统租户（`SYSTEM_TENANT_ID`，与 dashboard 指标采集一致；SSE 租户路由为精确字符串匹配）
+- 原设计的 `scheduler/jobs.py` / `FINANCE_SCHEDULE_CONFIG`（`active_hours` / `pause_on_holiday` 等）未实现；`watchlist_quotes_realtime` / `nav_estimates` 保留按需，属后续特性
 
 #### 3.8.3 动态频率调整（现状）
 
@@ -364,8 +374,8 @@ graph TD
 | 事件类型 | 数据内容 | 触发条件 | 说明 |
 |---------|---------|---------|------|
 | `quote_update` | `{symbol, ...}` 单对象 | 行情刷新 | |
-| `market_index_update` | **整个指数数组** `[{symbol, name, value, change, change_percent, market_status, region, timestamp}, ...]` | `get_market_indices` 拉取完成后随路推送 | 注意是数组 |
-| `commodity_update` | **整个商品数组** `[{symbol, name, value, change, change_percent, unit, timestamp}, ...]` | `get_commodities` 拉取完成后随路推送 | 注意是数组 |
+| `market_index_update` | **整个指数数组** `[{symbol, name, value, change, change_percent, market_status, region, timestamp}, ...]` | 定时刷新任务 `market_indices_refresh`（30s、开市门控、载荷未变时跳过推送）+ `get_market_indices` 缓存未命中拉取完成后随路推送 | 注意是数组 |
+| `commodity_update` | **整个商品数组** `[{symbol, name, value, change, change_percent, unit, timestamp}, ...]` | 定时刷新任务 `commodities_refresh`（60s、开市门控、载荷未变时跳过推送）+ `get_commodities` 缓存未命中拉取完成后随路推送 | 注意是数组 |
 | `nav_estimate_update` | `{symbol, name, nav_official, nav_estimate, nav_estimate_deviation_percent, estimate_method, timestamp}` | `get_fund_nav` 请求时随路推送 | |
 | `heartbeat` | `{timestamp}` | 保持连接 | 30s |
 

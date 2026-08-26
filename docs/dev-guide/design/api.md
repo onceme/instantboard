@@ -1,5 +1,5 @@
 ---
-version: 1.2
+version: 1.3
 author: designer
 date: 2026-08-26
 status: revised
@@ -667,6 +667,33 @@ Response 200:
     ],
     "meta": { "total": 100, "page": 1, "page_size": 20 }
   }
+```
+
+#### GET `/api/v1/tech/search` — 科技新闻关键词搜索
+
+```
+Query Params (api/v1/tech.py: search_tech_news；口径见 [tech-tab.md](tech-tab.md) §3.7):
+  q: str (必填) — 关键词；strip 后非空白，否则 400 VALIDATION_ERROR
+        (details[0].field = "q")；缺失 → 422
+  domain: str (optional) — 按领域筛选，与 q 叠加（JSONB containment `topic_tags @>`)
+  page, page_size — 通用分页依赖 PaginationParams（page_size ≤ 100）；
+        sort_by 参数被接受但忽略，固定 published_at DESC 排序
+
+匹配口径: 当前租户 + 系统共享租户的科技条目 title/summary ILIKE '%q%'
+  （大小写不敏感，PG/SQLite 可移植），响应信封与 GET /tech/news 完全一致
+  （TechNewsResponse + meta，复用 build_news_response）
+
+Response 200:
+  {
+    "success": true,
+    "data": [ /* 同 GET /tech/news 条目结构 */ ],
+    "meta": { "total": 12, "page": 1, "page_size": 20 }
+  }
+
+Errors:
+  400 VALIDATION_ERROR — q 为空或纯空白
+  422 — q 缺失，或 page/page_size 越界
+  401 AUTH_REQUIRED — 未认证
 ```
 
 #### GET `/api/v1/tech/topics` — 话题标签列表

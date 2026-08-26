@@ -1,7 +1,7 @@
 ---
-version: 1.1
+version: 1.2
 author: designer
-date: 2026-08-24
+date: 2026-08-26
 status: draft
 cross_refs: [architecture.md, api.md, finance-tab.md, tech-tab.md, dashboard-tab.md, admin-login.md]
 ---
@@ -46,12 +46,15 @@ frontend/src/
 ├── components/
 │   ├── layout/             # Sidebar.vue / Header.vue / AppLayout.vue
 │   │                       # （主内容容器是 AppLayout 的 slot；无 AppFooter/MainContent 组件）
-│   ├── common/             # 实际 4 个:
-│   │   ├── ErrorAlert.vue
-│   │   ├── EmptyState.vue
-│   │   ├── ThemeToggle.vue
-│   │   └── LoadingSpinner.vue
-│   │   # ⚠️ 未实现: MessageCard / SearchBar / Pagination / ConfirmationDialog
+│   ├── common/             # 实际 8 个:
+│   │   ├── ErrorAlert.vue / EmptyState.vue / ThemeToggle.vue / LoadingSpinner.vue
+│   │   ├── SearchBar.vue   # 通用搜索框: v-model + 防抖(默认300ms)search 事件、Enter 立即
+│   │   │                   #   触发(丢弃待发防抖)、清除按钮、loading 指示; 科技搜索消费
+│   │   │                   #   （见 tech-tab.md §3.7）
+│   │   ├── Pagination.vue  # 分页栏: 上/下页 + 页码（>7 页中段折叠省略号）;
+│   │   │                   #   科技搜索结果与 DataSourcesHealth 消费
+│   │   ├── ConfirmationDialog.vue  # CategoryEditor「重新分类」确认消费
+│   │   └── MessageCard.vue # 已实现暂无消费方（CategoryView 明确选用 NewsCard）
 │   ├── finance/            # 实际 9 个:
 │   │   ├── Watchlist.vue / WatchlistMini.vue / SearchSymbols.vue
 │   │   ├── Commodities.vue / MarketIndices.vue / FundNAV.vue
@@ -90,7 +93,7 @@ frontend/src/
     └── global.css          # 全局样式（纯 CSS，无 .scss；sass 依赖未使用）
 ```
 
-> ⚠️ **未实现组件集中标注**：MarketTicker（财经顶部滚动条）、StockDetail/FundDetail 模态抽屉、QuoteChart sparkline、右栏 Top News、Overview 混合视图、TrendChart（话题热度）、AppFooter、MessageCard/SearchBar/Pagination/ConfirmationDialog 公共组件。
+> ⚠️ **未实现组件集中标注**：MarketTicker（财经顶部滚动条）、StockDetail/FundDetail 模态抽屉、QuoteChart sparkline、右栏 Top News、Overview 混合视图、TrendChart（话题热度）、AppFooter。公共组件 MessageCard/SearchBar/Pagination/ConfirmationDialog 已实现（SearchBar → TechView 科技搜索、Pagination → TechView 搜索结果 + DataSourcesHealth、ConfirmationDialog → CategoryEditor；MessageCard 暂无消费方）。
 
 ### 3.2 组件层级设计（现状要点）
 
@@ -128,7 +131,7 @@ graph TD
 各视图布局摘要:
 
 - **FinanceView**: FinanceSubNav + FinanceGrid；右栏（≥1440px）WatchlistMini + FundNAV；Overview 面板目前只渲染 MarketIndices（见 [finance-tab.md](finance-tab.md)）
-- **TechView**: TechSubNav + TopicFilter + HotTopics（热门标签 top 12，点击 → `/tech/news?tag=` 过滤）+ CategoryPanel×4 / NewsFeed 双视图（见 [tech-tab.md](tech-tab.md)）；其中 NewsCard 支持三级标签手动标注——标签行"+"内联输入框打标、标签上"×"移除（乐观移除失败回滚，见 [content-categories.md](content-categories.md) §3.6.1）——并在 `image_url` 非空时渲染缩略图（桌面 96×72、移动端 64×48，`loading="lazy"`，加载失败 `@error` 后隐藏；见 [tech-tab.md](tech-tab.md) §3.3.3）
+- **TechView**: TechSubNav + **SearchBar（通用搜索框，TopicFilter 上方，300ms 防抖）** + TopicFilter + HotTopics（热门标签 top 12，点击 → `/tech/news?tag=` 过滤）+ CategoryPanel×4 / NewsFeed 双视图（见 [tech-tab.md](tech-tab.md)）；搜索激活时内容区切换为 `GET /tech/search` 分页结果（`common/Pagination`，头部「搜索 “q” · N 条结果」+ 清除，SSE 不注入搜索结果；清除/空查询复原双视图），见 [tech-tab.md](tech-tab.md) §3.7；其中 NewsCard 支持三级标签手动标注——标签行"+"内联输入框打标、标签上"×"移除（乐观移除失败回滚，见 [content-categories.md](content-categories.md) §3.6.1）——并在 `image_url` 非空时渲染缩略图（桌面 96×72、移动端 64×48，`loading="lazy"`，加载失败 `@error` 后隐藏；见 [tech-tab.md](tech-tab.md) §3.3.3）
 - **CategoryView**: /c/:slug 自定义分类通用信息流 — 按 slug 解析自定义分类（未命中显示 EmptyState），GET /categories/{id}/items 分页拉取（useInfiniteScroll 无限滚动，复用 NewsCard）；加载/错误/重试与 FinanceView 模式一致（见 [content-categories.md](content-categories.md) §3.3.1 Step 6）
 - **DashboardView**: HealthPanel + 双列 flex（左 SystemStatus/DataSourcesHealth，右 ServicesHealth/SSEStats）（见 [dashboard-tab.md](dashboard-tab.md)）
 - **SettingsView**: CategoryEditor / SourceEditor / ProfileSettings / TenantOverrides / ThemeToggle；CategoryEditor 的创建/编辑为完整表单——名称/描述/图标（`categoryIcons.ts` CATEGORY_ICON_OPTIONS 的 15 个精选 lucide 图标，默认 folder）/颜色（`<input type="color">`，默认 #3B82F6）/刷新频率（秒，客户端校验 ≥10，创建留空走后端默认 300、编辑留空保持不变）/关键词（逗号分隔 → keywords_filter 数组，空白项过滤；后端响应不回显关键词，编辑留空 = 保持不变）/slug（可选，创建留空由后端从名称生成），type 固定 custom，并为自定义分类行提供「重新分类」按钮（ConfirmationDialog 确认 → POST /categories/{id}/reclassify → 回显扫描/更新计数，失败走 ErrorAlert）；「租户覆盖」页签仅 `role === "admin"` 渲染（TenantOverrides.vue）——列出系统+自有分类并为每行提供刷新频率/颜色覆盖输入，加载时经 GET /tenant/settings 回填，保存时留空条目不写入 payload（整体替换语义 = 清除已有覆盖），400 展示 error.details[] 首条、403 降级提示无权限（见 [content-categories.md](content-categories.md) §3.4.4）；ProfileSettings 除主题/涨跌配色外还提供「关注话题」——按四大领域分组点选科技二级标签（`SUBCATEGORY_MAP` 24 项，多选切换、`aria-pressed`），挂载时经 GET /users/me/preferences 回显（回显同样经 `sanitizeFavoriteTags` 规范化），保存按钮经 PUT /users/me/preferences 整体替换（空选 = 清空；提交前经 `api/user.ts` `sanitizeFavoriteTags` 小写/去重/按 `^[a-z0-9-]{1,32}$` 过滤，非法标签不发送），成功显示「已保存」、失败行内展示错误信息；`favorite_tags` 是科技频道「相关性」排序的加权输入（见 [tech-tab.md](tech-tab.md) §3.5.1 与 [api.md](api.md) §3.2 用户偏好端点）
@@ -214,8 +217,8 @@ graph LR
 见 [tech-tab.md](tech-tab.md) 完整设计。
 
 **核心布局**:
-- 顶部: TechSubNav（一级领域）+ TopicFilter（二级标签单选）+ HotTopics（热门标签 top 12，点击 → `/tech/news?tag=` 过滤）
-- 主体: 四大领域 CategoryPanel（双视图可切换合并流 NewsFeed）
+- 顶部: TechSubNav（一级领域）+ SearchBar（科技新闻关键词搜索，300ms 防抖 → `GET /tech/search`）+ TopicFilter（二级标签单选）+ HotTopics（热门标签 top 12，点击 → `/tech/news?tag=` 过滤）
+- 主体: 四大领域 CategoryPanel（双视图可切换合并流 NewsFeed）；**搜索激活时**主体切换为分页搜索结果（`common/Pagination`，非无限滚动；头部「搜索 “q” · N 条结果」+ 清除按钮；搜索期间 SSE 新条目不注入搜索结果；清除/空查询复原面板/合并流，见 [tech-tab.md](tech-tab.md) §3.7）
 
 > `TechTopic` 类型（`types/index.ts`）已与后端 `GET /tech/topics` 响应对齐为 `{tag, label, count, last_active_at?}`（删除了旧契约的 `level`/`trending_change`/`domain` 字段，此前无消费方）。
 

@@ -1,5 +1,5 @@
 ---
-version: 1.2
+version: 1.3
 author: designer
 date: 2026-08-26
 status: draft
@@ -310,9 +310,7 @@ if hn_score:
 
 ### 3.7 新闻查询与过滤功能（现状）
 
-> ⚠️ **未实现**：全文搜索 — 原设计的 `GET /tech/search?q=` 端点与 `q` 参数完全未实现，TechView 也没有搜索框。
-
-**实际接口**: `GET /api/v1/tech/news`，参数：
+**过滤接口**: `GET /api/v1/tech/news`，参数：
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
@@ -324,9 +322,23 @@ if hn_score:
 | `since` | ISO8601 | `published_at >= since` |
 | `page` / `page_size` | int | 分页，page_size ≤ 100 |
 
+**关键词搜索接口（已实现）**: `GET /api/v1/tech/search`，参数：
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `q` | str，**必填** | 关键词；strip 后须非空白，否则 400 `VALIDATION_ERROR`（`details[0].field = "q"`）；缺失 → 422 |
+| `domain` | 一级标签（可选） | 与 q 叠加过滤（JSONB containment，同上口径） |
+| `page` / `page_size` | int | 通用分页依赖 `PaginationParams`（page_size ≤ 100）；`sort_by` 参数被接受但忽略，固定 `published_at DESC` 排序 |
+
+> ✅ **已实现**：关键词搜索（后端 `api/v1/tech.py::search_tech_news` + `services/tech.py::search_items`）：
+> - 匹配口径：对当前租户 + 系统共享租户的科技条目（与 `/tech/news` 同范围）执行 `title ILIKE '%q%' OR summary ILIKE '%q%'`（大小写不敏感；PostgreSQL 走 ILIKE，SQLite 方言等价编译为 `lower() LIKE lower()`，双库可移植），按 `published_at DESC` 排序分页；响应信封与 `/tech/news` 完全一致（`TechNewsResponse` + 分页 meta，复用 `build_news_response`）；
+> - 性能注记：items 表**无全文索引**，ILIKE 为限定在分类+租户范围内的顺序扫描，当前数据量可接受；后续数据量增长可迁移 PostgreSQL `to_tsvector(...)` + GIN 全文索引（不在本次范围）。
+>
+> ✅ **前端（已实现）**：`TechView` 在 TopicFilter 上方挂载通用 `common/SearchBar.vue`（v-model 绑定 `techStore.searchQuery`，输入 300ms 防抖后调 `techApi.search`，Enter 立即触发，自带清除按钮与加载指示）；**搜索激活时**内容区切换为搜索结果——顶部显示「搜索 “q” · N 条结果」与清除按钮，结果复用 `NewsCard` 渲染并以 `common/Pagination.vue` 分页（搜索不用无限滚动），失败展示可重试 ErrorAlert；搜索结果是分页快照，**SSE `item_update` 新条目只注入信息流 `newsItems`，不注入搜索结果**；清除/空查询回到原面板/合并流视图（现有信息流状态无破坏）。
+
 响应字段：`id, title, summary, url, source_name, source_id, category_id, topic_tags, domain_tag, published_at, fetched_at, image_url, priority, extra_data, hot_score` + 分页 meta。
 
-**过滤维度**：领域、子分类、话题标签（`tag`）、数据源、时间范围均已实现（后端）；关键词全文搜索未实现。
+**过滤维度**：领域、子分类、话题标签（`tag`）、数据源、时间范围、关键词搜索（`GET /tech/search?q=`）均已实现。
 
 ### 3.8 SSE 事件类型定义 (科技频道, 现状)
 

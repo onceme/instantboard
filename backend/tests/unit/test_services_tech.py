@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app.core.constants import SYSTEM_TENANT_ID
 from app.services.tech import (
     DOMAIN_LABELS,
     HALF_LIFE_SECONDS,
@@ -968,6 +969,135 @@ class TestRelevanceRerank:
         # Plain pagination: limit page_size, offset (page-1)*page_size
         assert "LIMIT 10" in sql
         assert f"OFFSET {(3 - 1) * 10}" in sql
+
+
+class TestSearchItems:
+    """search_items (GET /tech/search) — SQL construction, params, tenant scoping
+    and the response envelope (design tech-tab.md §3.7)."""
+
+    @staticmethod
+    def _sql(stmt) -> str:
+        from sqlalchemy.dialects import postgresql
+
+        return str(stmt.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+
+    def _captured_data_stmt(self, captured):
+        """Execution order: 1) tech category lookup, 2) count, 3) paginated data."""
+        assert len(captured) == 3
+        return captured[-1]
+
+    async def test_ilike_matches_title_or_summary(self):
+        captured = []
+        db = _relevance_db([], total=0, captured=captured)
+
+        service = TechService(db, _mock_redis())
+        await service.search_items("tenant-1", q="robot")
+
+        sql = self._sql(self._captured_data_stmt(captured))
+        # %% is the pyformat paramstyle doubling of literal % in str(compiled)
+        assert "items.title ILIKE '%%robot%%'" in sql
+        assert "items.summary ILIKE '%%robot%%'" in sql
+        assert " OR " in sql
+
+    async def test_query_is_stripped_into_pattern(self):
+        captured = []
+        db = _relevance_db([], total=0, captured=captured)
+
+        service = TechService(db, _mock_redis())
+        await service.search_items("tenant-1", q="  robot  ")
+
+        sql = self._sql(self._captured_data_stmt(captured))
+        assert "'%%robot%%'" in sql
+        assert "'%%  robot  %%'" not in sql
+
+    async def test_tenant_scoping_includes_system_tenant(self):
+        captured = []
+        db = _relevance_db([], total=0, captured=captured)
+
+        service = TechService(db, _mock_redis())
+        await service.search_items("tenant-1", q="robot")
+
+        sql = self._sql(self._captured_data_stmt(captured))
+        assert "items.tenant_id IN (" in sql
+        assert "'tenant-1'" in sql
+        # Shared system-tenant rows must stay visible (matches list_category_items)
+        assert str(SYSTEM_TENANT_ID) in sql or SYSTEM_TENANT_ID.hex in sql
+
+    async def test_domain_stacks_as_jsonb_containment(self):
+        from sqlalchemy.dialects import postgresql
+
+        captured = []
+        db = _relevance_db([], total=0, captured=captured)
+
+        service = TechService(db, _mock_redis())
+        await service.search_items("tenant-1", q="robot", domain="ai")
+
+        stmt = self._captured_data_stmt(captured)
+        # JSONB has no literal value renderer, so compile with bind params and
+        # inspect both the operator and the bound jsonb value.
+        compiled = stmt.compile(dialect=postgresql.dialect())
+        assert "items.topic_tags @>" in str(compiled)
+        assert ["ai"] in list(compiled.params.values())
+
+    async def test_invalid_domain_filter_skipped(self):
+        captured = []
+        db = _relevance_db([], total=0, captured=captured)
+
+        service = TechService(db, _mock_redis())
+        await service.search_items("tenant-1", q="robot", domain="not-a-domain")
+
+        sql = self._sql(self._captured_data_stmt(captured))
+        assert "@" not in sql
+
+    async def test_orders_by_published_at_desc_with_pagination(self):
+        captured = []
+        db = _relevance_db([], total=0, captured=captured)
+
+        service = TechService(db, _mock_redis())
+        await service.search_items("tenant-1", q="robot", page=2, page_size=5)
+
+        sql = self._sql(self._captured_data_stmt(captured))
+        assert "ORDER BY items.published_at DESC" in sql
+        assert "LIMIT 5" in sql
+        assert "OFFSET 5" in sql
+
+    async def test_missing_category_returns_empty_envelope(self):
+        db = AsyncMock()
+        mock_r = MagicMock()
+        mock_r.scalar_one_or_none.return_value = None
+        db.execute = AsyncMock(return_value=mock_r)
+
+        service = TechService(db, _mock_redis())
+        result = await service.search_items("tenant-1", q="robot", page=3, page_size=7)
+
+        assert result == {
+            "data": [],
+            "meta": {"total": 0, "page": 3, "page_size": 7},
+        }
+
+    async def test_envelope_maps_item_fields(self):
+        item = _make_item(title="Robot news", topic_tags=["tech", "ai"], priority=6)
+
+        captured = []
+        db = _relevance_db([item], total=1, captured=captured)
+
+        service = TechService(db, _mock_redis())
+        result = await service.search_items("tenant-1", q="robot")
+
+        assert result["meta"] == {"total": 1, "page": 1, "page_size": 20}
+        row = result["data"][0]
+        assert row["id"] == str(item.id)
+        assert row["title"] == "Robot news"
+        assert row["summary"] == "Summary"
+        assert row["url"] == "https://example.com/news"
+        assert row["source_name"] == "TestSource"
+        assert row["source_id"] == str(item.source_id)
+        assert row["category_id"] == str(item.category_id)
+        assert row["topic_tags"] == ["tech", "ai"]
+        assert row["domain_tag"] == "ai"
+        assert row["priority"] == 6
+        assert row["extra_data"] == {}
+        assert isinstance(row["hot_score"], float)
 
 
 class TestConstants:

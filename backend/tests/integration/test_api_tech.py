@@ -167,6 +167,100 @@ class TestTechNews:
         assert resp.status_code == 401
 
 
+class TestTechSearch:
+    """GET /api/v1/tech/search (tech-tab.md §3.7): q is required, stripped and
+    non-empty (blank -> 400 VALIDATION_ERROR), optional domain stacks, pagination
+    via the shared PaginationParams dependency, response reuses the news envelope."""
+
+    def test_search_hit(self, client, mock_tech_svc):
+        mock_tech_svc.search_items.return_value = {
+            "data": [_news_item(title="Robot arm review")],
+            "meta": {"total": 1, "page": 1, "page_size": 20},
+        }
+
+        resp = client.get("/api/v1/tech/search?q=robot", headers=_headers())
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["meta"]["total"] == 1
+        assert body["data"][0]["title"] == "Robot arm review"
+
+    def test_search_miss_returns_empty_page(self, client, mock_tech_svc):
+        mock_tech_svc.search_items.return_value = {
+            "data": [],
+            "meta": {"total": 0, "page": 1, "page_size": 20},
+        }
+
+        resp = client.get("/api/v1/tech/search?q=zzz-nothing", headers=_headers())
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["data"] == []
+        assert body["meta"]["total"] == 0
+
+    def test_search_params_forwarded(self, client, mock_tech_svc):
+        mock_tech_svc.search_items.return_value = {
+            "data": [],
+            "meta": {"total": 0, "page": 2, "page_size": 10},
+        }
+
+        resp = client.get(
+            "/api/v1/tech/search?q=%20robot%20&domain=ai&page=2&page_size=10",
+            headers=_headers(),
+        )
+        assert resp.status_code == 200
+        kwargs = mock_tech_svc.search_items.await_args.kwargs
+        assert kwargs["q"] == "robot"  # stripped before hitting the service
+        assert kwargs["domain"] == "ai"
+        assert kwargs["page"] == 2
+        assert kwargs["page_size"] == 10
+        assert isinstance(kwargs["tenant_id"], str)
+
+    def test_search_domain_stacks_with_q(self, client, mock_tech_svc):
+        mock_tech_svc.search_items.return_value = {
+            "data": [],
+            "meta": {"total": 0, "page": 1, "page_size": 20},
+        }
+
+        resp = client.get("/api/v1/tech/search?q=starlink&domain=space", headers=_headers())
+        assert resp.status_code == 200
+        kwargs = mock_tech_svc.search_items.await_args.kwargs
+        assert kwargs["q"] == "starlink"
+        assert kwargs["domain"] == "space"
+
+    def test_search_without_domain_forwards_none(self, client, mock_tech_svc):
+        mock_tech_svc.search_items.return_value = {
+            "data": [],
+            "meta": {"total": 0, "page": 1, "page_size": 20},
+        }
+
+        resp = client.get("/api/v1/tech/search?q=robot", headers=_headers())
+        assert resp.status_code == 200
+        assert mock_tech_svc.search_items.await_args.kwargs["domain"] is None
+
+    def test_search_empty_q_returns_400(self, client, mock_tech_svc):
+        resp = client.get("/api/v1/tech/search?q=", headers=_headers())
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["error"]["code"] == "VALIDATION_ERROR"
+        mock_tech_svc.search_items.assert_not_awaited()
+
+    def test_search_blank_q_returns_400(self, client, mock_tech_svc):
+        resp = client.get("/api/v1/tech/search?q=%20%20%20", headers=_headers())
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["error"]["code"] == "VALIDATION_ERROR"
+        mock_tech_svc.search_items.assert_not_awaited()
+
+    def test_search_missing_q_returns_422(self, client, mock_tech_svc):
+        resp = client.get("/api/v1/tech/search", headers=_headers())
+        assert resp.status_code == 422
+
+    def test_search_invalid_page_size_returns_422(self, client, mock_tech_svc):
+        resp = client.get("/api/v1/tech/search?q=robot&page_size=500", headers=_headers())
+        assert resp.status_code == 422
+
+    def test_search_no_auth(self, client, mock_tech_svc):
+        resp = client.get("/api/v1/tech/search?q=robot")
+        assert resp.status_code == 401
+
+
 class TestTechTopics:
     def test_topics_default(self, client, mock_tech_svc):
         mock_tech_svc.get_topics.return_value = [

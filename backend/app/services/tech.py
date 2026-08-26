@@ -288,41 +288,91 @@ class TechService:
             result = await self.db.execute(stmt)
             items = result.scalars().all()
 
-        data = []
-        now = datetime.now(UTC)
-
-        for item in items:
-            domain_tag = self._extract_domain_tag(item.topic_tags)
-            hot_score = self._calculate_hot_score(item, now)
-            source_name = None
-            if item.source:
-                source_name = item.source.name
-
-            data.append(
-                {
-                    "id": str(item.id),
-                    "title": item.title,
-                    "summary": item.summary,
-                    "url": item.url,
-                    "source_name": source_name,
-                    "source_id": str(item.source_id),
-                    "category_id": str(item.category_id),
-                    "topic_tags": item.topic_tags if item.topic_tags else [],
-                    "domain_tag": domain_tag,
-                    "published_at": item.published_at,
-                    "fetched_at": item.fetched_at,
-                    "image_url": item.image_url,
-                    "priority": item.priority,
-                    "extra_data": item.extra_data if item.extra_data else {},
-                    "hot_score": round(hot_score, 4),
-                }
-            )
+        data = self._serialize_items(items)
 
         if sort == "hot":
             data.sort(key=lambda x: x["hot_score"], reverse=True)
 
         return {
             "data": data,
+            "meta": {
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+            },
+        }
+
+    async def search_items(
+        self,
+        tenant_id: str,
+        q: str,
+        domain: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> dict:
+        """Keyword search over the tenant's tech items (design tech-tab.md §3.7).
+
+        Matches `title` OR `summary` case-insensitively (`ILIKE %q%`), optionally
+        stacked with the JSONB domain filter, ordered by `published_at DESC`.
+
+        Performance note: items has no full-text index, so this is a sequential ILIKE
+        scan scoped to the category+tenant rows — acceptable at the current data
+        volume. A future iteration may move to PostgreSQL `to_tsvector(...)` with a
+        GIN index for ranking/large-scale search (out of scope here).
+        """
+        tech_category = await self._get_tech_category(tenant_id)
+
+        # Same missing-category protection as get_news (avoids AttributeError -> bare 500).
+        if tech_category is None:
+            logger.warning(f"Tech category not found for tenant {tenant_id}, returning empty search results")
+            return {
+                "data": [],
+                "meta": {
+                    "total": 0,
+                    "page": page,
+                    "page_size": page_size,
+                },
+            }
+
+        # Portable case-insensitive substring match: PostgreSQL emits ILIKE directly,
+        # the SQLite dialect compiles it to lower() LIKE lower() with identical
+        # semantics. Same style as FinanceService.search_symbols; the pattern is a
+        # bound parameter, never string-interpolated.
+        pattern = f"%{q.strip()}%"
+        keyword_filter = or_(
+            Item.title.ilike(pattern),
+            Item.summary.ilike(pattern),
+        )
+
+        stmt = (
+            select(Item)
+            .options(selectinload(Item.source))
+            .where(
+                # Same tenant scoping as list_category_items: collected items belong to
+                # the system tenant; include system-tenant rows so regular tenants see them.
+                Item.tenant_id.in_([tenant_id, SYSTEM_TENANT_ID]),
+                Item.category_id == tech_category.id,
+                keyword_filter,
+            )
+        )
+
+        # Optional domain filter stacks on top of the keyword match (JSONB containment,
+        # identical to list_category_items).
+        if domain and domain in VALID_DOMAINS:
+            stmt = stmt.where(Item.topic_tags.contains([domain]))
+
+        stmt = stmt.order_by(Item.published_at.desc())
+
+        count_stmt = select(func.count()).select_from(stmt.subquery())
+        total_result = await self.db.execute(count_stmt)
+        total = total_result.scalar() or 0
+
+        stmt = stmt.offset((page - 1) * page_size).limit(page_size)
+        result = await self.db.execute(stmt)
+        items = result.scalars().all()
+
+        return {
+            "data": self._serialize_items(items),
             "meta": {
                 "total": total,
                 "page": page,
@@ -431,6 +481,40 @@ class TechService:
 
         result = ["tech"] + sorted([t for t in tags if t != "tech"])
         return result
+
+    def _serialize_items(self, items: list[Item]) -> list[dict]:
+        """Map ORM items to the tech news response envelope (shared by the feed and search)."""
+        data = []
+        now = datetime.now(UTC)
+
+        for item in items:
+            domain_tag = self._extract_domain_tag(item.topic_tags)
+            hot_score = self._calculate_hot_score(item, now)
+            source_name = None
+            if item.source:
+                source_name = item.source.name
+
+            data.append(
+                {
+                    "id": str(item.id),
+                    "title": item.title,
+                    "summary": item.summary,
+                    "url": item.url,
+                    "source_name": source_name,
+                    "source_id": str(item.source_id),
+                    "category_id": str(item.category_id),
+                    "topic_tags": item.topic_tags if item.topic_tags else [],
+                    "domain_tag": domain_tag,
+                    "published_at": item.published_at,
+                    "fetched_at": item.fetched_at,
+                    "image_url": item.image_url,
+                    "priority": item.priority,
+                    "extra_data": item.extra_data if item.extra_data else {},
+                    "hot_score": round(hot_score, 4),
+                }
+            )
+
+        return data
 
     def _calculate_hot_score(self, item: Item, now: datetime) -> float:
         if not item.published_at:

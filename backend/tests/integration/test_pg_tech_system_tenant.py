@@ -183,6 +183,48 @@ async def test_get_news_subcategory_filter_uses_jsonb_containment(tech_env):
     assert result["data"][0]["title"] == "Tenant A item"
 
 
+async def test_search_items_matches_title_with_tenant_scoping(tech_env):
+    """q="tenant item" matches all three seeded titles; tenant A must see only
+    the system row and its own row, ordered published_at DESC (equal timestamps
+    here, so compare as a set)."""
+    session = tech_env["session"]
+    tenant_a_id = str(tech_env["tenant_a"].id)
+
+    result = await _make_service(session).search_items(tenant_a_id, q="tenant item")
+
+    assert result["meta"]["total"] == 2
+    assert {row["title"] for row in result["data"]} == {"System tenant item", "Tenant A item"}
+
+
+async def test_search_items_domain_filter_uses_jsonb_containment(tech_env):
+    """domain stacks on top of the ILIKE match via topic_tags @> (jsonb): among
+    tenant A's visible rows only the system item carries the ai tag."""
+    session = tech_env["session"]
+    tenant_a_id = str(tech_env["tenant_a"].id)
+
+    result = await _make_service(session).search_items(tenant_a_id, q="tenant item", domain="ai")
+
+    assert result["meta"]["total"] == 1
+    assert result["data"][0]["title"] == "System tenant item"
+
+    # robotics is tenant A's own tag — the containment still applies on top of q
+    robotics = await _make_service(session).search_items(tenant_a_id, q="tenant item", domain="robotics")
+    assert robotics["meta"]["total"] == 1
+    assert robotics["data"][0]["title"] == "Tenant A item"
+
+
+async def test_search_items_no_match_returns_zero(tech_env):
+    session = tech_env["session"]
+    tenant_a_id = str(tech_env["tenant_a"].id)
+
+    result = await _make_service(session).search_items(tenant_a_id, q="zzz-not-seeded")
+
+    assert result == {
+        "data": [],
+        "meta": {"total": 0, "page": 1, "page_size": 20},
+    }
+
+
 async def test_get_topics_aggregates_tenant_and_system_rows_only(tech_env):
     """The jsonb_array_elements_text aggregation must count tenant + system
     items only: tech=2 and ai=1 (tenant B's ai item excluded), robotics=1."""

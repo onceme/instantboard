@@ -4,8 +4,9 @@ from fastapi import APIRouter, Depends, Query
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import ValidationError
 from app.dependencies import get_current_tenant, get_current_user, get_db, get_redis
-from app.schemas.base import PaginatedMeta, PaginatedResponse, SuccessResponse
+from app.schemas.base import PaginatedMeta, PaginatedResponse, PaginationParams, SuccessResponse
 from app.schemas.tech import TechNewsResponse, TechTopicResponse
 from app.services.tech import TechService
 from app.services.user import UserService
@@ -98,6 +99,36 @@ async def get_tech_news(
         source_id=source_id,
         since=since,
         user_preferences=user_preferences,
+    )
+
+    return build_news_response(result)
+
+
+@router.get("/search", response_model=PaginatedResponse[TechNewsResponse])
+async def search_tech_news(
+    q: str = Query(...),
+    domain: str | None = Query(default=None),
+    pagination: PaginationParams = Depends(),
+    service: TechService = Depends(_get_tech_service),
+    user: dict = Depends(get_current_user),
+    tenant_id: str = Depends(get_current_tenant),
+):
+    # q is required by FastAPI (422 when missing); empty/whitespace-only values
+    # are rejected here as 400 VALIDATION_ERROR so the service never receives a
+    # blank pattern (matching the design contract tech-tab.md §3.7).
+    query = q.strip()
+    if not query:
+        raise ValidationError(
+            "Search query must not be empty",
+            details=[{"field": "q", "message": "Must be a non-empty string after stripping whitespace"}],
+        )
+
+    result = await service.search_items(
+        tenant_id=tenant_id,
+        q=query,
+        domain=domain,
+        page=pagination.page,
+        page_size=pagination.page_size,
     )
 
     return build_news_response(result)

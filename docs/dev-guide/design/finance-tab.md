@@ -255,7 +255,7 @@ graph TD
 
 **设计理由**:
 1. FinanceSubNav (按钮组) 不嵌套在Tab中，独立于侧边导航，切换流畅
-2. 右侧面板在 ≥1440px 屏幕始终可见 (WatchlistMini + FundNAV)
+2. 右侧面板在 ≥1440px 屏幕始终可见 (WatchlistMini + FundNAV + FinanceNewsPanel)
 3. 移动端: 右侧面板直接隐藏（主内容变单列）
 4. 5个子面板按钮数量适中，无需滚动
 
@@ -270,14 +270,16 @@ graph TD
     end
     subgraph Right["右侧固定面板 (≥1440px, xl断点)"]
         direction LR
-        WM2["WatchlistMini"] ~~~ NAV2["FundNAV"]
+        WM2["WatchlistMini"] ~~~ NAV2["FundNAV"] ~~~ NEWS2["FinanceNewsPanel"]
     end
     SubNav ~~~ Right
 ```
 
 各按钮对应的子面板：Overview（实际仅渲染 MarketIndices 组件）/ Watchlist（完整自选列表）/ Search（SearchSymbols 搜索框 + 结果列表 + 内联 QuoteCard）/ Indices（市场指数列表）/ Commodities（大宗商品列表）。
 
-> ⚠️ **未实现**：Overview 混合视图（自选列表摘要 + 重点关注 + 顶部新闻）— 当前 Overview 面板只是 MarketIndices 的复用；右侧面板的 "Top Finance News" 不存在。
+> ⚠️ **未实现**：Overview 混合视图（自选列表摘要 + 重点关注 + 顶部新闻）— 当前 Overview 面板只是 MarketIndices 的复用。
+
+> ✅ **已实现**：右侧面板 "Top Finance News"（`FinanceNewsPanel.vue`）— 复用 P2-13 `GET /categories/{category_id}/items`（`sort=time&page_size=5`）：前端经分类列表解析预定义 `slug=finance` 分类，展示其最近 5 条条目（标题新窗口链接 + 来源名一行截断 + 相对时间）。口径收窄：**纯时间排序、无个性化推荐/无热度加权**（原设想的"头条新闻"聚合未实现）；加载骨架、失败行内 ErrorAlert+重试、成功但无条目时整面板不渲染。
 
 > ⚠️ **未实现**：`MarketTicker` 顶部滚动条（全前端无此组件）。
 

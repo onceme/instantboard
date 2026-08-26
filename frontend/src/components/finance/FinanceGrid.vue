@@ -8,6 +8,7 @@ import Commodities from "./Commodities.vue";
 import Watchlist from "./Watchlist.vue";
 import SearchSymbols from "./SearchSymbols.vue";
 import FundNAV from "./FundNAV.vue";
+import FinanceNewsPanel from "./FinanceNewsPanel.vue";
 
 const financeStore = useFinanceStore();
 const { showRightPanel } = useResponsive();
@@ -42,6 +43,7 @@ const currentPanel = computed(() => financeStore.currentPanel);
     <div v-if="showRightPanel" class="finance-right">
       <WatchlistMini />
       <FundNAV />
+      <FinanceNewsPanel />
     </div>
   </div>
 </template>

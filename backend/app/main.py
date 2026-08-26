@@ -63,13 +63,21 @@ async def lifespan(app: FastAPI):
         await scheduler_manager.start()
         logger.info("Scheduler started")
 
+        from app.services.tenant import load_all_tenant_settings
+
         async with async_session_factory() as session:
             result = await session.execute(
                 select(Source).where(Source.is_active).options(selectinload(Source.category))
             )
             active_sources = result.scalars().all()
-            await scheduler_manager.schedule_all_active_sources(active_sources)
-            logger.info(f"Scheduled {len(active_sources)} active data sources")
+
+        # One settings query for the whole rebuild so tenant refresh_overrides
+        # apply from the first scheduled run (degrades to {} on read error).
+        async with async_session_factory() as session:
+            tenant_settings_map = await load_all_tenant_settings(session)
+
+        await scheduler_manager.schedule_all_active_sources(active_sources, tenant_settings_map)
+        logger.info(f"Scheduled {len(active_sources)} active data sources")
     else:
         logger.info("Scheduler disabled")
 

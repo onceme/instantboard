@@ -10,6 +10,7 @@ from app.api.v1.items import router as items_router
 from app.api.v1.sources import router as sources_router
 from app.api.v1.sse import router as sse_router
 from app.api.v1.tech import router as tech_router
+from app.api.v1.tenant import router as tenant_router
 
 v1_router = APIRouter(prefix="/api/v1")
 
@@ -21,5 +22,6 @@ v1_router.include_router(finance_router, prefix="/finance", tags=["finance"])
 v1_router.include_router(tech_router, prefix="/tech", tags=["tech"])
 v1_router.include_router(items_router, prefix="/items", tags=["items"])
 v1_router.include_router(dashboard_router, prefix="/dashboard", tags=["dashboard"])
+v1_router.include_router(tenant_router, prefix="/tenant", tags=["tenant"])
 v1_router.include_router(sse_router, prefix="/stream", tags=["sse"])
 v1_router.include_router(admin_router, prefix="/admin", tags=["admin"])

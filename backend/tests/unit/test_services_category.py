@@ -92,6 +92,67 @@ class TestCategoryToResponse:
         assert resp.color == "#3B82F6"
 
 
+class TestCategoryToResponseColorOverrides:
+    """Tenant-level color_overrides merge into the response only (P2-16)."""
+
+    def test_override_replaces_stored_color(self):
+        cat = _make_category(slug="finance", color="#123456")
+        resp = _category_to_response(cat, 0, {"finance": "#FF0000"})
+        assert resp.color == "#FF0000"
+        # The stored row is never rewritten.
+        assert cat.color == "#123456"
+
+    def test_no_override_keeps_stored_color(self):
+        cat = _make_category(slug="finance", color="#123456")
+        assert _category_to_response(cat, 0, None).color == "#123456"
+        assert _category_to_response(cat, 0, {}).color == "#123456"
+
+    def test_unmatched_override_keeps_stored_color(self):
+        cat = _make_category(slug="tech", color="#123456")
+        resp = _category_to_response(cat, 0, {"finance": "#FF0000"})
+        assert resp.color == "#123456"
+
+    def test_override_applies_over_default_color_too(self):
+        cat = _make_category(slug="finance", color=None)
+        resp = _category_to_response(cat, 0, {"finance": "#00FF00"})
+        assert resp.color == "#00FF00"
+
+
+class TestGetColorOverrides:
+    async def test_extracts_color_map_from_tenant_settings(self):
+        db, _ = _mock_db()
+        service = CategoryService(db, _mock_redis())
+        with patch(
+            "app.services.category.load_tenant_settings",
+            new_callable=AsyncMock,
+            return_value={"color_overrides": {"finance": "#FF0000"}, "refresh_overrides": {"finance": 60}},
+        ):
+            overrides = await service._get_color_overrides("tenant-1")
+        assert overrides == {"finance": "#FF0000"}
+
+    async def test_settings_read_failure_degrades_to_empty(self):
+        """A broken settings read must never break category listing."""
+        db, _ = _mock_db()
+        service = CategoryService(db, _mock_redis())
+        with patch("app.services.category.load_tenant_settings", new_callable=AsyncMock, return_value={}):
+            overrides = await service._get_color_overrides("tenant-1")
+        assert overrides == {}
+
+
+class TestListCategoriesColorOverrides:
+    async def test_list_merges_overrides_into_responses(self):
+        db, mock_result = _mock_db()
+        cat = _make_category(slug="finance", color="#123456")
+        mock_result.all.return_value = [(cat, 3)]
+        mock_result.scalar.return_value = 1
+
+        service = CategoryService(db, _mock_redis())
+        with patch.object(service, "_get_color_overrides", new_callable=AsyncMock, return_value={"finance": "#FF0000"}):
+            result = await service.list_categories("tenant-1")
+
+        assert result.data[0].color == "#FF0000"
+
+
 class TestListCategories:
     async def test_list_with_type_filter(self):
         db, mock_result = _mock_db()

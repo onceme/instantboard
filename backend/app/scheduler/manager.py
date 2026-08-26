@@ -10,6 +10,7 @@ from sqlalchemy.orm import selectinload
 from app.core.constants import SYSTEM_TENANT_ID
 from app.core.sse_router import event_router
 from app.models.source import Source, SourceHealth
+from app.schemas.tenant import REFRESH_OVERRIDE_MAX_SECONDS, REFRESH_OVERRIDE_MIN_SECONDS
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,46 @@ SOURCE_TYPE_DEFAULT_INTERVALS = {
 }
 
 _source_category_cache: dict[str, str] = {}
+
+
+def resolve_effective_interval(
+    source: Any,
+    category_slug: str | None,
+    tenant_settings: dict | None,
+) -> int:
+    """Effective collection interval for a source.
+
+    Priority (design: content-categories.md §3.4.4):
+      tenants.settings.refresh_overrides[category.slug]
+        → source.refresh_interval_seconds
+        → SOURCE_TYPE_DEFAULT_INTERVALS[source.source_type] (fallback 300).
+
+    `source` may be an ORM Source row (startup rebuild) or the event payload
+    dict (runtime source events). Malformed/out-of-range override values are
+    ignored rather than raised: scheduling must keep working on bad settings
+    data; the PUT endpoint is the validation gate.
+    """
+    if isinstance(source, dict):
+        source_interval = source.get("refresh_interval_seconds")
+        source_type = source.get("source_type") or ""
+    else:
+        source_interval = getattr(source, "refresh_interval_seconds", None)
+        source_type = getattr(source, "source_type", "") or ""
+
+    if category_slug and isinstance(tenant_settings, dict):
+        overrides = tenant_settings.get("refresh_overrides")
+        override = overrides.get(category_slug) if isinstance(overrides, dict) else None
+        if (
+            isinstance(override, int)
+            and not isinstance(override, bool)
+            and REFRESH_OVERRIDE_MIN_SECONDS <= override <= REFRESH_OVERRIDE_MAX_SECONDS
+        ):
+            return override
+
+    if source_interval and source_interval >= REFRESH_OVERRIDE_MIN_SECONDS:
+        return source_interval
+
+    return SOURCE_TYPE_DEFAULT_INTERVALS.get(source_type, 300)
 
 
 class AsyncSchedulerManager:
@@ -101,6 +142,9 @@ class AsyncSchedulerManager:
     async def add_collection_job(self, source_id: str, interval_seconds: int, source_type: str = "") -> None:
         job_id = f"collect_{source_id}"
 
+        # Defense in depth only: the callers (add_source_job /
+        # schedule_all_active_sources) already pass the tenant-aware
+        # effective interval from resolve_effective_interval.
         default_interval = SOURCE_TYPE_DEFAULT_INTERVALS.get(source_type, 300)
         if not interval_seconds or interval_seconds < 10:
             interval_seconds = default_interval
@@ -121,11 +165,12 @@ class AsyncSchedulerManager:
             _source_category_cache.pop(job_id.replace("collect_", ""), None)
             logger.info(f"Job {job_id} removed")
 
-    async def add_source_job(self, source: dict) -> None:
+    async def add_source_job(self, source: dict, tenant_settings: dict | None = None) -> None:
         # Runtime hook for the worker's source-status listener (source_enabled event):
         # schedule collection for a single source without restarting the worker. The
         # dict is the full source payload published by SourceService, so no DB read
-        # is needed to build the job.
+        # is needed to build the job. tenant_settings (if the worker could load them)
+        # feeds the refresh-overrides branch of resolve_effective_interval.
         source_id = str(source.get("id") or "")
         if not source_id:
             logger.warning("add_source_job called with a payload missing source id")
@@ -137,7 +182,7 @@ class AsyncSchedulerManager:
 
         await self.add_collection_job(
             source_id=source_id,
-            interval_seconds=source.get("refresh_interval_seconds") or 0,
+            interval_seconds=resolve_effective_interval(source, category_slug, tenant_settings),
             source_type=source.get("source_type") or "",
         )
 
@@ -195,14 +240,23 @@ class AsyncSchedulerManager:
             )
         return result
 
-    async def schedule_all_active_sources(self, sources: list[Any]) -> None:
+    async def schedule_all_active_sources(
+        self,
+        sources: list[Any],
+        tenant_settings_map: dict[str, dict] | None = None,
+    ) -> None:
+        # tenant_settings_map ({str(tenant_id): settings}) is loaded once by the
+        # caller (worker/api startup) so N sources cost a single settings query;
+        # None keeps the legacy behavior (source interval → type default).
         for source in sources:
             if getattr(source, "is_active", False):
-                interval = getattr(source, "refresh_interval_seconds", 300) or 300
                 category = getattr(source, "category", None)
-                if category:
-                    category_slug = getattr(category, "slug", "")
+                category_slug = getattr(category, "slug", "") if category else ""
+                if category_slug:
                     _source_category_cache[str(source.id)] = category_slug
+
+                tenant_settings = (tenant_settings_map or {}).get(str(getattr(source, "tenant_id", "")))
+                interval = resolve_effective_interval(source, category_slug, tenant_settings)
 
                 job_id = f"collect_{source.id}"
                 await self.add_job(

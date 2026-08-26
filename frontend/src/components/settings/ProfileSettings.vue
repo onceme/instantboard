@@ -1,8 +1,16 @@
 <script setup lang="ts">
 import { useAuthStore } from "@/stores/auth";
 import { useTheme, THEME_MODE_OPTIONS } from "@/composables/useTheme";
-import { computed } from "vue";
-import { Sun, Moon, Monitor, Palette } from "lucide-vue-next";
+import { computed, onMounted, ref } from "vue";
+import { Sun, Moon, Monitor, Palette, Tag } from "lucide-vue-next";
+import { SUBCATEGORY_MAP, DOMAIN_CONFIG } from "@/types";
+import {
+  getMyPreferences,
+  updateMyPreferences,
+  sanitizeFavoriteTags,
+  MAX_FAVORITE_TAGS,
+} from "@/api/user";
+import { getApiErrorMessage } from "@/utils/api";
 
 const authStore = useAuthStore();
 const { theme, themeMode, setThemeMode, colorScheme, toggleColorScheme } =
@@ -17,6 +25,68 @@ const colorSchemeLabel = computed(() =>
     ? "中国配色 (红涨绿跌)"
     : "国际配色 (绿涨红跌)",
 );
+
+// 关注话题（科技二级标签多选）：服务端回显 → 点选切换 → PUT 保存，
+// "相关性"排序按这些标签给候选条目加权（见 tech-tab.md §3.5.1）
+const tagGroups = computed(() =>
+  Object.entries(SUBCATEGORY_MAP).map(([domain, subcats]) => ({
+    domain,
+    label: DOMAIN_CONFIG[domain]?.label ?? domain,
+    tags: subcats,
+  })),
+);
+
+const selectedTags = ref<string[]>([]);
+const prefsLoading = ref(false);
+const saving = ref(false);
+const saved = ref(false);
+const tagError = ref("");
+
+async function loadFavoriteTags() {
+  prefsLoading.value = true;
+  tagError.value = "";
+  try {
+    const res = await getMyPreferences();
+    selectedTags.value = sanitizeFavoriteTags(res.data?.favorite_tags ?? []);
+  } catch (err) {
+    tagError.value = getApiErrorMessage(err, "偏好加载失败");
+  } finally {
+    prefsLoading.value = false;
+  }
+}
+
+function toggleTag(slug: string) {
+  saved.value = false;
+  const idx = selectedTags.value.indexOf(slug);
+  if (idx >= 0) {
+    selectedTags.value.splice(idx, 1);
+  } else {
+    selectedTags.value.push(slug);
+  }
+}
+
+async function saveFavoriteTags() {
+  tagError.value = "";
+  saved.value = false;
+  // 非法标签在客户端被过滤，不会进入提交体
+  const tags = sanitizeFavoriteTags(selectedTags.value);
+  if (tags.length > MAX_FAVORITE_TAGS) {
+    tagError.value = `最多关注 ${MAX_FAVORITE_TAGS} 个话题`;
+    return;
+  }
+  saving.value = true;
+  try {
+    const res = await updateMyPreferences({ favorite_tags: tags });
+    selectedTags.value = res.data?.favorite_tags ?? tags;
+    saved.value = true;
+  } catch (err) {
+    tagError.value = getApiErrorMessage(err, "保存失败");
+  } finally {
+    saving.value = false;
+  }
+}
+
+onMounted(loadFavoriteTags);
 </script>
 
 <template>
@@ -65,6 +135,44 @@ const colorSchemeLabel = computed(() =>
       </div>
       <span class="setting-value">{{ colorSchemeLabel }}</span>
       <button class="toggle-btn" @click="toggleColorScheme">切换</button>
+    </div>
+
+    <div class="setting-item favorite-tags-item">
+      <div class="setting-header">
+        <Tag :size="18" />
+        <span class="setting-label">关注话题</span>
+        <span v-if="prefsLoading" class="setting-value">加载中…</span>
+      </div>
+      <p class="favorite-tags-hint">
+        选择感兴趣的话题，科技频道"相关性"排序会优先展示匹配的资讯
+      </p>
+      <div
+        v-for="group in tagGroups"
+        :key="group.domain"
+        class="favorite-tags-group"
+      >
+        <span class="favorite-tags-domain">{{ group.label }}</span>
+        <div class="favorite-tags-list">
+          <button
+            v-for="t in group.tags"
+            :key="t.slug"
+            type="button"
+            class="favorite-tag"
+            :class="{ active: selectedTags.includes(t.slug) }"
+            :aria-pressed="selectedTags.includes(t.slug)"
+            @click="toggleTag(t.slug)"
+          >
+            {{ t.label }}
+          </button>
+        </div>
+      </div>
+      <div class="favorite-tags-actions">
+        <button class="toggle-btn" :disabled="saving" @click="saveFavoriteTags">
+          {{ saving ? "保存中…" : "保存" }}
+        </button>
+        <span v-if="saved" class="favorite-tags-saved">已保存</span>
+        <span v-if="tagError" class="favorite-tags-error">{{ tagError }}</span>
+      </div>
     </div>
   </div>
 </template>
@@ -169,6 +277,11 @@ const colorSchemeLabel = computed(() =>
   color: white;
 }
 
+.toggle-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .theme-options {
   display: flex;
   gap: 4px;
@@ -196,5 +309,75 @@ const colorSchemeLabel = computed(() =>
   color: var(--accent);
   background-color: var(--bg-card);
   box-shadow: var(--shadow-sm);
+}
+
+.favorite-tags-item {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.favorite-tags-item .setting-header {
+  flex: none;
+}
+
+.favorite-tags-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.favorite-tags-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.favorite-tags-domain {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.favorite-tags-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.favorite-tag {
+  padding: 4px 10px;
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  color: var(--text-secondary);
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  transition: all var(--transition-fast);
+  white-space: nowrap;
+}
+
+.favorite-tag:hover {
+  color: var(--text-primary);
+}
+
+.favorite-tag.active {
+  color: white;
+  background-color: var(--accent);
+  border-color: var(--accent);
+}
+
+.favorite-tags-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.favorite-tags-saved {
+  font-size: 13px;
+  color: var(--down-color, #10b981);
+}
+
+.favorite-tags-error {
+  font-size: 13px;
+  color: var(--error-color, #ef4444);
 }
 </style>

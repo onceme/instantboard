@@ -8,6 +8,7 @@ from app.dependencies import get_current_tenant, get_current_user, get_db, get_r
 from app.schemas.base import PaginatedMeta, PaginatedResponse, SuccessResponse
 from app.schemas.tech import TechNewsResponse, TechTopicResponse
 from app.services.tech import TechService
+from app.services.user import UserService
 
 router = APIRouter()
 
@@ -74,9 +75,17 @@ async def get_tech_news(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     service: TechService = Depends(_get_tech_service),
+    db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user),
     tenant_id: str = Depends(get_current_tenant),
 ):
+    # Only the relevance mode consumes user preferences; skip the extra query for
+    # hot/time. get_user_preferences fails soft (None) when the user row is gone,
+    # so a stale token still gets the unpersonalized feed.
+    user_preferences = None
+    if sort == "relevance":
+        user_preferences = await UserService(db).get_user_preferences(user["user_id"], user["tenant_id"])
+
     result = await service.get_news(
         tenant_id=tenant_id,
         domain=domain,
@@ -86,6 +95,7 @@ async def get_tech_news(
         page_size=page_size,
         source_id=source_id,
         since=since,
+        user_preferences=user_preferences,
     )
 
     return build_news_response(result)

@@ -24,6 +24,12 @@ class User(BaseModel):
         default="member",
         server_default="member",
     )
+    # User preferences JSON blob. Currently only `favorite_tags` (list[str] of tech
+    # subcategory slugs) is managed via API (PUT /api/v1/users/me/preferences); the
+    # relevance ranking of the tech feed weights candidates by these tags.
+    # NOTE: the project has no Alembic migrations yet (tables come from create_all),
+    # so this column only appears on fresh databases. Existing deployments must run:
+    #   ALTER TABLE users ADD COLUMN preferences jsonb NOT NULL DEFAULT '{}';
     preferences = Column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
     last_login_at = Column(DateTime(timezone=True), nullable=True)
 

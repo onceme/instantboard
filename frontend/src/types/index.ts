@@ -59,9 +59,12 @@ export interface User {
   preferences?: UserPreferences;
 }
 
+// All fields optional: the login response may embed a full blob, while
+// GET/PUT /users/me/preferences only manage (and return) favorite_tags.
+// Consumers must truthy-guard each key (see useAuthStore.applyUserPreferences).
 export interface UserPreferences {
-  color_scheme: "chinese" | "international";
-  theme: "light" | "dark";
+  color_scheme?: "chinese" | "international";
+  theme?: "light" | "dark";
   favorite_tags?: string[];
 }
 

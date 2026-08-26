@@ -19,6 +19,15 @@ logger = logging.getLogger(__name__)
 
 HALF_LIFE_SECONDS = 12 * 3600
 
+# Relevance ranking with user preferences (design tech-tab.md §3.5.1): instead of
+# re-scoring the whole table in SQL we fetch a candidate pool ordered by priority
+# (page_size * RELEVANCE_CANDIDATE_MULTIPLIER rows, capped at RELEVANCE_CANDIDATE_LIMIT),
+# re-score it in Python as priority + overlap(favorite_tags, topic_tags) * RELEVANCE_TAG_BOOST
+# (stable sort), then slice the requested page out of it.
+RELEVANCE_CANDIDATE_MULTIPLIER = 3
+RELEVANCE_CANDIDATE_LIMIT = 300
+RELEVANCE_TAG_BOOST = 2
+
 DOMAIN_LABELS = {
     "robotics": {"label": "机器人", "icon": "🤖"},
     "ai": {"label": "人工智能", "icon": "🧠"},
@@ -151,6 +160,7 @@ class TechService:
         page_size: int = 20,
         source_id: str | None = None,
         since: str | None = None,
+        user_preferences: dict | None = None,
     ) -> dict:
         tech_category = await self._get_tech_category(tenant_id)
 
@@ -178,6 +188,7 @@ class TechService:
             page_size=page_size,
             source_id=source_id,
             since=since,
+            user_preferences=user_preferences,
         )
 
     async def list_category_items(
@@ -191,6 +202,7 @@ class TechService:
         page_size: int = 20,
         source_id: str | None = None,
         since: str | None = None,
+        user_preferences: dict | None = None,
     ) -> dict:
         """Generic paginated item feed for any category (tech news reuses this via get_news;
         CategoryService exposes it per category_id for custom categories)."""
@@ -231,10 +243,17 @@ class TechService:
             except (ValueError, TypeError):
                 logger.warning(f"Invalid since parameter: {since}")
 
+        favorite_tags = self._extract_favorite_tags(user_preferences)
+
         if sort == "time":
             stmt = stmt.order_by(Item.published_at.desc())
-        elif sort == "relevance":
+        elif sort == "relevance" and not favorite_tags:
+            # No user preferences: relevance degrades to a pure priority ordering.
             stmt = stmt.order_by(Item.priority.desc())
+        elif sort == "relevance":
+            # Candidate pool for the personalized re-rank below; published_at is a
+            # deterministic tie-breaker on equal priority.
+            stmt = stmt.order_by(Item.priority.desc(), Item.published_at.desc())
         else:
             stmt = stmt.order_by(Item.priority.desc(), Item.published_at.desc())
 
@@ -243,10 +262,21 @@ class TechService:
         total = total_result.scalar() or 0
 
         offset = (page - 1) * page_size
-        stmt = stmt.offset(offset).limit(page_size)
 
-        result = await self.db.execute(stmt)
-        items = result.scalars().all()
+        if sort == "relevance" and favorite_tags:
+            # Personalized re-rank (design tech-tab.md §3.5.1): pull a candidate pool
+            # ordered by priority, re-score it in Python (priority + tag overlap boost),
+            # stable-sort, then slice the requested page out of it. Rows beyond the pool
+            # are unreachable from this page window — that is the accepted trade-off.
+            candidate_limit = min(page_size * RELEVANCE_CANDIDATE_MULTIPLIER, RELEVANCE_CANDIDATE_LIMIT)
+            stmt = stmt.limit(candidate_limit)
+            result = await self.db.execute(stmt)
+            candidates = result.scalars().all()
+            items = self._rerank_by_favorite_tags(candidates, favorite_tags)[offset : offset + page_size]
+        else:
+            stmt = stmt.offset(offset).limit(page_size)
+            result = await self.db.execute(stmt)
+            items = result.scalars().all()
 
         data = []
         now = datetime.now(UTC)
@@ -416,6 +446,31 @@ class TechService:
                 score += math.log1p(float(hn_score)) * 0.5
 
         return score
+
+    @staticmethod
+    def _extract_favorite_tags(user_preferences: dict | None) -> list[str]:
+        if not user_preferences:
+            return []
+        tags = user_preferences.get("favorite_tags")
+        if not isinstance(tags, list):
+            return []
+        return [tag for tag in tags if isinstance(tag, str) and tag]
+
+    @staticmethod
+    def _rerank_by_favorite_tags(items: list[Item], favorite_tags: list[str]) -> list[Item]:
+        """Re-score candidates as priority + overlap(favorite_tags, topic_tags) * boost.
+
+        Python's sort is stable, so equal-scored rows keep the candidate order
+        (priority DESC, published_at DESC).
+        """
+        favorite_set = set(favorite_tags)
+        scored = []
+        for item in items:
+            overlap = len(favorite_set & set(item.topic_tags or []))
+            score = float(item.priority or 5) + overlap * RELEVANCE_TAG_BOOST
+            scored.append((score, item))
+        scored.sort(key=lambda pair: pair[0], reverse=True)
+        return [item for _, item in scored]
 
     def _extract_domain_tag(self, topic_tags: list[str] | None) -> str | None:
         if not topic_tags:

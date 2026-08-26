@@ -54,7 +54,9 @@ CREATE TABLE users (
     sso_provider_id VARCHAR(255) NOT NULL,  -- SSO 提供商的用户ID（本地管理员为 'local:{email}'）
     role            VARCHAR(20) NOT NULL DEFAULT 'member'  -- 'admin'|'member'|'viewer'
                     CHECK (role IN ('admin', 'member', 'viewer')),
-    preferences     JSONB NOT NULL DEFAULT '{}',           -- 用户偏好 (主题、默认tab等)
+    preferences     JSONB NOT NULL DEFAULT '{}',           -- 用户偏好; 现由 /users/me/preferences 端点管理
+                                                           -- {"favorite_tags": ["llm", ...]} (科技二级标签,
+                                                           -- 科技频道 relevance 排序加权, 见 tech-tab.md §3.5.1)
     last_login_at   TIMESTAMPTZ,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -71,6 +73,10 @@ CREATE INDEX idx_users_sso ON users(sso_provider, sso_provider_id);
 -- (本地管理员登录引入, models/user.py:34-35, 见 admin-login.md)。
 -- 应用层通过 ENABLED_SSO_PROVIDERS 环境变量控制哪些 SSO 提供商可被使用,
 -- 数据库约束保留全部值以确保向后兼容。
+
+-- 注意: preferences 列由 create_all 在全新库上自动建出 (项目尚无 Alembic 迁移,
+-- tables 靠 app/db/init_db.py create_tables); 存量库需手工执行:
+--   ALTER TABLE users ADD COLUMN preferences jsonb NOT NULL DEFAULT '{}';
 
 -- ============================================
 -- 分类与数据源

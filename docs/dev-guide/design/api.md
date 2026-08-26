@@ -207,6 +207,39 @@ Response 200:
   { "success": true, "data": { "message": "Logged out" } }
 ```
 
+#### GET `/api/v1/users/me/preferences` — 获取当前用户偏好
+
+认证：必需（JWT）；token 指向的用户记录不存在时返回 401 `INVALID_TOKEN`。
+
+```
+Response 200:
+  { "success": true, "data": { "favorite_tags": ["llm", "drone"] } }
+  // 未设置偏好时返回 { "favorite_tags": [] }。
+  // 偏好存储在 users.preferences JSONB 中；当前仅 favorite_tags 经此端点管理，
+  // 供科技频道 relevance 排序加权（见 tech-tab.md §3.5.1）。
+```
+
+#### PUT `/api/v1/users/me/preferences` — 更新当前用户偏好
+
+认证：必需（JWT）。请求体为**整体替换**语义：`favorite_tags` 字段必填，空列表 `[]` 表示清空。
+
+```
+Request:
+  { "favorite_tags": ["llm", "drone"] }
+  // 服务端规范化：小写化 → 按 ^[a-z0-9-]{1,32}$ 校验 → 去重(保留首次出现顺序) → 上限 50 个；
+  // 写入时与 preferences 中其他键合并，不会丢失既有偏好。
+
+Response 200 (回显规范化后的结果):
+  { "success": true, "data": { "favorite_tags": ["llm", "drone"] } }
+
+Response 400 (非法标签 / 超过 50 个):
+  { "success": false, "error": { "code": "VALIDATION_ERROR",
+    "message": "Invalid favorite_tags",
+    "details": [ { "field": "favorite_tags", "message": "Tags must match ^[a-z0-9-]{1,32}$: ..." } ] } }
+
+Response 422: 缺少 favorite_tags 字段（Pydantic 必填校验）。
+```
+
 ### 3.3 分类管理 CRUD API
 
 #### GET `/api/v1/categories` — 获取分类列表

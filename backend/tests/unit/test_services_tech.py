@@ -9,6 +9,9 @@ from app.services.tech import (
     DOMAIN_LABELS,
     HALF_LIFE_SECONDS,
     KEYWORD_TO_TAG,
+    RELEVANCE_CANDIDATE_LIMIT,
+    RELEVANCE_CANDIDATE_MULTIPLIER,
+    RELEVANCE_TAG_BOOST,
     SUBCATEGORY_TO_DOMAIN,
     TOPIC_TAG_LABELS,
     VALID_DOMAINS,
@@ -698,6 +701,192 @@ class TestGetTechCategory:
         service = TechService(db, redis)
         result = await service._get_tech_category("tenant-1")
         assert result is None
+
+
+class TestExtractFavoriteTags:
+    def test_none_and_empty(self):
+        assert TechService._extract_favorite_tags(None) == []
+        assert TechService._extract_favorite_tags({}) == []
+
+    def test_non_list_favorite_tags(self):
+        assert TechService._extract_favorite_tags({"favorite_tags": "llm"}) == []
+        assert TechService._extract_favorite_tags({"favorite_tags": None}) == []
+
+    def test_filters_non_string_and_empty_entries(self):
+        prefs = {"favorite_tags": ["llm", "", None, 5, "drone"]}
+        assert TechService._extract_favorite_tags(prefs) == ["llm", "drone"]
+
+
+class TestRerankByFavoriteTags:
+    def _item(self, title, priority, tags):
+        item = MagicMock()
+        item.title = title
+        item.priority = priority
+        item.topic_tags = tags
+        return item
+
+    def test_overlap_boost_moves_matching_items_first(self):
+        high = self._item("high", 8, ["tech"])
+        mid = self._item("mid", 7, ["tech", "robotics"])
+        low = self._item("low", 5, ["tech", "llm", "ai"])
+
+        ranked = TechService._rerank_by_favorite_tags([high, mid, low], ["llm", "ai"])
+
+        # low: 5 + 2 overlaps * boost(2) = 9 > high 8 > mid 7
+        assert [item.title for item in ranked] == ["low", "high", "mid"]
+
+    def test_stable_order_on_equal_scores(self):
+        a = self._item("a", 9, ["tech"])
+        b = self._item("b", 8, ["llm"])
+        c = self._item("c", 7, ["tech"])
+        d = self._item("d", 6, ["llm", "ai"])
+
+        ranked = TechService._rerank_by_favorite_tags([a, b, c, d], ["llm", "ai"])
+
+        # b and d both score 10; candidate order (b before d) is preserved
+        assert [item.title for item in ranked] == ["b", "d", "a", "c"]
+
+    def test_empty_favorite_tags_keeps_candidate_order(self):
+        a = self._item("a", 9, ["tech"])
+        b = self._item("b", 5, ["llm"])
+
+        ranked = TechService._rerank_by_favorite_tags([a, b], [])
+        assert [item.title for item in ranked] == ["a", "b"]
+
+    def test_missing_topic_tags_counts_no_overlap(self):
+        a = self._item("a", 5, None)
+        b = self._item("b", 4, ["llm"])
+
+        ranked = TechService._rerank_by_favorite_tags([a, b], ["llm"])
+        # a: 5 + 0, b: 4 + 2 -> b first
+        assert [item.title for item in ranked] == ["b", "a"]
+
+
+def _relevance_db(items, total, captured):
+    """Mock session for get_news relevance flows: category -> count -> candidates.
+
+    `captured` collects every executed statement so tests can inspect LIMIT/OFFSET.
+    """
+    db = AsyncMock()
+
+    async def execute_side_effect(stmt, *args, **kwargs):
+        captured.append(stmt)
+        mock_r = MagicMock()
+        if len(captured) == 1:
+            mock_r.scalar_one_or_none.return_value = _make_category()
+        elif len(captured) == 2:
+            mock_r.scalar.return_value = total
+        else:
+            scalars = MagicMock()
+            scalars.all.return_value = items
+            mock_r.scalars.return_value = scalars
+        return mock_r
+
+    db.execute = execute_side_effect
+    return db
+
+
+class TestRelevanceRerank:
+    def _items(self):
+        return [
+            _make_item(title="high", priority=8, topic_tags=["tech"]),
+            _make_item(title="mid", priority=7, topic_tags=["tech", "robotics"]),
+            _make_item(title="low", priority=5, topic_tags=["tech", "llm", "ai"]),
+        ]
+
+    async def test_overlap_items_move_first(self):
+        items = self._items()
+        captured = []
+        db = _relevance_db(items, total=3, captured=captured)
+
+        service = TechService(db, _mock_redis())
+        result = await service.get_news("tenant-1", sort="relevance", user_preferences={"favorite_tags": ["llm", "ai"]})
+
+        assert [row["title"] for row in result["data"]] == ["low", "high", "mid"]
+        assert result["meta"]["total"] == 3
+
+    async def test_no_preferences_keeps_priority_order(self):
+        items = self._items()
+        captured = []
+        db = _relevance_db(items, total=3, captured=captured)
+
+        service = TechService(db, _mock_redis())
+        result = await service.get_news("tenant-1", sort="relevance")
+
+        # Pure priority ordering: exactly the candidate order returned by SQL
+        assert [row["title"] for row in result["data"]] == ["high", "mid", "low"]
+
+    async def test_empty_favorite_tags_keeps_priority_order(self):
+        items = self._items()
+        captured = []
+        db = _relevance_db(items, total=3, captured=captured)
+
+        service = TechService(db, _mock_redis())
+        result = await service.get_news("tenant-1", sort="relevance", user_preferences={"favorite_tags": []})
+
+        assert [row["title"] for row in result["data"]] == ["high", "mid", "low"]
+
+    async def test_reranked_pool_is_sliced_for_pagination(self):
+        items = [
+            _make_item(title="a", priority=9, topic_tags=["tech"]),
+            _make_item(title="b", priority=8, topic_tags=["llm"]),
+            _make_item(title="c", priority=7, topic_tags=["tech"]),
+            _make_item(title="d", priority=6, topic_tags=["llm", "ai"]),
+        ]
+        captured = []
+        db = _relevance_db(items, total=4, captured=captured)
+
+        service = TechService(db, _mock_redis())
+        prefs = {"favorite_tags": ["llm", "ai"]}
+
+        page1 = await service.get_news("tenant-1", sort="relevance", page=1, page_size=2, user_preferences=prefs)
+        assert [row["title"] for row in page1["data"]] == ["b", "d"]
+        assert page1["meta"]["total"] == 4
+
+        captured.clear()
+        page2 = await service.get_news("tenant-1", sort="relevance", page=2, page_size=2, user_preferences=prefs)
+        assert [row["title"] for row in page2["data"]] == ["a", "c"]
+
+    @staticmethod
+    def _sql(stmt) -> str:
+        from sqlalchemy.dialects import postgresql
+
+        return str(stmt.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+
+    async def test_candidate_pool_limit_is_three_times_page_size(self):
+        captured = []
+        db = _relevance_db([], total=0, captured=captured)
+
+        service = TechService(db, _mock_redis())
+        await service.get_news("tenant-1", sort="relevance", page_size=20, user_preferences={"favorite_tags": ["llm"]})
+
+        sql = self._sql(captured[-1])
+        assert f"LIMIT {RELEVANCE_CANDIDATE_MULTIPLIER * 20}" in sql
+        # Candidate fetch never applies OFFSET
+        assert "OFFSET" not in sql
+
+    async def test_candidate_pool_limit_capped(self):
+        captured = []
+        db = _relevance_db([], total=0, captured=captured)
+
+        service = TechService(db, _mock_redis())
+        await service.get_news("tenant-1", sort="relevance", page_size=150, user_preferences={"favorite_tags": ["llm"]})
+
+        sql = self._sql(captured[-1])
+        assert f"LIMIT {RELEVANCE_CANDIDATE_LIMIT}" in sql
+        assert "OFFSET" not in sql
+
+    async def test_no_preferences_query_keeps_offset_limit(self):
+        captured = []
+        db = _relevance_db([], total=0, captured=captured)
+
+        service = TechService(db, _mock_redis())
+        await service.get_news("tenant-1", sort="relevance", page=3, page_size=10)
+
+        sql = self._sql(captured[-1])
+        # Plain pagination: limit page_size, offset (page-1)*page_size
+        assert "LIMIT 10" in sql
+        assert f"OFFSET {(3 - 1) * 10}" in sql
 
 
 class TestConstants:

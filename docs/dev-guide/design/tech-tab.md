@@ -256,9 +256,12 @@ graph TD
 |------|------------------------------|------|
 | 🔥 热度优先 `hot` | SQL 先 `ORDER BY priority DESC, published_at DESC` 取页，再对当页条目按 `hot_score` 客户端重排 | **默认** |
 | 🕐 时间优先 `time` | `ORDER BY published_at DESC` | |
-| 🎯 相关性 `relevance` | `ORDER BY priority DESC` | 即纯优先级排序 |
+| 🎯 相关性 `relevance` | **候选池重排**：按 `priority DESC` 取候选（LIMIT `min(page_size*3, 300)`，同级以 `published_at DESC` 定序），Python 侧重计分 `score = priority + \|favorite_tags ∩ topic_tags\| × 2`，稳定排序后切页 | 有用户偏好时的个性化排序；`hot`/`time` 不受偏好影响 |
 
-> ⚠️ **未实现**：用户相关性加权（`score × user_interest_weight`）— 无任何用户偏好数据源，仅前端类型定义中存在 `favorite_tags` 字段；"相关性"排序目前退化为纯优先级排序。
+> ✅ **已实现**：用户相关性加权改为**候选池重排**口径（常量 `RELEVANCE_CANDIDATE_MULTIPLIER=3`、`RELEVANCE_CANDIDATE_LIMIT=300`、`RELEVANCE_TAG_BOOST=2`）：
+> - 偏好来源为 `users.preferences.favorite_tags`（经 `GET/PUT /api/v1/users/me/preferences` 管理，见 [api.md](api.md) §3.2），前端在 SettingsView → ProfileSettings「关注话题」点选科技二级标签维护；
+> - 候选池 = 过滤后按 `priority DESC` 的前 `min(page_size×3, 300)` 条（不做 OFFSET），池内按 `priority + 交集×2` 重计分并**稳定排序**（同分保持候选顺序），再从排好序的池中切出当页；池外条目在本页窗内不可达，`meta.total` 仍是过滤后全量计数；
+> - 无偏好（未设置或列表为空）时**退化为纯优先级排序**（`ORDER BY priority DESC` + 常规 OFFSET/LIMIT），行为与旧版一致；`GET /tech/news` 仅在 `sort=relevance` 时查询偏好。
 
 #### 3.5.2 热度分公式（现状措辞修正）
 

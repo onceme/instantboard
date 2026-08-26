@@ -231,7 +231,7 @@ graph TD
 ```mermaid
 %%{init: {"theme": "base", "themeVariables": {"primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#767676", "lineColor": "#767676", "arrowheadColor": "#767676", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#767676", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#767676", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#767676", "clusterBkg": "#ffffff", "clusterBdr": "#767676", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
 graph TD
-    step1["Step 1 前端操作<br/>仅提交名称+描述"]
+    step1["Step 1 前端操作<br/>完整表单提交"]
     step2["Step 2 API 层<br/>校验与注入租户后写库"]
     step3["Step 3 数据库<br/>写入 categories 行 (默认值补齐)"]
     step4["Step 4 添加数据源<br/>写入 sources / source_health"]
@@ -242,16 +242,16 @@ graph TD
 
 各步明细：
 
-1. **Step 1 前端操作 — CategoryEditor 弹窗 (SettingsView)**：实际现状是仅输入名称(必填) + 描述(可选)，type 固定提交 custom → POST /api/v1/categories；后端 CategoryCreate 另支持 slug/icon/color/refresh_interval_seconds/keywords_filter/is_active，前端目前无对应控件 ⚠️。
+1. **Step 1 前端操作 — CategoryEditor 完整表单 (SettingsView)**：名称(必填) + 描述(可选) + 图标(15 个精选 lucide 图标，经 `categoryIcons.ts` 的 `CATEGORY_ICON_OPTIONS` 渲染，默认 folder，提交 lucide 图标名) + 颜色(`<input type="color">`，默认 #3B82F6) + 刷新频率(数字秒，客户端预校验 ≥10 且为整数，留空走后端默认 300) + 关键词过滤(逗号分隔 → 字符串数组，空白项过滤) + slug(可选，留空由后端 `_slugify(name)` 生成，`services/category.py:222`)，type 固定提交 custom → POST /api/v1/categories。后端 CategoryCreate 另支持 is_active，前端无控件（默认 true）；编辑模式 (PUT) 同步回填上述字段，唯 keywords_filter 不在 CategoryResponse 中返回，编辑时留空 = 保持不变（留空不进 PUT payload）。
 2. **Step 2 API 层 — categories.py**：POST /api/v1/categories → Pydantic CategoryCreate 校验 → 注入 tenant_id (从 JWT) → 检查租户分类数量上限 (tenants.max_categories) → 检查 slug 唯一性 (UNIQUE tenant_id + slug) → INSERT INTO categories → 返回 CategoryResponse。
 3. **Step 3 数据库 — categories 表**：INSERT categories：id = gen_random_uuid()，tenant_id = {current_tenant}，示例 name = 体育、slug = sports，icon = folder (默认)，color = #3B82F6 (默认)，type = custom，refresh_interval_seconds = 300 (默认)，is_active = true。
 4. **Step 4 添加数据源 — 数据源管理面板**：POST /api/v1/sources：name / category_id / source_type / url / refresh_interval_seconds / config.library → collector_available 校验 (resolve_collector) → INSERT INTO sources + source_health → 发布 source_created 事件 (channel:dashboard⚠️)。
 5. **Step 5 采集器启动 — worker 事件消费 (现状说明)**：worker 仅消费 SOURCE_EVENT_NAMES = {source_enabled, source_disabled, source_deleted}；source_created 被 worker 忽略 ⚠️ → 新源需 worker 重启或后续启用操作 (source_enabled → add_job) 才开始采集；启动后：Collector采集 → Processor处理 → Store存储 → SSE推送。
 6. **Step 6 前台视图接线完成 — REST 泛型流已接线, SSE 频道仍未订阅 (现状)**：新建自定义分类后，前端侧边栏在固定 4 项（财经/科技/仪表盘/设置）之下动态渲染该分类条目（`type=custom` 且 `is_active`，`Sidebar.vue`），点击路由到 `/c/{slug}` 通用信息流视图（`CategoryView.vue`，复用 NewsCard + useInfiniteScroll 无限滚动）；条目经 `GET /api/v1/categories/{id}/items` 拉取（分页 + `since` + `sort`（time 默认/hot/relevance），响应复用 TechNewsResponse schema）。⚠️ 实时推送仍待接线：后端 /api/v1/stream/{category} 频道通用，可 EventSource(/api/v1/stream/sports) 订阅，但 stream/{category} 目前仍仅被前端订阅 finance/tech/dashboard，自定义分类视图不订阅其 SSE 频道。
 
-> ⚠️ **两处未实现（潜在体验问题）**：
-> 1. **前端表单不完整**：`CategoryEditor.vue:63-78` 只提交 name+description（type 固定为 custom），后端支持的 slug/icon/color/刷新频率/关键词过滤均无 UI 控件；
-> 2. **新建源不会自动开始采集**：`source_created` 发布在 **channel:dashboard**（`services/source.py:286-294`），worker 忽略该事件（`scheduler/worker.py:35-37`），需 worker 重启或后续启用操作。
+> ✅ 原第 1 条"前端表单不完整"已实现：`CategoryEditor.vue` 提供完整表单——名称/描述/图标(15 个精选 lucide 图标，默认 folder)/颜色(`<input type="color">`，默认 #3B82F6)/刷新频率(秒，≥10，留空走后端默认 300)/关键词过滤(逗号分隔 → 数组)/slug(留空创建时由后端生成)；编辑模式同步回填，仅 keywords 因后端响应不含 keywords_filter 而无法回显（留空 = 保持不变）。
+>
+> ⚠️ **未实现（潜在体验问题）**：**新建源不会自动开始采集**：`source_created` 发布在 **channel:dashboard**（`services/source.py:286-294`），worker 忽略该事件（`scheduler/worker.py:35-37`），需 worker 重启或后续启用操作。
 >
 > ✅ 原第 3 条"自定义分类无前台视图"已实现：`Sidebar.vue` 在固定导航项之下动态渲染自定义分类条目（lucide 图标名映射 + Folder 兜底），路由到 `/c/:slug` 的 `CategoryView.vue` 通用信息流视图（无需逐分类建 SportsView/sportsStore），条目经 `GET /api/v1/categories/{id}/items` 拉取（见 §3.4.5）；仍遗留：前端未订阅自定义分类的 SSE 频道（见 Step 6）。
 
@@ -260,7 +260,9 @@ graph TD
 ```
 修改分类属性 (如名称、刷新频率、关键词过滤) — 仅适用于自定义分类:
 
-1. 前端: SettingsView → CategoryEditor → PUT /api/v1/categories/{id}
+1. 前端: SettingsView → CategoryEditor（完整表单：名称/描述/slug/图标/
+   颜色/刷新频率回填，关键词因响应不回显而留空 = 保持不变）
+   → PUT /api/v1/categories/{id}
 2. API:  权限校验:
          - 系统预定义分类 (tenant_id=system) 的任何更新一律返回 Forbidden
            (services/category.py:225-226)

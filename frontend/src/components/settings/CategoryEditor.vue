@@ -11,19 +11,53 @@ import {
 } from "@/utils/api";
 import { categoriesApi } from "@/api/categories";
 import { Plus, Pencil, Trash2, RefreshCw } from "lucide-vue-next";
+import {
+  CATEGORY_ICON_OPTIONS,
+  resolveCategoryIcon,
+  type CategoryIconOption,
+} from "@/utils/categoryIcons";
 import EmptyState from "@/components/common/EmptyState.vue";
 import ErrorAlert from "@/components/common/ErrorAlert.vue";
 import ConfirmationDialog from "@/components/common/ConfirmationDialog.vue";
+
+const DEFAULT_ICON = "folder";
+const DEFAULT_COLOR = "#3B82F6";
+// Backend CategoryCreate/CategoryUpdate reject anything lower (ge=10)
+const MIN_REFRESH_SECONDS = 10;
+
+interface CategoryFormValues {
+  name: string;
+  description: string;
+  slug: string;
+  icon: string;
+  color: string;
+  // Raw strings so "left blank" stays representable (= server default on
+  // create, keep the stored value on update)
+  refreshInterval: string;
+  keywords: string;
+}
+
+function blankForm(): CategoryFormValues {
+  return {
+    name: "",
+    description: "",
+    slug: "",
+    icon: DEFAULT_ICON,
+    color: DEFAULT_COLOR,
+    refreshInterval: "",
+    keywords: "",
+  };
+}
 
 const categories = ref<Category[]>([]);
 const loading = ref(false);
 
 // The top "add" form and the inline row editor keep separate state so starting
 // a row edit no longer pours its values into the add inputs (and vice versa)
-const addForm = ref({ name: "", description: "" });
+const addForm = ref<CategoryFormValues>(blankForm());
 const addError = ref("");
 const editingId = ref<string | null>(null);
-const editForm = ref({ name: "", description: "" });
+const editForm = ref<CategoryFormValues>(blankForm());
 const editError = ref("");
 const deleteError = ref("");
 // Bumped on every new delete error so a dismissed ErrorAlert remounts and shows again
@@ -61,6 +95,60 @@ function categoryFallback(err: unknown, action: string): string {
   }
 }
 
+// "AI, 机器人,," → ["AI", "机器人"] (each entry trimmed, blanks dropped)
+function parseKeywords(raw: string): string[] {
+  return raw
+    .split(",")
+    .map((keyword) => keyword.trim())
+    .filter((keyword) => keyword !== "");
+}
+
+function intervalValidationError(raw: string): string {
+  const trimmed = String(raw).trim();
+  if (trimmed === "") return "";
+  const seconds = Number(trimmed);
+  if (!Number.isInteger(seconds) || seconds < MIN_REFRESH_SECONDS) {
+    return `刷新频率需为不小于 ${MIN_REFRESH_SECONDS} 的整数秒`;
+  }
+  return "";
+}
+
+// Shared by create and update; blank slug/interval/keywords are omitted so the
+// backend applies its defaults on create (slug slugified from name, 300s, no
+// filter) and keeps the stored values on update
+function buildCategoryPayload(
+  form: CategoryFormValues,
+): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
+    name: form.name,
+    description: form.description,
+    icon: form.icon,
+    color: form.color,
+  };
+  const slug = form.slug.trim();
+  if (slug !== "") payload.slug = slug;
+  const interval = String(form.refreshInterval).trim();
+  if (interval !== "") payload.refresh_interval_seconds = Number(interval);
+  const keywords = parseKeywords(form.keywords);
+  if (keywords.length > 0) payload.keywords_filter = keywords;
+  return payload;
+}
+
+// Curated icon list plus, when the currently stored icon is not among the
+// options (e.g. "cpu"), an extra entry so editing never silently drops it
+function iconOptionsFor(icon: string): CategoryIconOption[] {
+  if (CATEGORY_ICON_OPTIONS.some((option) => option.name === icon)) {
+    return CATEGORY_ICON_OPTIONS;
+  }
+  return [
+    ...CATEGORY_ICON_OPTIONS,
+    { name: icon, component: resolveCategoryIcon(icon) },
+  ];
+}
+
+const addIconOptions = computed(() => iconOptionsFor(addForm.value.icon));
+const editIconOptions = computed(() => iconOptionsFor(editForm.value.icon));
+
 async function fetchCategories() {
   loading.value = true;
   try {
@@ -73,15 +161,19 @@ async function fetchCategories() {
 
 async function addCategory() {
   if (!addForm.value.name.trim()) return;
+  const invalidInterval = intervalValidationError(addForm.value.refreshInterval);
+  if (invalidInterval) {
+    addError.value = invalidInterval;
+    return;
+  }
   addError.value = "";
   try {
     await apiPost<Category>("/categories", {
-      name: addForm.value.name,
-      description: addForm.value.description,
+      ...buildCategoryPayload(addForm.value),
       type: "custom",
     });
     // Success: clear the inputs and refresh; failure keeps both via catch
-    addForm.value = { name: "", description: "" };
+    addForm.value = blankForm();
     await fetchCategories();
   } catch (err) {
     addError.value = getApiErrorMessage(err, categoryFallback(err, "添加"));
@@ -90,14 +182,20 @@ async function addCategory() {
 
 async function updateCategory(id: string) {
   if (!editForm.value.name.trim()) return;
+  const invalidInterval = intervalValidationError(
+    editForm.value.refreshInterval,
+  );
+  if (invalidInterval) {
+    editError.value = invalidInterval;
+    return;
+  }
   editError.value = "";
   try {
     await apiPut<Category>(`/categories/${id}`, {
-      name: editForm.value.name,
-      description: editForm.value.description,
+      ...buildCategoryPayload(editForm.value),
     });
     editingId.value = null;
-    editForm.value = { name: "", description: "" };
+    editForm.value = blankForm();
     await fetchCategories();
   } catch (err) {
     // Stay in edit mode with the values and the error visible for retry
@@ -121,13 +219,22 @@ function startEdit(category: Category) {
   editForm.value = {
     name: category.name,
     description: category.description || "",
+    slug: category.slug || "",
+    icon: category.icon || DEFAULT_ICON,
+    color: category.color || DEFAULT_COLOR,
+    refreshInterval: category.refresh_interval_seconds
+      ? String(category.refresh_interval_seconds)
+      : "",
+    // Responses carry no keywords_filter, so there is nothing to echo; leaving
+    // the input blank keeps whatever keywords are stored server-side
+    keywords: "",
   };
   editError.value = "";
 }
 
 function cancelEdit() {
   editingId.value = null;
-  editForm.value = { name: "", description: "" };
+  editForm.value = blankForm();
   editError.value = "";
 }
 
@@ -162,26 +269,74 @@ fetchCategories();
 <template>
   <div class="category-editor">
     <div class="add-section">
-      <input
-        v-model="addForm.name"
-        type="text"
-        placeholder="新分类名称"
-        class="input-name"
-      />
-      <input
-        v-model="addForm.description"
-        type="text"
-        placeholder="描述(可选)"
-        class="input-desc"
-      />
-      <button
-        class="add-btn"
-        :disabled="!addForm.name.trim()"
-        @click="addCategory"
-      >
-        <Plus :size="16" />
-        添加
-      </button>
+      <div class="form-row">
+        <input
+          v-model="addForm.name"
+          type="text"
+          placeholder="新分类名称"
+          class="input-name"
+        />
+        <input
+          v-model="addForm.description"
+          type="text"
+          placeholder="描述(可选)"
+          class="input-desc"
+        />
+      </div>
+      <div class="form-row">
+        <input
+          v-model="addForm.slug"
+          type="text"
+          placeholder="slug(可选，留空自动生成)"
+          class="input-slug"
+        />
+        <input
+          v-model="addForm.refreshInterval"
+          type="number"
+          min="10"
+          step="1"
+          placeholder="刷新频率(秒，≥10，留空默认300)"
+          title="建议范围 10–86400 秒；留空由后端使用默认值 300 秒"
+          class="input-interval"
+        />
+        <label class="color-field">
+          <span class="field-label">颜色</span>
+          <input v-model="addForm.color" type="color" class="input-color" />
+        </label>
+      </div>
+      <div class="form-row">
+        <input
+          v-model="addForm.keywords"
+          type="text"
+          placeholder="关键词过滤，逗号分隔(可选)"
+          class="input-keywords"
+        />
+      </div>
+      <div class="form-row">
+        <div class="icon-picker" aria-label="分类图标">
+          <button
+            v-for="option in addIconOptions"
+            :key="option.name"
+            type="button"
+            class="icon-option"
+            :class="{ selected: addForm.icon === option.name }"
+            :data-icon="option.name"
+            :title="option.name"
+            :aria-pressed="addForm.icon === option.name"
+            @click="addForm.icon = option.name"
+          >
+            <component :is="option.component" :size="16" />
+          </button>
+        </div>
+        <button
+          class="add-btn"
+          :disabled="!addForm.name.trim()"
+          @click="addCategory"
+        >
+          <Plus :size="16" />
+          添加
+        </button>
+      </div>
       <p v-if="addError" class="error-text">{{ addError }}</p>
     </div>
 
@@ -225,14 +380,65 @@ fetchCategories();
         class="category-item custom"
       >
         <div v-if="editingId === cat.id" class="edit-row">
-          <input v-model="editForm.name" type="text" class="input-name" />
-          <input
-            v-model="editForm.description"
-            type="text"
-            class="input-desc"
-          />
-          <button class="save-btn" @click="updateCategory(cat.id)">保存</button>
-          <button class="cancel-btn" @click="cancelEdit">取消</button>
+          <div class="form-row">
+            <input v-model="editForm.name" type="text" class="input-name" />
+            <input
+              v-model="editForm.description"
+              type="text"
+              placeholder="描述(可选)"
+              class="input-desc"
+            />
+          </div>
+          <div class="form-row">
+            <input
+              v-model="editForm.slug"
+              type="text"
+              placeholder="slug(留空保持不变)"
+              class="input-slug"
+            />
+            <input
+              v-model="editForm.refreshInterval"
+              type="number"
+              min="10"
+              step="1"
+              placeholder="刷新频率(秒，≥10，留空保持不变)"
+              title="建议范围 10–86400 秒；留空保持当前设置"
+              class="input-interval"
+            />
+            <label class="color-field">
+              <span class="field-label">颜色</span>
+              <input v-model="editForm.color" type="color" class="input-color" />
+            </label>
+          </div>
+          <div class="form-row">
+            <input
+              v-model="editForm.keywords"
+              type="text"
+              placeholder="关键词，逗号分隔(留空保持现有设置)"
+              class="input-keywords"
+            />
+          </div>
+          <div class="form-row">
+            <div class="icon-picker" aria-label="分类图标">
+              <button
+                v-for="option in editIconOptions"
+                :key="option.name"
+                type="button"
+                class="icon-option"
+                :class="{ selected: editForm.icon === option.name }"
+                :data-icon="option.name"
+                :title="option.name"
+                :aria-pressed="editForm.icon === option.name"
+                @click="editForm.icon = option.name"
+              >
+                <component :is="option.component" :size="16" />
+              </button>
+            </div>
+            <button class="save-btn" @click="updateCategory(cat.id)">
+              保存
+            </button>
+            <button class="cancel-btn" @click="cancelEdit">取消</button>
+          </div>
           <p v-if="editError" class="error-text">{{ editError }}</p>
         </div>
         <div v-else class="display-row">
@@ -281,9 +487,16 @@ fetchCategories();
 
 .add-section {
   display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.form-row {
+  display: flex;
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+  width: 100%;
 }
 
 /* min-width: 0 overrides the replaced-element min-content size that would
@@ -298,6 +511,76 @@ fetchCategories();
 .input-desc {
   flex: 2 1 200px;
   min-width: 0;
+}
+
+.input-slug {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
+.input-interval {
+  flex: 1 1 140px;
+  min-width: 0;
+}
+
+.input-keywords {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
+.color-field {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.field-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.input-color {
+  width: 40px;
+  height: 32px;
+  padding: 2px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background-color: var(--bg-card);
+  cursor: pointer;
+}
+
+.icon-picker {
+  flex: 1 1 240px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+.icon-option {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  background-color: transparent;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.icon-option:hover {
+  color: var(--accent);
+  background-color: rgba(59, 130, 246, 0.1);
+}
+
+.icon-option.selected {
+  color: var(--accent);
+  border-color: var(--accent);
+  background-color: rgba(59, 130, 246, 0.1);
 }
 
 .add-btn {
@@ -377,9 +660,8 @@ fetchCategories();
 
 .edit-row {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: 8px;
-  align-items: center;
 }
 
 /* flex-basis 100% pushes the message onto its own line inside the wrapped rows */

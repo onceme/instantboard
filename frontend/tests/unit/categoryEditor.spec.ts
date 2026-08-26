@@ -4,6 +4,11 @@
  * swallowed; the top "add" form and the inline row editor keep separate state
  * so editing a row no longer leaks its values into the add inputs; a failed
  * add keeps the user's input plus the error, a successful add clears it.
+ * Full-form coverage: icon/color/interval/keywords/slug controls render with
+ * defaults, filled values land in the create/update payloads, blank optional
+ * fields are omitted (backend defaults / stored values win), intervals below
+ * the backend minimum are rejected client-side, and edit mode prefills the
+ * extended fields.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
@@ -348,5 +353,282 @@ describe("reclassify action", () => {
       "重打标失败，请稍后重试",
     );
     expect(wrapper.find(".reclassify-message").exists()).toBe(false);
+  });
+});
+
+// Captures the JSON body of a POST /categories or PUT /categories/{id} call.
+// config.data is already a JSON string by the time the adapter runs (axios
+// request transformers have executed).
+function requestBody(config: InternalAxiosRequestConfig): Record<string, unknown> {
+  return JSON.parse(config.data as string) as Record<string, unknown>;
+}
+
+describe("full category form", () => {
+  it("renders slug/interval/keywords/color/icon controls with defaults", async () => {
+    apiClient.defaults.adapter = async (config) => {
+      if (method(config) === "get" && config.url === "/categories") {
+        return okResponse(config, { success: true, data: [] });
+      }
+      throw errorResponse(500, config, {});
+    };
+
+    const wrapper = mount(CategoryEditor);
+    await flushPromises();
+
+    const section = wrapper.find(".add-section");
+    expect(section.find(".input-slug").exists()).toBe(true);
+    expect(section.find(".input-interval").exists()).toBe(true);
+    expect(section.find(".input-keywords").exists()).toBe(true);
+    const colorInput = section.find('input[type="color"]');
+    expect(colorInput.exists()).toBe(true);
+    expect(
+      (colorInput.element as HTMLInputElement).value.toLowerCase(),
+    ).toBe("#3b82f6");
+    // 15 curated icon options, "folder" preselected
+    expect(section.findAll(".icon-option")).toHaveLength(15);
+    expect(
+      section.find(".icon-option.selected").attributes("data-icon"),
+    ).toBe("folder");
+  });
+
+  it("submits icon/color/interval/keywords/slug as filled by the user", async () => {
+    let posted: Record<string, unknown> | null = null;
+    apiClient.defaults.adapter = async (config) => {
+      if (method(config) === "get" && config.url === "/categories") {
+        return okResponse(config, { success: true, data: [] });
+      }
+      if (method(config) === "post" && config.url === "/categories") {
+        posted = requestBody(config);
+        return okResponse(config, { success: true, data: makeCategory() });
+      }
+      throw errorResponse(500, config, {});
+    };
+
+    const wrapper = mount(CategoryEditor);
+    await flushPromises();
+
+    await wrapper.find(".add-section .input-name").setValue("体育");
+    await wrapper.find(".add-section .input-slug").setValue("sports");
+    await wrapper.find(".add-section .input-interval").setValue("120");
+    await wrapper
+      .find(".add-section .input-keywords")
+      .setValue("AI, 机器人 ,, 新闻 ");
+    await wrapper
+      .find('.add-section .icon-option[data-icon="rocket"]')
+      .trigger("click");
+    await wrapper
+      .find('.add-section input[type="color"]')
+      .setValue("#FF0000");
+
+    // Selection follows the click before submission
+    expect(
+      wrapper
+        .find(".add-section .icon-option.selected")
+        .attributes("data-icon"),
+    ).toBe("rocket");
+
+    await wrapper.find(".add-btn").trigger("click");
+    await flushPromises();
+
+    expect(posted).not.toBeNull();
+    expect(posted!.name).toBe("体育");
+    expect(posted!.type).toBe("custom");
+    expect(posted!.slug).toBe("sports");
+    expect(posted!.icon).toBe("rocket");
+    expect((posted!.color as string).toLowerCase()).toBe("#ff0000");
+    expect(posted!.refresh_interval_seconds).toBe(120);
+    // Blank entries between commas are filtered out
+    expect(posted!.keywords_filter).toEqual(["AI", "机器人", "新闻"]);
+  });
+
+  it("leaving slug/interval/keywords blank omits them; icon/color fall back to defaults", async () => {
+    let posted: Record<string, unknown> | null = null;
+    apiClient.defaults.adapter = async (config) => {
+      if (method(config) === "get" && config.url === "/categories") {
+        return okResponse(config, { success: true, data: [] });
+      }
+      if (method(config) === "post" && config.url === "/categories") {
+        posted = requestBody(config);
+        return okResponse(config, { success: true, data: makeCategory() });
+      }
+      throw errorResponse(500, config, {});
+    };
+
+    const wrapper = mount(CategoryEditor);
+    await flushPromises();
+
+    await wrapper.find(".add-section .input-name").setValue("体育");
+    await wrapper.find(".add-btn").trigger("click");
+    await flushPromises();
+
+    // No slug / refresh_interval_seconds / keywords_filter keys — the backend
+    // slugifies the name, applies the 300s default and stores no filter
+    expect(posted).toEqual({
+      name: "体育",
+      description: "",
+      type: "custom",
+      icon: "folder",
+      color: "#3B82F6",
+    });
+  });
+
+  it("rejects a refresh interval below the backend minimum without sending a request", async () => {
+    const mutations: string[] = [];
+    apiClient.defaults.adapter = async (config) => {
+      if (method(config) === "get" && config.url === "/categories") {
+        return okResponse(config, { success: true, data: [] });
+      }
+      mutations.push(`${method(config)} ${config.url}`);
+      throw errorResponse(500, config, {});
+    };
+
+    const wrapper = mount(CategoryEditor);
+    await flushPromises();
+
+    await wrapper.find(".add-section .input-name").setValue("体育");
+    await wrapper.find(".add-section .input-interval").setValue("5");
+    await wrapper.find(".add-btn").trigger("click");
+    await flushPromises();
+
+    expect(wrapper.find(".add-section .error-text").text()).toContain(
+      "刷新频率",
+    );
+    expect(mutations).toHaveLength(0);
+    // The input is kept so the user can correct it
+    expect(
+      (wrapper.find(".add-section .input-name").element as HTMLInputElement)
+        .value,
+    ).toBe("体育");
+  });
+});
+
+describe("full form in edit mode", () => {
+  it("prefills slug/icon/color/interval and submits the modified fields", async () => {
+    let updated: Record<string, unknown> | null = null;
+    apiClient.defaults.adapter = async (config) => {
+      if (method(config) === "get" && config.url === "/categories") {
+        return okResponse(config, {
+          success: true,
+          data: [
+            makeCategory({
+              icon: "trophy",
+              color: "#22C55E",
+              refresh_interval_seconds: 60,
+            }),
+          ],
+        });
+      }
+      if (method(config) === "put" && config.url === "/categories/cat-1") {
+        updated = requestBody(config);
+        return okResponse(config, { success: true, data: makeCategory() });
+      }
+      throw errorResponse(500, config, {});
+    };
+
+    const wrapper = mount(CategoryEditor);
+    await flushPromises();
+
+    await wrapper.find(".edit-btn").trigger("click");
+    await flushPromises();
+
+    const row = wrapper.find(".edit-row");
+    expect(
+      (row.find(".input-name").element as HTMLInputElement).value,
+    ).toBe("机器人");
+    expect(
+      (row.find(".input-slug").element as HTMLInputElement).value,
+    ).toBe("robotics");
+    expect(
+      (row.find(".input-interval").element as HTMLInputElement).value,
+    ).toBe("60");
+    expect(
+      (
+        row.find('input[type="color"]').element as HTMLInputElement
+      ).value.toLowerCase(),
+    ).toBe("#22c55e");
+    expect(row.find(".icon-option.selected").attributes("data-icon")).toBe(
+      "trophy",
+    );
+    // Responses carry no keywords_filter, so there is nothing to echo
+    expect(
+      (row.find(".input-keywords").element as HTMLInputElement).value,
+    ).toBe("");
+
+    await row.find(".input-keywords").setValue("人形, Optimus");
+    await row.find('.icon-option[data-icon="star"]').trigger("click");
+    await wrapper.find(".save-btn").trigger("click");
+    await flushPromises();
+
+    expect(updated).not.toBeNull();
+    expect(updated!.name).toBe("机器人");
+    expect(updated!.slug).toBe("robotics");
+    expect(updated!.icon).toBe("star");
+    expect(updated!.refresh_interval_seconds).toBe(60);
+    expect((updated!.color as string).toLowerCase()).toBe("#22c55e");
+    expect(updated!.keywords_filter).toEqual(["人形", "Optimus"]);
+  });
+
+  it("omits blank keywords and a cleared interval on save so stored values survive", async () => {
+    let updated: Record<string, unknown> | null = null;
+    apiClient.defaults.adapter = async (config) => {
+      if (method(config) === "get" && config.url === "/categories") {
+        return okResponse(config, { success: true, data: [makeCategory()] });
+      }
+      if (method(config) === "put" && config.url === "/categories/cat-1") {
+        updated = requestBody(config);
+        return okResponse(config, { success: true, data: makeCategory() });
+      }
+      throw errorResponse(500, config, {});
+    };
+
+    const wrapper = mount(CategoryEditor);
+    await flushPromises();
+
+    await wrapper.find(".edit-btn").trigger("click");
+    await flushPromises();
+
+    // Explicitly clear the prefilled interval; leave keywords untouched
+    await wrapper.find(".edit-row .input-interval").setValue("");
+    await wrapper.find(".save-btn").trigger("click");
+    await flushPromises();
+
+    expect(updated).not.toBeNull();
+    expect(Object.keys(updated!)).not.toContain("keywords_filter");
+    expect(Object.keys(updated!)).not.toContain("refresh_interval_seconds");
+  });
+
+  it("keeps an out-of-list stored icon (e.g. cpu) selectable while editing", async () => {
+    let updated: Record<string, unknown> | null = null;
+    apiClient.defaults.adapter = async (config) => {
+      if (method(config) === "get" && config.url === "/categories") {
+        return okResponse(config, {
+          success: true,
+          data: [makeCategory({ icon: "cpu" })],
+        });
+      }
+      if (method(config) === "put" && config.url === "/categories/cat-1") {
+        updated = requestBody(config);
+        return okResponse(config, { success: true, data: makeCategory() });
+      }
+      throw errorResponse(500, config, {});
+    };
+
+    const wrapper = mount(CategoryEditor);
+    await flushPromises();
+
+    await wrapper.find(".edit-btn").trigger("click");
+    await flushPromises();
+
+    const row = wrapper.find(".edit-row");
+    expect(row.findAll(".icon-option")).toHaveLength(16);
+    expect(row.find(".icon-option.selected").attributes("data-icon")).toBe(
+      "cpu",
+    );
+
+    await wrapper.find(".save-btn").trigger("click");
+    await flushPromises();
+
+    // Saving without touching the icon must not drop it
+    expect(updated!.icon).toBe("cpu");
   });
 });

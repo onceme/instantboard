@@ -114,6 +114,10 @@ export interface MarketIndex {
   change: number;
   change_percent: number;
   market_status: "open" | "closed" | "pre_market" | "post_market";
+  // Why the market is closed (backend market_calendar, §3.4.4); null while open
+  market_status_reason?: "weekend" | "holiday" | "off_hours" | null;
+  // Exchange holiday display name when market_status_reason === "holiday"
+  holiday_name?: string | null;
   // Must match the region values in the backend MARKET_INDICES_CONFIG (GB=FTSE 100, DE=DAX, FR=CAC 40)
   region: "US" | "CN" | "HK" | "JP" | "GB" | "DE" | "FR" | "KR" | "IN";
   timestamp: string;

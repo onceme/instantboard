@@ -1,5 +1,5 @@
 ---
-version: 1.3
+version: 1.4
 author: designer
 date: 2026-08-26
 status: revised
@@ -561,12 +561,32 @@ Response 200:
         "change": 12.34,
         "change_percent": 0.24,
         "market_status": "open",
+        "market_status_reason": null,
+        "holiday_name": null,
         "region": "US",
         "timestamp": "..."
       },
-      // ... 沪深300, 日经225, 恒生指数, FTSE100, DAX, NASDAQ, etc.
+      {
+        "symbol": "000300.SS",
+        "name": "沪深300",
+        "value": 3890.12,
+        "change": 0,
+        "change_percent": 0,
+        "market_status": "closed",
+        "market_status_reason": "holiday",
+        "holiday_name": "国庆节",
+        "region": "CN",
+        "timestamp": "..."
+      },
+      // ... 日经225, 恒生指数, FTSE100, DAX, NASDAQ, etc.
     ]
   }
+
+字段说明（仅新增，不改动既有字段）:
+  - market_status_reason: 休市原因，取值 "weekend" | "holiday" | "off_hours"；
+    开市（market_status == "open"）时为 null
+  - holiday_name: 节日名称（后端静态节假日表，覆盖 2025-2027）；
+    仅 market_status_reason == "holiday" 时非 null，否则为 null
 ```
 
 #### GET `/api/v1/finance/commodities` — 黄金/原油/期货

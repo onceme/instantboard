@@ -2,8 +2,6 @@ import hashlib
 import json
 import logging
 from datetime import UTC, datetime
-from datetime import time as dt_time
-from zoneinfo import ZoneInfo
 
 from redis.asyncio import Redis
 from sqlalchemy import func, or_, select
@@ -21,6 +19,14 @@ from app.core.redis import RedisKeys, redis_delete, redis_get, redis_set
 from app.core.sse_router import SSEEventType, event_router
 from app.models.finance import FinanceQuote, FinanceSymbol, FundNAVEstimate
 from app.models.watchlist import WatchlistItem
+from app.services.market_calendar import (
+    CLOSED_REASON_HOLIDAY,
+    MARKET_TIMEZONES,
+    MARKET_TRADING_HOURS,
+    get_market_holiday_name,
+    is_market_holiday,
+    market_closed_reason,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,29 +56,9 @@ COMMODITIES_CONFIG = [
     {"symbol": "ZS=F", "name": "大豆期货", "unit": "USD/bushel"},
 ]
 
-MARKET_TIMEZONES = {
-    "US": ZoneInfo("America/New_York"),
-    "CN": ZoneInfo("Asia/Shanghai"),
-    "HK": ZoneInfo("Asia/Hong_Kong"),
-    "JP": ZoneInfo("Asia/Tokyo"),
-    "GB": ZoneInfo("Europe/London"),
-    "DE": ZoneInfo("Europe/Berlin"),
-    "FR": ZoneInfo("Europe/Paris"),
-    "KR": ZoneInfo("Asia/Seoul"),
-    "IN": ZoneInfo("Asia/Kolkata"),
-}
-
-MARKET_TRADING_HOURS = {
-    "US": [(dt_time(9, 30), dt_time(16, 0))],
-    "CN": [(dt_time(9, 30), dt_time(11, 30)), (dt_time(13, 0), dt_time(15, 0))],
-    "HK": [(dt_time(9, 30), dt_time(16, 0))],
-    "JP": [(dt_time(9, 0), dt_time(15, 0))],
-    "GB": [(dt_time(8, 0), dt_time(16, 30))],
-    "DE": [(dt_time(9, 0), dt_time(17, 30))],
-    "FR": [(dt_time(9, 0), dt_time(17, 30))],
-    "KR": [(dt_time(9, 0), dt_time(15, 30))],
-    "IN": [(dt_time(9, 15), dt_time(15, 30))],
-}
+# MARKET_TIMEZONES / MARKET_TRADING_HOURS live in app.services.market_calendar
+# together with the static holiday tables (finance-tab.md §3.4.4); they are
+# re-imported above so existing references keep their import paths.
 
 REDIS_TTL_QUOTE = 30
 REDIS_TTL_MARKET_INDEX = 60
@@ -262,7 +248,7 @@ class FinanceService:
                     idx_data = r
                     break
 
-            market_status = self._is_market_open(config["region"])
+            status_info = self.get_market_status(config["region"])
 
             formatted.append(
                 {
@@ -271,7 +257,10 @@ class FinanceService:
                     "value": idx_data.get("current_price") if idx_data else None,
                     "change": idx_data.get("change") if idx_data else None,
                     "change_percent": idx_data.get("change_percent") if idx_data else None,
-                    "market_status": "open" if market_status else "closed",
+                    "market_status": status_info["status"],
+                    # weekend/holiday/off_hours while closed, None while open
+                    "market_status_reason": status_info["reason"],
+                    "holiday_name": status_info.get("holiday_name"),
                     "region": config["region"],
                     "timestamp": idx_data.get("timestamp") if idx_data else None,
                 }
@@ -645,6 +634,10 @@ class FinanceService:
             return False
 
         now = datetime.now(tz)
+        # Holiday calendar first: an exchange holiday closes the whole day
+        # regardless of the trading window (finance-tab.md §3.4.4).
+        if is_market_holiday(market, now.date()):
+            return False
         if now.weekday() >= 5:
             return False
 
@@ -652,6 +645,23 @@ class FinanceService:
         now_time = now.time()
 
         return any(open_time <= now_time <= close_time for open_time, close_time in trading_hours)
+
+    def get_market_status(self, market: str) -> dict:
+        """Open/closed status with the closed reason and holiday name.
+
+        Returns {"status": "open"|"closed", "reason": "weekend"|"holiday"|"off_hours"|None,
+        "holiday_name": str (holiday only)}. finance-tab.md §3.4.4.
+        """
+        tz = MARKET_TIMEZONES.get(market)
+        if tz is None:
+            return {"status": "closed", "reason": None}
+
+        now = datetime.now(tz)
+        reason = market_closed_reason(market, now)
+        status: dict = {"status": "open" if reason is None else "closed", "reason": reason}
+        if reason == CLOSED_REASON_HOLIDAY:
+            status["holiday_name"] = get_market_holiday_name(market, now.date())
+        return status
 
     def is_any_market_open(self) -> bool:
         """True while at least one major market is in a trading window (weekdays only).

@@ -9,18 +9,19 @@ import ErrorAlert from "@/components/common/ErrorAlert.vue";
 const financeStore = useFinanceStore();
 const refreshing = ref(false);
 
+type IndexEntry = {
+  symbol: string;
+  name: string;
+  value: number;
+  change_percent: number;
+  market_status: string;
+  market_status_reason?: string | null;
+  holiday_name?: string | null;
+  region: string;
+};
+
 const groupedIndices = computed(() => {
-  const groups: Record<
-    string,
-    Array<{
-      symbol: string;
-      name: string;
-      value: number;
-      change_percent: number;
-      market_status: string;
-      region: string;
-    }>
-  > = {};
+  const groups: Record<string, IndexEntry[]> = {};
 
   for (const [key, config] of Object.entries(MARKET_REGION_GROUPS)) {
     groups[key] = financeStore.marketIndices.filter((i) =>
@@ -46,6 +47,17 @@ function marketStatusLabel(status: string): string {
     post_market: "盘后",
   };
   return labels[status] || status;
+}
+
+function marketStatusText(entry: IndexEntry): string {
+  if (
+    entry.market_status === "closed" &&
+    entry.market_status_reason === "holiday" &&
+    entry.holiday_name
+  ) {
+    return `休市 · ${entry.holiday_name}`;
+  }
+  return marketStatusLabel(entry.market_status);
 }
 
 async function refresh() {
@@ -88,9 +100,11 @@ async function refresh() {
           <div v-for="index in group" :key="index.symbol" class="index-row">
             <div class="index-info">
               <span class="index-name">{{ index.name }}</span>
-              <span class="index-status">{{
-                marketStatusLabel(index.market_status)
-              }}</span>
+              <span
+                class="index-status"
+                :class="{ 'index-status-holiday': index.market_status === 'closed' && index.market_status_reason === 'holiday' }"
+                >{{ marketStatusText(index) }}</span
+              >
             </div>
             <div class="index-data">
               <span class="index-value">{{
@@ -207,6 +221,10 @@ async function refresh() {
   padding: 1px 6px;
   border-radius: var(--radius-sm);
   background-color: var(--bg-secondary);
+}
+
+.index-status-holiday {
+  color: var(--danger);
 }
 
 .index-data {

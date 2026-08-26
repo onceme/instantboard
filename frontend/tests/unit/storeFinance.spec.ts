@@ -178,6 +178,9 @@ describe("updateMarketIndexFromSSE", () => {
         change: 10,
         change_percent: 0.2,
         market_status: "open",
+        // absent from the payload → normalized to null by the SSE merge
+        market_status_reason: null,
+        holiday_name: null,
         region: "US",
         timestamp: "2026-01-02T00:00:00Z",
       },
@@ -188,10 +191,47 @@ describe("updateMarketIndexFromSSE", () => {
         change: -8,
         change_percent: -0.26,
         market_status: "closed",
+        market_status_reason: null,
+        holiday_name: null,
         region: "CN",
         timestamp: "2026-01-02T00:00:00Z",
       },
     ]);
+  });
+
+  it("keeps market_status_reason and holiday_name from the array payload", () => {
+    const store = useFinanceStore();
+    store.updateMarketIndexFromSSE([
+      {
+        symbol: "000001.SS",
+        name: "上证综合指数",
+        value: 3100,
+        change: 0,
+        change_percent: 0,
+        market_status: "closed",
+        market_status_reason: "holiday",
+        holiday_name: "国庆节",
+        region: "CN",
+        timestamp: "2026-10-01T02:00:00Z",
+      },
+      {
+        symbol: "^GSPC",
+        name: "S&P 500",
+        value: 5000,
+        change: 10,
+        change_percent: 0.2,
+        market_status: "closed",
+        market_status_reason: "off_hours",
+        holiday_name: null,
+        region: "US",
+        timestamp: "2026-10-01T02:00:00Z",
+      },
+    ]);
+
+    expect(store.marketIndices[0].market_status_reason).toBe("holiday");
+    expect(store.marketIndices[0].holiday_name).toBe("国庆节");
+    expect(store.marketIndices[1].market_status_reason).toBe("off_hours");
+    expect(store.marketIndices[1].holiday_name).toBeNull();
   });
 
   it("updates the matching entry in place when the payload is a single object", () => {

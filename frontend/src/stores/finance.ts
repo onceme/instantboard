@@ -193,6 +193,8 @@ export const useFinanceStore = defineStore("finance", () => {
         change: item.change,
         change_percent: item.change_percent,
         market_status: item.market_status,
+        market_status_reason: item.market_status_reason ?? null,
+        holiday_name: item.holiday_name ?? null,
         region: item.region,
         timestamp: item.timestamp,
       }));

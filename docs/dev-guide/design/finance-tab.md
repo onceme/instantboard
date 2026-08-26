@@ -1,5 +1,5 @@
 ---
-version: 1.3
+version: 1.4
 author: designer
 date: 2026-08-26
 status: draft
@@ -157,7 +157,7 @@ if estimate_type == "realtime" and fund.type == "fund" and nav_official and unde
   - failover 链为 **eastmoney → yfinance**（**无 Alpha Vantage**；eastmoney 为国内源、仅覆盖 A 股指数）
   - 采用**按 symbol 增量合并**而非"首个非空结果胜出"：链上每一源只补采尚未拿到的 symbol，直到全部覆盖或链耗尽（否则 eastmoney 成功时所有非 CN 指数将缺失）
   - eastmoney 返回 secid 风格代码（如 `1.000001`），会映射回标准 symbol（`000001.SS`）后再与 `MARKET_INDICES_CONFIG` 匹配
-- 结果按 13 个指数配置格式化（含 `market_status: open/closed`），写 Redis `t:{tid}:market_indices`（TTL 60s），并推送 SSE `market_index_update`（**整个数组**，见 §3.9）
+- 结果按 13 个指数配置格式化（含 `market_status: open/closed` 及休市原因字段 `market_status_reason` / `holiday_name`，见 §3.4.4），写 Redis `t:{tid}:market_indices`（TTL 60s），并推送 SSE `market_index_update`（**整个数组**，见 §3.9）
 - 种子数据中虽有 30s 的 yfinance 指数任务与 15s 的东方财富任务，但它们走通用 `collect_{source_id}` items 管道，产出的行情条目被 `FilterProcessor`（标题长度/黑名单/分类关键词规则）过滤，**与本 REST 接口的展示无关**
 
 #### 3.4.3 MarketIndexCard UI组件（现状）
@@ -178,7 +178,7 @@ graph TD
 #### 3.4.4 交易日历与市场状态判断（现状）
 
 ```python
-# services/finance.py 实际配置
+# services/market_calendar.py 实际配置（finance.py 从该模块 re-import 沿用旧引用路径）
 MARKET_TIMEZONES = {
     "US": "America/New_York",   # 9:30-16:00
     "CN": "Asia/Shanghai",      # 9:30-11:30 / 13:00-15:00 (午休天然分成两段 ✓)
@@ -192,8 +192,13 @@ MARKET_TIMEZONES = {
 }  # 共 9 个市场键（不再是旧文档的 EU_LONDON/EU_FRANKFURT）
 ```
 
-- `_is_market_open(market)` 仅判断 **周末（weekday ≥ 5）+ 当前时刻是否落在交易时段**；`PRE_MARKET_MINUTES` 不存在
-> ⚠️ **未实现**：交易日历/节假日支持 — 无 A 股/美股休市日历预加载，节假日不会被排除；市场状态只有 open/closed 两态（无盘前），前端无"今日休市"提示。
+- **交易日历 ✅ 已实现（静态节假日表）**：`services/market_calendar.py::MARKET_HOLIDAYS` 覆盖 9 个市场（键与 `MARKET_TIMEZONES` 一致）× 2025-2027 三年交易所公休（2025/2026 按各交易所官方公告；2027 为排期推算）。**静态维护、每年需人工更新**；查询接口 `is_market_holiday` / `get_market_holiday_name` 对表外年份（如 2024/2030）返回非节假日且不抛错
+- `market_closed_reason(market, now=None)` 返回休市原因，优先级 **holiday > weekend > off_hours**，开市返回 `None`；传入的 `now` 若为其他时区先换算到市场本地时区（跨日边界按市场本地日期判节假日）
+- `_is_market_open(market)` 先查日历（节假日整天休市），再判周末（weekday ≥ 5），最后判交易时段；市场状态仍只有 open/closed 两态，`pre_market` / `PRE_MARKET_MINUTES` 不存在
+- `get_market_status(market)` 返回 `{status: "open"|"closed", reason: "weekend"|"holiday"|"off_hours"|None, holiday_name?: str}`（仅节假日时带节日名）；`_format_market_indices` 为每个指数条目**新增** `market_status_reason`（休市为 weekend/holiday/off_hours，开市为 null）与 `holiday_name`（节假日为节日名，否则 null）——仅新增字段、不改动既有字段，API/SSE 载荷同步携带
+- 前端：`MarketIndices.vue` 对 `market_status == "closed" && market_status_reason == "holiday"` 的条目在状态区渲染节日名提示（如"休市 · 国庆节"，`--danger` 主题色、暗色/浅色模式兼容），其余开/休市样式保持不变
+
+> ⚠️ **残余未实现**：市场状态无盘前（pre_market）显示；静态表不覆盖临时休市（极端天气/系统故障）与半日市。
 
 ### 3.5 黄金、原油、期货数据源与展示设计
 
@@ -374,7 +379,7 @@ graph TD
 | 事件类型 | 数据内容 | 触发条件 | 说明 |
 |---------|---------|---------|------|
 | `quote_update` | `{symbol, ...}` 单对象 | 行情刷新 | |
-| `market_index_update` | **整个指数数组** `[{symbol, name, value, change, change_percent, market_status, region, timestamp}, ...]` | 定时刷新任务 `market_indices_refresh`（30s、开市门控、载荷未变时跳过推送）+ `get_market_indices` 缓存未命中拉取完成后随路推送 | 注意是数组 |
+| `market_index_update` | **整个指数数组** `[{symbol, name, value, change, change_percent, market_status, market_status_reason, holiday_name, region, timestamp}, ...]`（`market_status_reason` 为闭市原因 `weekend`/`holiday`/`off_hours`，开市为 `null`；`holiday_name` 为节日名称，非节假日为 `null`） | 定时刷新任务 `market_indices_refresh`（30s、开市门控、载荷未变时跳过推送）+ `get_market_indices` 缓存未命中拉取完成后随路推送 | 注意是数组 |
 | `commodity_update` | **整个商品数组** `[{symbol, name, value, change, change_percent, unit, timestamp}, ...]` | 定时刷新任务 `commodities_refresh`（60s、开市门控、载荷未变时跳过推送）+ `get_commodities` 缓存未命中拉取完成后随路推送 | 注意是数组 |
 | `nav_estimate_update` | `{symbol, name, nav_official, nav_estimate, nav_estimate_deviation_percent, estimate_method, timestamp}` | `get_fund_nav` 请求时随路推送 | |
 | `heartbeat` | `{timestamp}` | 保持连接 | 30s |
@@ -394,7 +399,7 @@ graph TD
 | 商品/行情 failover | yfinance → alpha_vantage (→ finnhub) | 链式兜底 |
 | 行情获取方式 | 按需拉取 + Redis TTL 缓存 | 当前无后台高频采集，简化架构 |
 | 子导航方案 | 面板切换按钮组 + 右侧固定面板(≥1440px) | 不嵌套Tab、切换流畅 |
-| 市场状态判断 | 周末 + 固定交易时段 | 交易日历/节假日为待实现增强项 |
+| 市场状态判断 | 节假日静态表 + 周末 + 固定交易时段 | 静态表（2025-2027）覆盖 9 市场，优先级 `holiday > weekend > off_hours`，闭市原因与节日名透出给前端；每年手工维护 |
 | NAV估值方法 | 指数跟踪法 (type=="fund", ratio 硬编码 1.0) | 估值管道尚未闭环（官方 NAV 无写入源） |
 | 涨跌颜色 | 默认中国配色（红涨绿跌），可切换 | CSS变量实现运行时切换 |
 | 自选列表存储 | PostgreSQL持久化 + Redis缓存 | PG保证持久、Redis保证实时查询快 |
@@ -406,7 +411,8 @@ graph TD
 - **A股午休时段 (11:30-13:00)**: 交易时段配置天然分为两段，午休期间 `market_status` 为 closed（无专门"午休"文案）
 - **搜索结果过旧**: Redis缓存5min → 超时后重新搜索
 - **自选列表超过512项**: `MAX_WATCHLIST_ITEMS=512`，超出报 422 ValidationError
-> ⚠️ **未实现**：休市日历（节假日判断）、"今日休市"前端提示、跨境ETF偏差标注。
+- **节假日休市（✅ 已实现）**: 静态表 `MARKET_HOLIDAYS`（2025-2027、9 市场）命中时 `market_status` 为 closed、`market_status_reason` 为 `holiday`，前端状态区显示"休市 · <节日名>"（如"休市 · 国庆节"）；表外年份退化为周末/时段判断、不抛错。表为静态维护、每年需更新
+> ⚠️ **残余未实现**：临时休市/半日市不在静态表中、无盘前状态显示、跨境ETF偏差标注。
 
 ## 6. 与其他模块的依赖
 

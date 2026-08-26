@@ -42,6 +42,9 @@ class MarketIndexResponse(BaseModel):
     change: float | None = None
     change_percent: float | None = None
     market_status: str | None = None
+    # weekend/holiday/off_hours while closed, None while open (§3.4.4)
+    market_status_reason: str | None = None
+    holiday_name: str | None = None
     region: str
     timestamp: datetime | None = None
 

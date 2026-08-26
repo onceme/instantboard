@@ -1,7 +1,7 @@
 ---
-version: 1.1
+version: 1.2
 author: designer
-date: 2026-08-24
+date: 2026-08-26
 status: draft
 cross_refs: [frontend.md, api.md, database.md, data-flow.md, architecture.md, data-sources.md]
 ---
@@ -252,12 +252,15 @@ graph LR
 
 ## 5. 边界情况
 
-> ⚠️ 以下边界处理**均未实现**（现状为直接引用、无降级逻辑）：
-
-- **psutil 不可用**: 现状 `import psutil` 为无条件导入，缺失会直接报错（无降级）
-- **Redis 内存 >80% 警告**、**连接池耗尽警告**、**SSE 连接数 >1000 警告**：均无
-- **系统负载高自动降频**：无
-- **数据源大面积 down**: 表格按 down 优先排序 ✅（唯一已实现的边界）
+- **psutil 不可用** ✅ 已实现（`services/dashboard.py` 顶部 try/except 导入，缺失时 `psutil=None` + 启动告警日志）：
+  `get_system_info` / `collect_and_push_metrics` / `archive_snapshot` 全部判空降级——CPU/内存/磁盘指标为 `None`、网络速率为 0（`sample_network_rates` 不再保留采样状态），快照的 psutil 列存 `None`；DB/Redis/SSE 采集与告警评估照常。响应带 `psutil_available: false` 标记（`SystemInfoResponse` 新增字段），全程不抛异常。
+- **阈值告警** ✅ 已实现（`DashboardService._collect_alerts`，每次 30s 采集循环内评估，内存中维护 `[{code, message, triggered_at}]`，同 code 活跃期去重、恢复即移除；`GET /dashboard/system` 新增 `alerts` 字段，列表变化时整体随 `system_metric_update` 推送）：
+  - `redis_memory_high`：`used_memory / maxmemory > 0.8`（maxmemory 为 0/未设置则跳过）
+  - `db_pool_exhausted`：连接池 `checked_out >= pool_size`（优先 SQLAlchemy `pool.checkedout()/size()`，回退 `status()` 对象取值）
+  - `sse_connections_high`：活跃 SSE 连接 > 1000（取自 `event_router.get_stats()` 当前进程注册数；**多进程局限**：`event_router` 是进程内注册表，多 worker 部署下每个 api 进程只看到自己的连接份额）
+  - `cpu_high`：CPU 使用率 > 90%（psutil 缺失时跳过）
+- **系统负载高自动降频** ✅ 已实现（最小化版本）：CPU 连续 3 次采集 >90%（`HIGH_CPU_STREAK_THRESHOLD`）时采集循环从 30s 放宽到 60s（`get_collect_interval()`），任一采样回落至阈值内即还原 30s；降频期间 `cpu_high` 告警消息附注当前降频间隔。
+- **数据源大面积 down**: 表格按 down 优先排序 ✅
 
 ## 6. 与其他模块的依赖
 

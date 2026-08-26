@@ -5,7 +5,6 @@ import platform
 import time
 from datetime import UTC, datetime
 
-import psutil
 from redis.asyncio import Redis
 from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,10 +25,43 @@ from app.services.source import SourceService
 
 logger = logging.getLogger(__name__)
 
+# Graceful degradation: psutil is optional at runtime. When it is missing every
+# system-level metric (CPU/memory/disk/network) reports None/0 and the
+# `psutil_available` flag flips to False, while DB/Redis/SSE metrics keep working.
+# Contract: docs/dev-guide/design/dashboard-tab.md §5 "psutil 不可用".
+try:
+    import psutil
+except ImportError:  # pragma: no cover - environment dependent
+    psutil = None
+    logger.warning("psutil is not installed: system metrics (CPU/memory/disk/network) are disabled")
+
 METRIC_THRESHOLDS = {
     "cpu_change_percent": 5.0,
     "memory_change_percent": 5.0,
 }
+
+# Threshold alert contract (dashboard-tab.md §5). Alert codes:
+#   redis_memory_high      -> used_memory / maxmemory > 0.8 (skipped when maxmemory unset/0)
+#   db_pool_exhausted      -> checked_out connections reached the pool size
+#   sse_connections_high   -> active SSE connections in THIS process > 1000
+#                             (multi-process caveat: event_router is an in-process
+#                             registry, so under multi-worker deployments each api
+#                             process only sees its own share of connections)
+#   cpu_high               -> CPU usage > 90%
+ALERT_THRESHOLDS = {
+    "redis_memory_ratio": 0.8,
+    "sse_connection_count": 1000,
+    "cpu_usage_percent": 90.0,
+}
+
+# Load-adaptive collection: after HIGH_CPU_STREAK_THRESHOLD consecutive samples
+# above the cpu_high threshold the collection loop slows from
+# COLLECT_INTERVAL_SECONDS to COLLECT_INTERVAL_DEGRADED_SECONDS; a single sample
+# at or below the threshold restores the normal interval (dashboard-tab.md §5
+# "系统负载高自动降频").
+COLLECT_INTERVAL_SECONDS = 30
+COLLECT_INTERVAL_DEGRADED_SECONDS = 60
+HIGH_CPU_STREAK_THRESHOLD = 3
 
 # Worker heartbeat contract (writer: app/scheduler/worker.py heartbeat_loop). In
 # prod (SCHEDULER_ENABLED=false in the api process) the worker publishes
@@ -67,6 +99,61 @@ _last_metrics: dict = {}
 # get_system_info() and collect_and_push_metrics() need the same series.
 _last_net_sample: dict | None = None
 
+# Active threshold alerts, keyed by alert code. Each value is
+# {code, message, triggered_at}; triggered_at is pinned on first trigger and the
+# alert is removed again once the condition recovers (dashboard-tab.md §5).
+# Module-level because collect_and_push_metrics() runs in a fresh DashboardService
+# per cycle while GET /dashboard/system must read the same state on demand.
+_active_alerts: dict[str, dict] = {}
+# (code, message) signature of the alert list at the previous evaluation, used to
+# push the alerts field over SSE only when it actually changed.
+_alerts_signature: tuple = ()
+
+# Load-adaptive loop state (see COLLECT_INTERVAL_* above).
+_cpu_high_streak: int = 0
+_collection_degraded: bool = False
+
+
+def get_active_alerts() -> list[dict]:
+    """Snapshot of the currently active alerts, oldest first."""
+    return [dict(alert) for alert in sorted(_active_alerts.values(), key=lambda a: a["triggered_at"])]
+
+
+def _set_alert(code: str, message: str) -> None:
+    existing = _active_alerts.get(code)
+    if existing is None:
+        _active_alerts[code] = {
+            "code": code,
+            "message": message,
+            "triggered_at": datetime.now(UTC).isoformat(),
+        }
+        logger.warning(f"Dashboard alert triggered: {code}: {message}")
+    else:
+        # Already active: keep the original triggered_at (dedupe), refresh the message.
+        existing["message"] = message
+
+
+def _clear_alert(code: str) -> None:
+    if code in _active_alerts:
+        del _active_alerts[code]
+        logger.info(f"Dashboard alert cleared: {code}")
+
+
+def get_collect_interval() -> int:
+    """Current collection loop interval (degraded to 60s under sustained high CPU)."""
+    return COLLECT_INTERVAL_DEGRADED_SECONDS if _collection_degraded else COLLECT_INTERVAL_SECONDS
+
+
+def _metric_changed(current: float | None, previous: float | None, threshold: float) -> bool:
+    """None-aware incremental-push check: a metric appearing or disappearing
+    (psutil degradation transitions) counts as changed, numeric pairs compare
+    against the push threshold."""
+    if current is None and previous is None:
+        return False
+    if current is None or previous is None:
+        return True
+    return abs(current - previous) >= threshold
+
 
 def sample_network_rates() -> dict:
     """Sample net_io_counters() and compute transfer rates (KB/s) vs the previous sample.
@@ -74,9 +161,18 @@ def sample_network_rates() -> dict:
     Returns both the rate fields the frontend renders (network_in_kbps /
     network_out_kbps) and the cumulative counters (kept for backward compatibility).
     The first sample has no previous data and reports 0 rates; counter resets
-    (reboot/overflow) clamp negative deltas to 0.
+    (reboot/overflow) clamp negative deltas to 0. Without psutil the rates and
+    counters degrade to 0 and no sample state is kept.
     """
     global _last_net_sample
+
+    if psutil is None:
+        return {
+            "network_in_kbps": 0.0,
+            "network_out_kbps": 0.0,
+            "network_bytes_recv": 0,
+            "network_bytes_sent": 0,
+        }
 
     net = psutil.net_io_counters()
     now = time.monotonic()
@@ -141,11 +237,26 @@ class DashboardService:
     async def get_system_info(self, start_time: datetime) -> dict:
         uptime = int((datetime.now(UTC) - start_time).total_seconds())
 
-        cpu_usage = await asyncio.to_thread(psutil.cpu_percent, 0.5)
-        cpu_count = psutil.cpu_count()
-        mem = await asyncio.to_thread(psutil.virtual_memory)
-        disk = await asyncio.to_thread(psutil.disk_usage, "/")
-        net_data = await asyncio.to_thread(sample_network_rates)
+        if psutil is None:
+            # Degraded mode: system-level metrics report None, everything else
+            # (DB/Redis/SSE below) is collected as usual.
+            cpu_usage = None
+            cpu_count = None
+            memory_total_mb = None
+            memory_used_mb = None
+            disk_total_gb = None
+            disk_used_gb = None
+            net_data = sample_network_rates()
+        else:
+            cpu_usage = await asyncio.to_thread(psutil.cpu_percent, 0.5)
+            cpu_count = psutil.cpu_count()
+            mem = await asyncio.to_thread(psutil.virtual_memory)
+            disk = await asyncio.to_thread(psutil.disk_usage, "/")
+            memory_total_mb = int(mem.total / (1024 * 1024))
+            memory_used_mb = int(mem.used / (1024 * 1024))
+            disk_total_gb = round(disk.total / (1024**3), 1)
+            disk_used_gb = round(disk.used / (1024**3), 1)
+            net_data = await asyncio.to_thread(sample_network_rates)
 
         pg_connections = None
         pg_active_queries = None
@@ -178,12 +289,16 @@ class DashboardService:
             "uptime_seconds": uptime,
             "environment": settings.env,
             "python_version": platform.python_version(),
+            "psutil_available": psutil is not None,
+            # Threshold alerts evaluated by the 30s collection loop; empty when
+            # everything is within limits (dashboard-tab.md §5).
+            "alerts": get_active_alerts(),
             "cpu_count": cpu_count,
             "cpu_usage_percent": cpu_usage,
-            "memory_total_mb": int(mem.total / (1024 * 1024)),
-            "memory_used_mb": int(mem.used / (1024 * 1024)),
-            "disk_total_gb": round(disk.total / (1024**3), 1),
-            "disk_used_gb": round(disk.used / (1024**3), 1),
+            "memory_total_mb": memory_total_mb,
+            "memory_used_mb": memory_used_mb,
+            "disk_total_gb": disk_total_gb,
+            "disk_used_gb": disk_used_gb,
             # Frontend renders the flat rate fields (KB/s); the nested group keeps the
             # cumulative counters for backward compatibility.
             "network_in_kbps": net_data["network_in_kbps"],
@@ -696,18 +811,150 @@ class DashboardService:
             "avg_connection_duration_seconds": stats.get("avg_connection_duration_seconds", 0),
         }
 
+    def _db_pool_utilization(self) -> tuple[int | None, int | None]:
+        """Best-effort (checked_out, pool_size) snapshot of the DB connection pool.
+
+        Prefers the live queue-pool API (pool.checkedout() / pool.size()); the
+        status()-object path mirrors get_system_info() so mock sessions work too.
+        Returns (None, None) when neither exposes usable ints and the
+        db_pool_exhausted alert is then simply skipped.
+        """
+        try:
+            pool = self.db.get_bind().pool
+            checked_out: int | None = None
+            pool_size: int | None = None
+            if callable(getattr(pool, "checkedout", None)) and callable(getattr(pool, "size", None)):
+                raw_checked_out, raw_pool_size = pool.checkedout(), pool.size()
+                if isinstance(raw_checked_out, int) and isinstance(raw_pool_size, int):
+                    return raw_checked_out, raw_pool_size
+            pool_status = pool.status()
+            raw_checked_out = pool_status.checked_out() if hasattr(pool_status, "checked_out") else None
+            raw_pool_size = pool_status.size() if hasattr(pool_status, "size") else None
+            if isinstance(raw_checked_out, int):
+                checked_out = raw_checked_out
+            if isinstance(raw_pool_size, int):
+                pool_size = raw_pool_size
+            return checked_out, pool_size
+        except Exception as e:
+            logger.warning(f"Failed to read DB connection pool status: {e}")
+            return None, None
+
+    async def _collect_alerts(self, cpu_usage: float | None) -> tuple[bool, list[dict]]:
+        """Evaluate the threshold alerts against freshly collected metrics.
+
+        Updates the module-level alert state (dedupe by code while active, removal
+        on recovery) and returns (changed, alerts) where `changed` is True when the
+        active alert list differs from the previous evaluation — the caller then
+        ships the whole list in the incremental SSE payload.
+        """
+        global _alerts_signature
+
+        # cpu_high (skipped when psutil is unavailable and cpu_usage is None).
+        if isinstance(cpu_usage, int | float):
+            if cpu_usage > ALERT_THRESHOLDS["cpu_usage_percent"]:
+                message = f"CPU usage above {ALERT_THRESHOLDS['cpu_usage_percent']:.0f}% threshold"
+                if _collection_degraded:
+                    message += f" (collection interval degraded to {COLLECT_INTERVAL_DEGRADED_SECONDS}s)"
+                _set_alert("cpu_high", message)
+            else:
+                _clear_alert("cpu_high")
+
+        # redis_memory_high: used_memory / maxmemory > 0.8; skipped when maxmemory
+        # is unset/0 (no limit configured).
+        if self.redis is not None:
+            try:
+                info = await self.redis.info("memory")
+                used_memory = float(info.get("used_memory") or 0)
+                max_memory = float(info.get("maxmemory") or 0)
+                if max_memory > 0:
+                    if used_memory / max_memory > ALERT_THRESHOLDS["redis_memory_ratio"]:
+                        _set_alert(
+                            "redis_memory_high",
+                            f"Redis memory usage above {ALERT_THRESHOLDS['redis_memory_ratio']:.0%} of maxmemory",
+                        )
+                    else:
+                        _clear_alert("redis_memory_high")
+            except Exception as e:
+                logger.warning(f"Failed to evaluate Redis memory alert: {e}")
+
+        # db_pool_exhausted: checked_out connections reached the pool size.
+        checked_out, pool_size = self._db_pool_utilization()
+        if checked_out is not None and pool_size is not None and pool_size > 0:
+            if checked_out >= pool_size:
+                _set_alert("db_pool_exhausted", "DB connection pool exhausted (checked_out reached pool size)")
+            else:
+                _clear_alert("db_pool_exhausted")
+
+        # sse_connections_high: active connections registered in THIS process
+        # (multi-process caveat: each api worker only counts its own registry).
+        # The isinstance guard keeps non-numeric values (mocked routers in tests)
+        # from raising on the comparison — the check is simply skipped then.
+        try:
+            sse_active = event_router.get_stats().get("total_connections", 0)
+        except Exception as e:
+            logger.warning(f"Failed to evaluate SSE connection alert: {e}")
+            sse_active = None
+        if isinstance(sse_active, int):
+            if sse_active > ALERT_THRESHOLDS["sse_connection_count"]:
+                _set_alert(
+                    "sse_connections_high",
+                    f"Active SSE connections above {ALERT_THRESHOLDS['sse_connection_count']}",
+                )
+            else:
+                _clear_alert("sse_connections_high")
+
+        alerts = get_active_alerts()
+        signature = tuple((alert["code"], alert["message"]) for alert in alerts)
+        changed = signature != _alerts_signature
+        _alerts_signature = signature
+        return changed, alerts
+
     # Fix: default tenant changed from the dubious "system" string to SYSTEM_TENANT_ID
     # (kept as str for SSE/Redis JSON serialization).
     async def collect_and_push_metrics(self, start_time: datetime, tenant_id: str = str(SYSTEM_TENANT_ID)) -> None:
-        cpu_usage = await asyncio.to_thread(psutil.cpu_percent, 0.5)
-        mem = await asyncio.to_thread(psutil.virtual_memory)
-        disk = await asyncio.to_thread(psutil.disk_usage, "/")
-        net_data = await asyncio.to_thread(sample_network_rates)
+        global _cpu_high_streak, _collection_degraded
+
+        if psutil is None:
+            # Degraded mode: psutil-backed metrics report None below; DB/Redis/SSE
+            # alerts are still evaluated and pushed (dashboard-tab.md §5).
+            cpu_usage = None
+            memory_usage_percent = None
+            disk_usage_percent = None
+            net_data = sample_network_rates()
+        else:
+            cpu_usage = await asyncio.to_thread(psutil.cpu_percent, 0.5)
+            mem = await asyncio.to_thread(psutil.virtual_memory)
+            disk = await asyncio.to_thread(psutil.disk_usage, "/")
+            memory_usage_percent = mem.percent
+            disk_usage_percent = disk.percent
+            net_data = await asyncio.to_thread(sample_network_rates)
+
+        # Load-adaptive interval: three consecutive samples above the cpu_high
+        # threshold degrade the loop to 60s; the first sample back at or below the
+        # threshold restores 30s. Without psutil the state is left untouched.
+        if isinstance(cpu_usage, int | float):
+            if cpu_usage > ALERT_THRESHOLDS["cpu_usage_percent"]:
+                _cpu_high_streak += 1
+            else:
+                _cpu_high_streak = 0
+            if not _collection_degraded and _cpu_high_streak >= HIGH_CPU_STREAK_THRESHOLD:
+                _collection_degraded = True
+                logger.warning(
+                    f"High CPU load for {_cpu_high_streak} consecutive samples: "
+                    f"dashboard collection interval degraded to {COLLECT_INTERVAL_DEGRADED_SECONDS}s"
+                )
+            elif _collection_degraded and _cpu_high_streak == 0:
+                _collection_degraded = False
+                logger.info(
+                    "CPU load recovered: dashboard collection interval restored to %ss", COLLECT_INTERVAL_SECONDS
+                )
+
+        alerts_changed, alerts = await self._collect_alerts(cpu_usage)
 
         current_metrics = {
             "cpu_usage_percent": cpu_usage,
-            "memory_usage_percent": mem.percent,
-            "disk_usage_percent": disk.percent,
+            "memory_usage_percent": memory_usage_percent,
+            "disk_usage_percent": disk_usage_percent,
             "network_in_kbps": net_data["network_in_kbps"],
             "network_out_kbps": net_data["network_out_kbps"],
             "network_bytes_sent": net_data["network_bytes_sent"],
@@ -719,14 +966,21 @@ class DashboardService:
         incremental_data = {}
 
         if _last_metrics:
-            cpu_diff = abs(current_metrics["cpu_usage_percent"] - _last_metrics.get("cpu_usage_percent", 0))
-            mem_diff = abs(current_metrics["memory_usage_percent"] - _last_metrics.get("memory_usage_percent", 0))
-
-            if cpu_diff >= METRIC_THRESHOLDS["cpu_change_percent"]:
+            # None-aware diffs: a metric that appears/disappears (psutil
+            # degradation transitions) is pushed exactly like a value change.
+            if _metric_changed(
+                current_metrics["cpu_usage_percent"],
+                _last_metrics.get("cpu_usage_percent"),
+                METRIC_THRESHOLDS["cpu_change_percent"],
+            ):
                 should_push = True
                 incremental_data["cpu_usage_percent"] = current_metrics["cpu_usage_percent"]
 
-            if mem_diff >= METRIC_THRESHOLDS["memory_change_percent"]:
+            if _metric_changed(
+                current_metrics["memory_usage_percent"],
+                _last_metrics.get("memory_usage_percent"),
+                METRIC_THRESHOLDS["memory_change_percent"],
+            ):
                 should_push = True
                 incremental_data["memory_usage_percent"] = current_metrics["memory_usage_percent"]
 
@@ -743,6 +997,12 @@ class DashboardService:
         else:
             should_push = True
             incremental_data = current_metrics
+
+        # Ship the whole alert list whenever it changed (triggered, recovered or
+        # re-messaged); unchanged alerts never ride along.
+        if alerts_changed:
+            should_push = True
+            incremental_data["alerts"] = alerts
 
         _last_metrics.update(current_metrics)
 
@@ -767,10 +1027,17 @@ class DashboardService:
     # literal (kept as str to preserve the original runtime semantics).
     async def archive_snapshot(self, tenant_id: str = str(SYSTEM_TENANT_ID)) -> None:
         cpu_usage = _last_metrics.get("cpu_usage_percent", 0)
-        mem_total = await asyncio.to_thread(lambda: psutil.virtual_memory().total)
-        mem_used = await asyncio.to_thread(lambda: psutil.virtual_memory().used)
-        disk_used = await asyncio.to_thread(lambda: psutil.disk_usage("/").used)
-        disk_total = await asyncio.to_thread(lambda: psutil.disk_usage("/").total)
+        if psutil is None:
+            # Degraded mode: psutil-backed columns are nullable, store None.
+            mem_total = None
+            mem_used = None
+            disk_used = None
+            disk_total = None
+        else:
+            mem_total = await asyncio.to_thread(lambda: psutil.virtual_memory().total)
+            mem_used = await asyncio.to_thread(lambda: psutil.virtual_memory().used)
+            disk_used = await asyncio.to_thread(lambda: psutil.disk_usage("/").used)
+            disk_total = await asyncio.to_thread(lambda: psutil.disk_usage("/").total)
 
         stats = event_router.get_stats()
         sse_connections = stats.get("total_connections", 0)
@@ -802,13 +1069,14 @@ class DashboardService:
             payload, _read_error = await self._read_worker_heartbeat()
             active_jobs = payload.get("jobs_running", 0) if worker_heartbeat_is_fresh(payload) else 0
 
+        # Nullable columns: degraded mode stores None instead of crashing on int(None).
         snapshot = DashboardSnapshot(
             tenant_id=tenant_id,
             cpu_usage_percent=cpu_usage,
-            memory_used_mb=int(mem_used / (1024 * 1024)),
-            memory_total_mb=int(mem_total / (1024 * 1024)),
-            disk_used_gb=round(disk_used / (1024**3), 2),
-            disk_total_gb=round(disk_total / (1024**3), 2),
+            memory_used_mb=int(mem_used / (1024 * 1024)) if mem_used is not None else None,
+            memory_total_mb=int(mem_total / (1024 * 1024)) if mem_total is not None else None,
+            disk_used_gb=round(disk_used / (1024**3), 2) if disk_used is not None else None,
+            disk_total_gb=round(disk_total / (1024**3), 2) if disk_total is not None else None,
             active_sse_connections=sse_connections,
             events_pushed_hour=events_hour,
             healthy_sources=healthy_count,
@@ -831,13 +1099,14 @@ async def start_metrics_collection(start_time: datetime, tenant_id: str = str(SY
 
         db_session_factory = async_session_factory
 
-        collect_interval = 30
         archive_interval = 300
         last_archive_time = time.monotonic()
 
         while True:
             try:
-                await asyncio.sleep(collect_interval)
+                # Re-read every cycle: sustained high CPU degrades the interval
+                # from 30s to 60s and recovery restores it (get_collect_interval).
+                await asyncio.sleep(get_collect_interval())
 
                 async with db_session_factory() as session:
                     redis_client = None

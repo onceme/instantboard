@@ -1482,3 +1482,389 @@ class TestArchiveSnapshotProdMode:
 
         snapshot = db.add.call_args.args[0]
         assert snapshot.scheduler_jobs_active == 0
+
+
+# ---------------------------------------------------------------------------
+# Threshold alerts + psutil graceful degradation + load-adaptive interval.
+# Contract: docs/dev-guide/design/dashboard-tab.md §5 边界情况.
+# All alert/degradation state is module-level in app.services.dashboard, so every
+# test class below saves it before the test and restores it afterwards — the
+# tests must never leak alert state into each other.
+# ---------------------------------------------------------------------------
+
+
+class _AlertStateReset:
+    """Save/restore the module-level alert + adaptive-interval state."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_alert_state(self):
+        from app.services import dashboard as dash_mod
+
+        saved_alerts = dict(dash_mod._active_alerts)
+        saved_signature = dash_mod._alerts_signature
+        saved_streak = dash_mod._cpu_high_streak
+        saved_degraded = dash_mod._collection_degraded
+        saved_last_metrics = dict(dash_mod._last_metrics)
+        saved_net_sample = dash_mod._last_net_sample
+
+        dash_mod._active_alerts.clear()
+        dash_mod._alerts_signature = ()
+        dash_mod._cpu_high_streak = 0
+        dash_mod._collection_degraded = False
+        dash_mod._last_metrics.clear()
+        dash_mod._last_net_sample = None
+
+        yield
+
+        dash_mod._active_alerts.clear()
+        dash_mod._active_alerts.update(saved_alerts)
+        dash_mod._alerts_signature = saved_signature
+        dash_mod._cpu_high_streak = saved_streak
+        dash_mod._collection_degraded = saved_degraded
+        dash_mod._last_metrics.clear()
+        dash_mod._last_metrics.update(saved_last_metrics)
+        dash_mod._last_net_sample = saved_net_sample
+
+
+class TestPsutilDegradation(_AlertStateReset):
+    """psutil missing (psutil = None) must degrade gracefully: no exception,
+    system-level metrics are None/0, DB/Redis/SSE keep working."""
+
+    @patch("app.services.dashboard.psutil", None)
+    async def test_get_system_info_degraded(self):
+        db, mock_result = _mock_db()
+        mock_result.scalar.return_value = 0
+        db.get_bind.return_value.pool.status.return_value = "Pool size: 5"
+
+        service = DashboardService(db, _mock_redis())
+        result = await service.get_system_info(datetime.now(UTC))
+
+        assert result["psutil_available"] is False
+        assert result["cpu_usage_percent"] is None
+        assert result["cpu_count"] is None
+        assert result["memory_total_mb"] is None
+        assert result["memory_used_mb"] is None
+        assert result["disk_total_gb"] is None
+        assert result["disk_used_gb"] is None
+        # network degrades to zeros; DB/Redis probes still run
+        assert result["network_in_kbps"] == 0.0
+        assert result["network_out_kbps"] == 0.0
+        assert result["network"]["bytes_sent"] == 0
+        assert result["database"]["redis_connected"] is True
+        assert result["alerts"] == []
+
+    @patch("app.services.dashboard.psutil", None)
+    def test_sample_network_rates_degraded(self):
+        from app.services import dashboard as dash_mod
+        from app.services.dashboard import sample_network_rates
+
+        data = sample_network_rates()
+        assert data == {
+            "network_in_kbps": 0.0,
+            "network_out_kbps": 0.0,
+            "network_bytes_recv": 0,
+            "network_bytes_sent": 0,
+        }
+        # no sample state is kept while psutil is absent
+        assert dash_mod._last_net_sample is None
+
+    @patch("app.services.dashboard.event_router")
+    @patch("app.services.dashboard.redis_set", new_callable=AsyncMock)
+    @patch("app.services.dashboard.psutil", None)
+    async def test_collect_and_push_degraded(self, mock_set, mock_router):
+        mock_router.get_stats.return_value = {"total_connections": 0}
+        mock_router.push_event = AsyncMock()
+
+        db, _ = _mock_db()
+        service = DashboardService(db, None)
+        # must not raise despite psutil=None
+        await service.collect_and_push_metrics(datetime.now(UTC))
+
+        mock_router.push_event.assert_called_once()
+        payload = mock_router.push_event.call_args.kwargs["data"]
+        assert payload["cpu_usage_percent"] is None
+        assert payload["memory_usage_percent"] is None
+        assert payload["disk_usage_percent"] is None
+        assert payload["network_in_kbps"] == 0.0
+
+    @patch("app.services.dashboard.settings")
+    @patch("app.services.dashboard.scheduler_manager")
+    @patch("app.services.dashboard.event_router")
+    @patch("app.services.dashboard.psutil", None)
+    async def test_archive_snapshot_degraded(self, mock_router, mock_sched, mock_settings):
+        mock_settings.scheduler_enabled = True
+        mock_router.get_stats.return_value = {"total_connections": 1, "total_events_pushed": 2}
+        mock_sched.get_jobs_status = AsyncMock(return_value=[])
+
+        db, mock_result = _mock_db()
+        mock_result.all.return_value = [("healthy", 1)]
+
+        service = DashboardService(db, _mock_redis())
+        await service.archive_snapshot()
+
+        db.add.assert_called_once()
+        # psutil-backed snapshot columns are nullable and store None when degraded
+        snapshot = db.add.call_args.args[0]
+        assert snapshot.memory_used_mb is None
+        assert snapshot.memory_total_mb is None
+        assert snapshot.disk_used_gb is None
+        assert snapshot.disk_total_gb is None
+        assert snapshot.active_sse_connections == 1
+
+
+class TestThresholdAlerts(_AlertStateReset):
+    """Trigger / dedupe / recover cycles for the four threshold alerts."""
+
+    @patch("app.services.dashboard.event_router")
+    @patch("app.services.dashboard.redis_set", new_callable=AsyncMock)
+    @patch("app.services.dashboard.psutil")
+    async def test_cpu_high_trigger_dedupe_recover(self, mock_psutil, mock_set, mock_router):
+        from app.services import dashboard as dash_mod
+
+        mock_psutil.cpu_percent.return_value = 95.0
+        mock_psutil.virtual_memory.return_value = MagicMock(percent=50.0)
+        mock_psutil.disk_usage.return_value = MagicMock(percent=60.0)
+        mock_psutil.net_io_counters.return_value = MagicMock(bytes_sent=1000, bytes_recv=2000)
+        mock_router.get_stats.return_value = {"total_connections": 5}
+        mock_router.push_event = AsyncMock()
+
+        db, _ = _mock_db()
+        service = DashboardService(db, _mock_redis())
+
+        await service.collect_and_push_metrics(datetime.now(UTC))
+        alerts = dash_mod.get_active_alerts()
+        assert [a["code"] for a in alerts] == ["cpu_high"]
+        first_triggered_at = alerts[0]["triggered_at"]
+        # the trigger rides the incremental SSE push
+        payload = mock_router.push_event.call_args.kwargs["data"]
+        assert payload["alerts"] == alerts
+
+        # second cycle while still high: deduped (same code, same triggered_at),
+        # and the unchanged alert list must NOT be re-pushed
+        mock_router.push_event.reset_mock()
+        await service.collect_and_push_metrics(datetime.now(UTC))
+        alerts = dash_mod.get_active_alerts()
+        assert len(alerts) == 1
+        assert alerts[0]["triggered_at"] == first_triggered_at
+        mock_router.push_event.assert_not_called()
+
+        # recovery clears the alert and pushes the now-empty list
+        mock_psutil.cpu_percent.return_value = 30.0
+        await service.collect_and_push_metrics(datetime.now(UTC))
+        assert dash_mod.get_active_alerts() == []
+        payload = mock_router.push_event.call_args.kwargs["data"]
+        assert payload["alerts"] == []
+
+    @patch("app.services.dashboard.event_router")
+    @patch("app.services.dashboard.redis_set", new_callable=AsyncMock)
+    @patch("app.services.dashboard.psutil")
+    async def test_redis_memory_high_trigger_and_recover(self, mock_psutil, mock_set, mock_router):
+        from app.services import dashboard as dash_mod
+
+        mock_psutil.cpu_percent.return_value = 10.0
+        mock_psutil.virtual_memory.return_value = MagicMock(percent=50.0)
+        mock_psutil.disk_usage.return_value = MagicMock(percent=60.0)
+        mock_psutil.net_io_counters.return_value = MagicMock(bytes_sent=1000, bytes_recv=2000)
+        mock_router.get_stats.return_value = {"total_connections": 0}
+        mock_router.push_event = AsyncMock()
+
+        db, _ = _mock_db()
+        redis = _mock_redis()
+        redis.info = AsyncMock(return_value={"used_memory": 900_000_000, "maxmemory": 1_000_000_000})
+
+        service = DashboardService(db, redis)
+        await service.collect_and_push_metrics(datetime.now(UTC))
+        assert [a["code"] for a in dash_mod.get_active_alerts()] == ["redis_memory_high"]
+
+        # usage drops back under 80% -> alert removed
+        redis.info = AsyncMock(return_value={"used_memory": 100_000_000, "maxmemory": 1_000_000_000})
+        await service.collect_and_push_metrics(datetime.now(UTC))
+        assert dash_mod.get_active_alerts() == []
+
+    @patch("app.services.dashboard.event_router")
+    @patch("app.services.dashboard.redis_set", new_callable=AsyncMock)
+    @patch("app.services.dashboard.psutil")
+    async def test_redis_memory_alert_skipped_without_maxmemory(self, mock_psutil, mock_set, mock_router):
+        from app.services import dashboard as dash_mod
+
+        mock_psutil.cpu_percent.return_value = 10.0
+        mock_psutil.virtual_memory.return_value = MagicMock(percent=50.0)
+        mock_psutil.disk_usage.return_value = MagicMock(percent=60.0)
+        mock_psutil.net_io_counters.return_value = MagicMock(bytes_sent=1000, bytes_recv=2000)
+        mock_router.get_stats.return_value = {"total_connections": 0}
+        mock_router.push_event = AsyncMock()
+
+        db, _ = _mock_db()
+        redis = _mock_redis()
+        # maxmemory 0 = no limit configured -> the check is skipped entirely
+        redis.info = AsyncMock(return_value={"used_memory": 10**12, "maxmemory": 0})
+
+        service = DashboardService(db, redis)
+        await service.collect_and_push_metrics(datetime.now(UTC))
+        assert dash_mod.get_active_alerts() == []
+
+    @patch("app.services.dashboard.event_router")
+    @patch("app.services.dashboard.redis_set", new_callable=AsyncMock)
+    @patch("app.services.dashboard.psutil")
+    async def test_db_pool_exhausted_trigger_and_recover(self, mock_psutil, mock_set, mock_router):
+        from app.services import dashboard as dash_mod
+
+        mock_psutil.cpu_percent.return_value = 10.0
+        mock_psutil.virtual_memory.return_value = MagicMock(percent=50.0)
+        mock_psutil.disk_usage.return_value = MagicMock(percent=60.0)
+        mock_psutil.net_io_counters.return_value = MagicMock(bytes_sent=1000, bytes_recv=2000)
+        mock_router.get_stats.return_value = {"total_connections": 0}
+        mock_router.push_event = AsyncMock()
+
+        db, _ = _mock_db()
+        pool = db.get_bind.return_value.pool
+        pool.checkedout.return_value = 10
+        pool.size.return_value = 10
+
+        service = DashboardService(db, _mock_redis())
+        await service.collect_and_push_metrics(datetime.now(UTC))
+        assert [a["code"] for a in dash_mod.get_active_alerts()] == ["db_pool_exhausted"]
+
+        # checked_out drops below pool size -> alert removed
+        pool.checkedout.return_value = 4
+        await service.collect_and_push_metrics(datetime.now(UTC))
+        assert dash_mod.get_active_alerts() == []
+
+    @patch("app.services.dashboard.redis_set", new_callable=AsyncMock)
+    @patch("app.services.dashboard.psutil")
+    @patch("app.services.dashboard.event_router")
+    async def test_sse_connections_high_trigger_and_recover(self, mock_router, mock_psutil, mock_set):
+        from app.services import dashboard as dash_mod
+
+        mock_psutil.cpu_percent.return_value = 10.0
+        mock_psutil.virtual_memory.return_value = MagicMock(percent=50.0)
+        mock_psutil.disk_usage.return_value = MagicMock(percent=60.0)
+        mock_psutil.net_io_counters.return_value = MagicMock(bytes_sent=1000, bytes_recv=2000)
+        mock_router.get_stats.return_value = {"total_connections": 1500}
+        mock_router.push_event = AsyncMock()
+
+        db, _ = _mock_db()
+        service = DashboardService(db, _mock_redis())
+        await service.collect_and_push_metrics(datetime.now(UTC))
+        alerts = dash_mod.get_active_alerts()
+        assert [a["code"] for a in alerts] == ["sse_connections_high"]
+        assert "1000" in alerts[0]["message"]
+
+        mock_router.get_stats.return_value = {"total_connections": 500}
+        await service.collect_and_push_metrics(datetime.now(UTC))
+        assert dash_mod.get_active_alerts() == []
+
+    def test_dedupe_helper_keeps_first_triggered_at(self):
+        from app.services import dashboard as dash_mod
+
+        dash_mod._set_alert("cpu_high", "first message")
+        first_triggered_at = dash_mod._active_alerts["cpu_high"]["triggered_at"]
+
+        dash_mod._set_alert("cpu_high", "updated message")
+        assert len(dash_mod._active_alerts) == 1
+        assert dash_mod._active_alerts["cpu_high"]["triggered_at"] == first_triggered_at
+        assert dash_mod._active_alerts["cpu_high"]["message"] == "updated message"
+
+        dash_mod._clear_alert("cpu_high")
+        assert dash_mod.get_active_alerts() == []
+
+    @patch("app.services.dashboard.psutil")
+    async def test_get_system_info_reports_alerts(self, mock_psutil):
+        from app.services import dashboard as dash_mod
+
+        mock_psutil.cpu_percent.return_value = 10.0
+        mock_psutil.cpu_count.return_value = 2
+        mock_psutil.virtual_memory.return_value = MagicMock(total=4 * 1024**3, used=2 * 1024**3)
+        mock_psutil.disk_usage.return_value = MagicMock(total=100 * 1024**3, used=50 * 1024**3)
+        mock_psutil.net_io_counters.return_value = MagicMock(bytes_sent=500, bytes_recv=500)
+
+        dash_mod._set_alert("redis_memory_high", "Redis memory usage above 80% of maxmemory")
+
+        db, mock_result = _mock_db()
+        mock_result.scalar.return_value = 0
+        db.get_bind.return_value.pool.status.return_value = "Pool size: 5"
+
+        service = DashboardService(db, _mock_redis())
+        result = await service.get_system_info(datetime.now(UTC))
+
+        assert result["psutil_available"] is True
+        assert [a["code"] for a in result["alerts"]] == ["redis_memory_high"]
+
+
+class TestSystemEndpointAlerts(_AlertStateReset):
+    """GET /dashboard/system exposes the alerts and psutil_available fields."""
+
+    @patch("app.api.v1.dashboard.DashboardService")
+    async def test_system_response_contains_alerts_and_psutil_flag(self, mock_service_cls):
+        from app.api.v1.dashboard import get_system_info
+        from app.schemas.dashboard import SystemInfoResponse
+
+        alert = {
+            "code": "cpu_high",
+            "message": "CPU usage above 90% threshold",
+            "triggered_at": "2026-01-01T00:00:00+00:00",
+        }
+        data = {
+            "version": "1.0.0",
+            "uptime_seconds": 100,
+            "environment": "test",
+            "python_version": "3.11.0",
+            "psutil_available": False,
+            "alerts": [alert],
+        }
+        mock_service = MagicMock()
+        mock_service.get_system_info = AsyncMock(return_value=data)
+        mock_service_cls.return_value = mock_service
+
+        response = await get_system_info(
+            request=MagicMock(),
+            user={"id": "admin"},
+            db=AsyncMock(),
+            redis_client=AsyncMock(),
+        )
+
+        assert response.success is True
+        assert response.data["psutil_available"] is False
+        assert response.data["alerts"] == [alert]
+        # schema contract: the response model accepts the new fields
+        parsed = SystemInfoResponse(**response.data)
+        assert parsed.psutil_available is False
+        assert parsed.alerts[0].code == "cpu_high"
+        assert parsed.alerts[0].triggered_at == alert["triggered_at"]
+
+
+class TestAdaptiveCollectInterval(_AlertStateReset):
+    """Sustained high CPU (3 consecutive samples >90%) degrades the collection
+    loop from 30s to 60s; the first recovered sample restores 30s."""
+
+    @patch("app.services.dashboard.event_router")
+    @patch("app.services.dashboard.redis_set", new_callable=AsyncMock)
+    @patch("app.services.dashboard.psutil")
+    async def test_high_cpu_degrades_interval_and_recovers(self, mock_psutil, mock_set, mock_router):
+        from app.services import dashboard as dash_mod
+
+        mock_psutil.cpu_percent.return_value = 95.0
+        mock_psutil.virtual_memory.return_value = MagicMock(percent=50.0)
+        mock_psutil.disk_usage.return_value = MagicMock(percent=60.0)
+        mock_psutil.net_io_counters.return_value = MagicMock(bytes_sent=0, bytes_recv=0)
+        mock_router.get_stats.return_value = {"total_connections": 0}
+        mock_router.push_event = AsyncMock()
+
+        db, _ = _mock_db()
+        service = DashboardService(db, None)
+
+        assert dash_mod.get_collect_interval() == 30
+        for expected_streak, expected_interval in [(1, 30), (2, 30), (3, 60)]:
+            await service.collect_and_push_metrics(datetime.now(UTC))
+            assert dash_mod._cpu_high_streak == expected_streak
+            assert dash_mod.get_collect_interval() == expected_interval
+
+        # once degraded, the cpu_high alert message records the slower interval
+        alert = next(a for a in dash_mod.get_active_alerts() if a["code"] == "cpu_high")
+        assert "60" in alert["message"]
+
+        # one sample back below the threshold restores the normal interval
+        mock_psutil.cpu_percent.return_value = 30.0
+        await service.collect_and_push_metrics(datetime.now(UTC))
+        assert dash_mod._cpu_high_streak == 0
+        assert dash_mod.get_collect_interval() == 30

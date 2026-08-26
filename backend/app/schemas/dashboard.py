@@ -33,11 +33,21 @@ class DatabaseStatus(BaseModel):
     redis_memory_used_mb: float | None = None
 
 
+class SystemAlert(BaseModel):
+    code: str
+    message: str
+    triggered_at: str
+
+
 class SystemInfoResponse(BaseModel):
     version: str = Field(default="1.0.0")
     uptime_seconds: int
     environment: str
     python_version: str
+    # False when psutil is missing and system-level metrics degrade to None.
+    psutil_available: bool = True
+    # Currently active threshold alerts (empty when all metrics are within limits).
+    alerts: list[SystemAlert] = Field(default_factory=list)
     cpu: CpuMemoryInfo | None = None
     memory: CpuMemoryInfo | None = None
     disk: DiskInfo | None = None

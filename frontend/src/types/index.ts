@@ -368,6 +368,23 @@ export interface ReclassifyResult {
   updated: number;
 }
 
+// Tenant-level category overrides stored in tenants.settings. refresh_overrides
+// maps category slugs to effective refresh intervals (seconds, 10-86400);
+// color_overrides maps slugs to display colors (#RRGGBB). Both maps are
+// wholesale-replaced by PUT /api/v1/tenant/settings (a missing slug = cleared).
+export interface TenantSettings {
+  refresh_overrides: Record<string, number>;
+  color_overrides: Record<string, string>;
+}
+
+// PUT body: both maps optional; the backend replaces each provided map
+// wholesale (type alias, not interface, so it stays assignable to the api
+// client's Record<string, unknown> payload param)
+export type TenantSettingsUpdate = {
+  refresh_overrides?: Record<string, number>;
+  color_overrides?: Record<string, string>;
+};
+
 export interface Source {
   id: string;
   name: string;

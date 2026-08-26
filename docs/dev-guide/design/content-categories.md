@@ -327,7 +327,7 @@ graph TD
     subgraph system["预定义分类 — 系统级, 所有租户共享"]
         sys_finance["chart-line 财经 finance<br/>type=finance<br/>tenant_id=system"]
         sys_tech["cpu 科技 tech<br/>type=tech<br/>tenant_id=system"]
-        sys_feature["tenant_id=system 系统内置, UUID固定<br/>任何更新/删除一律返回 Forbidden (刷新/关键词的租户级覆盖未实现)<br/>预配置数据源: 财经6个 + 科技22个 (AI 5+机器人 5+嵌入式 5+太空 5+跨领域 2)<br/>预配置二级子分类: 财经6个 + 科技24个"]
+        sys_feature["tenant_id=system 系统内置, UUID固定<br/>任何更新/删除一律返回 Forbidden (刷新频率/颜色走租户级覆盖 §3.4.4, 关键词覆盖未实现)<br/>预配置数据源: 财经6个 + 科技22个 (AI 5+机器人 5+嵌入式 5+太空 5+跨领域 2)<br/>预配置二级子分类: 财经6个 + 科技24个"]
     end
     subgraph tenant_a["租户自定义分类 — Tenant A (company-a)"]
         ta_sports["体育 sports<br/>type=custom<br/>tenant_id=tenant_a"]
@@ -390,13 +390,13 @@ SQL查询逻辑:
 
 > 系统源权限细则（`app/services/source.py`）：系统租户下的源可被任何租户查看与启用，但删除一律返回 `Forbidden("Cannot delete system-level sources")`（:420-421）。
 >
-> ⚠️ **未实现**："租户级覆盖"——租户对预定义分类的刷新频率/关键词/颜色的覆盖后端零实现，见 §3.4.4。
+> ✅ **租户级覆盖**：刷新频率/颜色覆盖已实现（`tenants.settings.refresh_overrides` / `color_overrides`，API + 前端面板见 §3.4.4）；关键词覆盖仍未实现。
 
 #### 3.4.4 租户级配置覆盖
 
-> ⚠️ **未实现**：以下覆盖机制仅为设计意图——`tenants.settings.refresh_overrides` / `color_overrides` / `color_scheme` 后端零实现（全仓仅本文档提及，无任何读取方）。
+> ✅ **已实现**：`tenants.settings` 中的 `refresh_overrides` / `color_overrides` 两个覆盖 map 已落地——后端端点（`api/v1/tenant.py` + `services/tenant.py`）、调度消费、前端管理面板（`TenantOverrides.vue`）；`color_scheme` 不属于租户覆盖范畴（见下方现状）。
 
-设计意图（未实现）:
+设计意图:
 
 ```
 租户级刷新频率覆盖:
@@ -416,9 +416,30 @@ SQL查询逻辑:
                ?? category.refresh_interval_seconds
 ```
 
+**端点契约**（`backend/app/api/v1/tenant.py`、`backend/app/schemas/tenant.py`）:
+
+| 端点 | 方法 | 权限 | 说明 |
+|------|------|------|------|
+| `/api/v1/tenant/settings` | GET | 本租户任意成员 | 返回 `{refresh_overrides, color_overrides}`；未配置时返回两个空对象（值只影响可见分类的颜色与刷新频率，无越权风险） |
+| `/api/v1/tenant/settings` | PUT | 仅本租户 admin（member → 403 `FORBIDDEN`） | body `{refresh_overrides?, color_overrides?}`；**整体替换语义**——两个 map 各自整体替换现有值，省略某 slug / 留空即清除该 override；成功 200 回显更新后的完整配置 |
+
+校验（`services/tenant.py::_validate_overrides`），失败 → 400 `VALIDATION_ERROR`，`error.details[] = {field, message}`：
+- 刷新频率：整数秒，`10 ≤ v ≤ 86400`（`REFRESH_OVERRIDE_MIN/MAX_SECONDS`）；
+- 颜色：必须匹配 `#RRGGBB`；
+- slug：必须是系统预定义分类或本租户自有分类（即 `GET /categories` 可见集合，未知 slug 报错）。
+
+**消费方**:
+- 颜色：`GET /categories`（及单分类端点）把 `color_overrides` 合并进响应 `color` 字段（`services/category.py::_category_to_response`）；
+- 频率：`resolve_effective_interval`（`scheduler/manager.py`）在调度注册时解析有效频率 = `refresh_overrides[slug] ?? 源频率 ?? 分类频率 ?? 类型默认值`，两处生效——启动全量重建（`load_all_tenant_settings` 一次批量查所有租户）与运行时源事件（源创建/重新启用时从 DB 读最新设置，创建后才保存的覆盖也能在重新启用时生效）；
+- **运行中任务不热更新**：PUT 只写 `tenants.settings`，不通知调度器；已注册的任务沿用原频率，直至下次注册（进程重启重建 / 源重新启用）。
+
+**前端面板**（`components/settings/TenantOverrides.vue` + `api/tenant.ts`，测试 `tests/unit/tenantOverrides.spec.ts`）:
+- `SettingsView` 在 `authStore.user.role === "admin"` 时追加「租户覆盖」页签（与 session entry 无关），渲染面板：列出全部可见分类（系统 + 自有），每行显示默认值并提供刷新频率（数字输入，10–86400 秒）与颜色（`#RRGGBB` hex 文本）两个覆盖输入，加载时经 `GET /tenant/settings` 回填现有覆盖；
+- 保存把当前填写组装成两个 map 调 `PUT /tenant/settings`——**留空的条目不放入 payload，即清除该 override**（与整体替换语义一致）；成功提示「已保存」并按响应回显归一化；400 时用 ErrorAlert 展示 `error.details[]` 第一条消息；403 降级提示无权限。
+
 **现状**:
-- 预定义分类完全不可修改（§3.4.3：任何更新返回 Forbidden），刷新频率以种子值为准（finance 30s / tech 300s）；
-- 配色方案 `color_scheme` 实际是**前端按用户偏好**存储，与租户、分类均无关：存于 localStorage（`color_scheme` 键，默认 `chinese` 红涨绿跌，可切换 `international` 绿涨红跌），并与后端用户偏好同步（`frontend/src/stores/auth.ts:60-63, 96-97, 149`）。
+- 预定义分类本身仍完全不可修改（§3.4.3：任何更新返回 Forbidden），频率/颜色差异一律通过租户级覆盖表达；关键词覆盖尚未实现；
+- 配色方案 `color_scheme` 与租户覆盖无关，实际是**前端按用户偏好**存储：存于 localStorage（`color_scheme` 键，默认 `chinese` 红涨绿跌，可切换 `international` 绿涨红跌），并与后端用户偏好同步（`frontend/src/stores/auth.ts:60-63, 96-97, 149`）。
 
 #### 3.4.5 分类相关 API 端点一览（基础 CRUD 之外）
 
@@ -429,6 +450,8 @@ SQL查询逻辑:
 | `/api/v1/categories/{id}/subcategories` | GET | 二级子分类动态统计：按 `items.topic_tags` 聚合计数；财经/科技按固定二级 slug 白名单过滤，自定义分类返回全部标签 | `list_subcategories`（:375-460） |
 | `/api/v1/categories/{id}/items` | GET | 通用分类条目流：分页（`page`/`page_size`，PaginationParams）+ `since`（ISO-8601 下界）+ `sort`（time 默认/hot/relevance）；响应复用 TechNewsResponse schema；分类不存在或跨租户 → 404 `CATEGORY_NOT_FOUND` | `services/category.py::list_category_items`（查询复用 `TechService.list_category_items`），映射复用 `api/v1/tech.py::build_news_response` |
 | `/api/v1/categories/{id}/reclassify` | POST | 批量重打标：为该分类下**租户自有**条目（`items.tenant_id` 匹配，系统租户共享条目不重写）分批（500/批）重算 `topic_tags`——tech 走 `TechTopicExtractor`、finance 复用 `_determine_finance_tags`、其他类型回退 `[slug]`；一级标签保持 category slug 语义、仅写入标签有变化的条目、去重键不动；返回 `{scanned, updated}`；分类不存在或跨租户 → 404 `CATEGORY_NOT_FOUND` | `services/category.py::reclassify_category_items` |
+| `/api/v1/tenant/settings` | GET | 租户级分类覆盖读取（任意成员）：`{refresh_overrides, color_overrides}`，默认空对象 | `services/tenant.py::TenantSettingsService.get_overrides` |
+| `/api/v1/tenant/settings` | PUT | 租户级分类覆盖更新（仅 admin，member → 403）：**整体替换**语义，省略/留某 slug = 清除该 override；400 `VALIDATION_ERROR` 带 `details[]`（频率整数 10–86400 秒 / `#RRGGBB` / slug 须系统或自有分类）；见 §3.4.4 | `TenantSettingsService.update_overrides` |
 
 > 数据模型补充：categories 表另含 `priority_sort`（Boolean，默认 false）与 `is_active` 字段（`models/category.py:24-25`）；`CategoryUpdate` 支持 `priority_sort` / `is_active` 的部分更新。
 
@@ -761,7 +784,7 @@ SSE推送: ⚠️ 未实现——后端不存在 `topic_stats_update` 事件;
 | 跨领域新闻 | 多标签支持 (一条新闻多个 topic_tags) | "太空中的AI" 可同时有 ["tech", "ai", "space"] 标签，在所有相关面板中显示 |
 | 多租户分类 | 预定义共享 + 自定义私有 | 预定义分类所有租户共享避免重复配置；自定义分类仅本租户可见保证隔离 |
 | 财经子分类映射 | 对应前端子面板而非 topic_tags 过滤 | 财经数据模型特殊（行情专用表而非 items 通用表），子面板切换比标签过滤更直觉 |
-| 预定义分类不可删改 | tenant_id=system + 任何更新返回Forbidden | 避免租户误删/误改核心分类导致数据丢失；原"刷新频率和关键词可租户级覆盖"方案未实现（§3.4.4） |
+| 预定义分类不可删改 | tenant_id=system + 任何更新返回Forbidden | 避免租户误删/误改核心分类导致数据丢失；刷新频率/颜色已支持租户级覆盖（§3.4.4），关键词覆盖未实现 |
 | 分类扩展流程 | 6步全链路: 前端→API→DB→数据源→采集器→SSE | 确保新分类从创建到数据推送全流程打通，无遗漏环节 |
 
 ## 5. 边界情况

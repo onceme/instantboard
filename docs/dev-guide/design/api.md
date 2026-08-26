@@ -307,6 +307,50 @@ Response 404: { "success": false, "error": { "code": "CATEGORY_NOT_FOUND" } }
 Note: 删除分类会同时删除关联的数据源 (级联删除)
 ```
 
+#### GET `/api/v1/tenant/settings` — 读取租户级分类覆盖（tenant.py）
+
+```
+权限: 本租户任意已认证成员 (值只影响可见分类的显示颜色与刷新频率)
+
+Response 200:
+  {
+    "success": true,
+    "data": {
+      "refresh_overrides": { "finance": 60 },
+      "color_overrides": { "tech": "#FF0000" }
+    }
+  }
+Note: 未配置时两个 map 均返回空对象；读取时丢弃存储中类型不合法的条目
+      (services/tenant.py::extract_overrides，容错不影响调用方)
+```
+
+#### PUT `/api/v1/tenant/settings` — 更新租户级分类覆盖（tenant.py）
+
+```
+权限: 仅本租户 admin (require_admin)；member 角色 → 403 FORBIDDEN
+
+Request: (两个字段均可选)
+  {
+    "refresh_overrides": { "<category slug>": 60 },
+    "color_overrides": { "<category slug>": "#FF0000" }
+  }
+Note: **整体替换语义** — 两个 map 各自整体替换存储值，省略某 slug (或前端留空
+      不提交) = 清除该 override；tenants.settings 其余键不受影响
+
+Response 200: { "success": true, "data": { ... 回显更新后的完整配置 ... } }
+Response 400: { "success": false, "error": { "code": "VALIDATION_ERROR",
+                "message": "Tenant settings validation failed",
+                "details": [ { "field": "refresh_overrides.<slug>", "message": "..." } ] } }
+  校验规则 (services/tenant.py::_validate_overrides):
+    - 刷新频率必须是整数秒, 10 <= v <= 86400 (REFRESH_OVERRIDE_MIN/MAX_SECONDS)
+    - 颜色必须匹配 #RRGGBB
+    - slug 必须是系统预定义或本租户自有分类 (未知 slug 逐条报错)
+Response 403: { "success": false, "error": { "code": "FORBIDDEN" } } (member 角色)
+
+消费: GET /categories 返回合并 color_overrides 后的颜色；频率覆盖在调度注册时生效，
+      运行中任务不热更新 (见 content-categories.md §3.4.4)
+```
+
 ### 3.4 数据源管理 CRUD API
 
 #### GET `/api/v1/sources` — 获取数据源列表

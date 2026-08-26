@@ -18,10 +18,25 @@ vi.mock("@/utils/api", async (importOriginal) => {
   };
 });
 
-import { apiGet } from "@/utils/api";
+import { apiGet, apiPut } from "@/utils/api";
 import { useFinanceStore } from "@/stores/finance";
+import type { WatchlistItem } from "@/types";
 
 const mockApiGet = vi.mocked(apiGet);
+const mockApiPut = vi.mocked(apiPut);
+
+function makeWatchlistItem(
+  id: string,
+  symbol: string,
+  displayOrder: number,
+): WatchlistItem {
+  return {
+    id,
+    symbol,
+    display_order: displayOrder,
+    created_at: "2026-08-26T00:00:00Z",
+  };
+}
 
 beforeEach(() => {
   setActivePinia(createPinia());
@@ -129,6 +144,55 @@ describe("fetchWatchlist error state", () => {
     mockApiGet.mockRejectedValueOnce(new Error("second failure"));
     await store.fetchWatchlist();
     expect(store.watchlistError).toBe("加载自选股失败，请稍后重试。");
+  });
+});
+
+describe("reorderWatchlist contract", () => {
+  it("sends the WatchlistReorderRequest body ({items} with 0-based display_order) and applies the order", async () => {
+    const store = useFinanceStore();
+    const a = makeWatchlistItem("w1", "AAPL", 0);
+    const b = makeWatchlistItem("w2", "TSLA", 1);
+    const c = makeWatchlistItem("w3", "MSFT", 2);
+    store.watchlist = [a, b, c];
+    mockApiPut.mockResolvedValueOnce({
+      success: true,
+      data: { message: "Watchlist order updated" },
+    });
+
+    const data = await store.reorderWatchlist([c, a, b]);
+
+    expect(mockApiPut).toHaveBeenCalledWith("/finance/watchlist/reorder", {
+      items: [
+        { item_id: "w3", display_order: 0 },
+        { item_id: "w1", display_order: 1 },
+        { item_id: "w2", display_order: 2 },
+      ],
+    });
+    expect(data).toEqual({ message: "Watchlist order updated" });
+    expect(store.watchlist.map((item) => item.id)).toEqual(["w3", "w1", "w2"]);
+    expect(store.watchlist.map((item) => item.display_order)).toEqual([
+      0, 1, 2,
+    ]);
+  });
+
+  it("rethrows failures without mutating the list so the caller can roll back", async () => {
+    const store = useFinanceStore();
+    const a = makeWatchlistItem("w1", "AAPL", 0);
+    const b = makeWatchlistItem("w2", "TSLA", 1);
+    store.watchlist = [a, b];
+    mockApiPut.mockRejectedValueOnce(new Error("503 upstream"));
+
+    await expect(store.reorderWatchlist([b, a])).rejects.toThrow();
+
+    // The request went out with the correct contract before failing
+    expect(mockApiPut).toHaveBeenCalledWith("/finance/watchlist/reorder", {
+      items: [
+        { item_id: "w2", display_order: 0 },
+        { item_id: "w1", display_order: 1 },
+      ],
+    });
+    // ...and the local list keeps the pre-reorder order for the rollback
+    expect(store.watchlist.map((item) => item.id)).toEqual(["w1", "w2"]);
   });
 });
 

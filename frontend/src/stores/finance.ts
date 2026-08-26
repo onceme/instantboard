@@ -16,7 +16,6 @@ import {
   apiGet,
   apiPost,
   apiDelete,
-  apiPut,
   getApiErrorMessage,
 } from "@/utils/api";
 import { formatPercent } from "@/utils/format";
@@ -175,12 +174,24 @@ export const useFinanceStore = defineStore("finance", () => {
     watchlist.value = watchlist.value.filter((item) => item.id !== itemId);
   }
 
-  async function reorderWatchlist(reorderedIds: string[]) {
-    await apiPut("/finance/watchlist/reorder", { item_ids: reorderedIds });
-    const reordered = reorderedIds
-      .map((id) => watchlist.value.find((item) => item.id === id))
-      .filter(Boolean) as WatchlistItem[];
-    watchlist.value = reordered;
+  // PUT /finance/watchlist/reorder expects WatchlistReorderRequest:
+  // {items: [{item_id, display_order}]} — display_order is assigned 0-based
+  // in the given order. The backend responds with a plain confirmation
+  // message ({message}), so after success the new order is applied locally
+  // with the same display_order values the backend persisted. Failures are
+  // rethrown untouched so the caller can roll back its optimistic update
+  // (finance-tab.md §3.2).
+  async function reorderWatchlist(newOrder: WatchlistItem[]) {
+    const items = newOrder.map((item, index) => ({
+      item_id: item.id,
+      display_order: index,
+    }));
+    const response = await financeApi.reorderWatchlist(items);
+    watchlist.value = newOrder.map((item, index) => ({
+      ...item,
+      display_order: index,
+    }));
+    return response.data;
   }
 
   // PATCH the alert threshold of a watchlist entry; null disables the alert.

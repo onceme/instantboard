@@ -38,6 +38,9 @@ export const financeApi = {
     ),
   removeFromWatchlist: (itemId: string) =>
     apiDelete(`/finance/watchlist/${itemId}`),
-  reorderWatchlist: (itemIds: string[]) =>
-    apiPut("/finance/watchlist/reorder", { item_ids: itemIds }),
+  // Body must match WatchlistReorderRequest (schemas/finance.py):
+  // {items: [{item_id, display_order}]} — the backend responds with
+  // SuccessResponse(data={"message": "Watchlist order updated"}).
+  reorderWatchlist: (items: { item_id: string; display_order: number }[]) =>
+    apiPut<{ message: string }>("/finance/watchlist/reorder", { items }),
 };

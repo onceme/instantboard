@@ -56,7 +56,12 @@ frontend/src/
 │   │   ├── ConfirmationDialog.vue  # CategoryEditor「重新分类」确认消费
 │   │   └── MessageCard.vue # 已实现暂无消费方（CategoryView 明确选用 NewsCard）
 │   ├── finance/            # 实际 14 个:
-│   │   ├── Watchlist.vue / WatchlistMini.vue / SearchSymbols.vue
+│   │   ├── Watchlist.vue   # 我的自选: 序号/代码/名称/现价/涨跌幅% 列表、铃铛
+│   │   │                   #   阈值内联编辑器、删除；拖拽排序——把手发起的
+│   │   │                   #   HTML5 DnD(乐观更新+失败回滚快照+行内提示, 拖拽
+│   │   │                   #   中禁用行内编辑)与移动端(<768px)上移/下移按钮
+│   │   │                   #   降级, 单条目/空列表不启用（见 finance-tab.md §3.2）
+│   │   ├── WatchlistMini.vue / SearchSymbols.vue
 │   │   ├── Commodities.vue / MarketIndices.vue / FundNAV.vue
 │   │   ├── QuoteCard.vue / FinanceGrid.vue / FinanceSubNav.vue
 │   │   ├── DetailDrawer.vue  # 行情详情右侧滑出抽屉（SearchSymbols 选中结果

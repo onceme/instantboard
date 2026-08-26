@@ -85,7 +85,12 @@ async def search_symbols(tenant_id, q, type, market, page, page_size):
 
 > ⚠️ **已知 bug**：「加入自选」链路当前损坏 — 前端 `financeStore.addToWatchlist` 发送 `{symbol}`（stores/finance.ts），而后端 `WatchlistItemCreate` 必填 `symbol_id`（UUID，schemas/finance.py），请求必然 422；且目前没有任何组件调用该 action，界面上不存在可见的"加入自选"入口。
 
-> ⚠️ **未实现/契约不匹配**：拖拽排序 — `reorderWatchlist` store action 存在但无任何组件调用；且前端 payload `{item_ids: string[]}` 与后端 `WatchlistReorderRequest`（`{items: [{item_id, display_order}]}`）不匹配，即使调用也会 422。
+> ✅ **已实现**：拖拽排序（`Watchlist.vue` + `financeStore.reorderWatchlist`）——
+> - **契约**：前端发送后端 `WatchlistReorderRequest` 要求的 `{items: [{item_id, display_order}]}`（display_order **0 起始**按新顺序递增），旧 `{item_ids: string[]}` 契约已废弃；后端响应 `SuccessResponse(data={"message": "Watchlist order updated"})`（仅确认，不回传列表，成功后前端以同一 display_order 本地落序）
+> - **提交策略**：乐观更新——先更新 `store.watchlist` 顺序与 display_order 即渲染，再 `PUT /api/v1/finance/watchlist/reorder`；失败回滚到拖拽前快照并行内提示（可重新拖拽或刷新页面后重试），成功静默（结果已即时可见，不弹提示）
+> - **桌面交互**：HTML5 原生 DnD（无第三方库）——仅**拖拽把手区**（GripVertical）mousedown 置位后才可发起 dragstart，铃铛/删除等按钮区不触发拖拽；dragover 按行中点判定 before/after 并渲染 2px 高亮指示线，落在行间隙视为移到末尾；**拖拽期间禁用行内编辑**（阈值编辑器关闭、铃铛/删除按钮 disabled）
+> - **移动端降级**（<768px，HTML5 DnD 不可靠）：每行上移/下移按钮（ChevronUp/Down）——按钮所有视口渲染，桌面端弱化显示（低不透明度）、移动端常显；首行上移/末行下移禁用
+> - **口径**：空列表/单条目不启用拖拽（`draggable="false"`、把手置灰、移动按钮禁用）；顺序未变的 drop 不发请求
 
 > ✅ **已实现**：自选涨跌提醒（`services/finance.py`，`SSEEventType` 现有 10 种事件）——
 > - **阈值设置**：`PATCH /api/v1/finance/watchlist/{item_id}`，body `{alert_threshold_percent: float | null}`；范围 **[0.5, 50]**（超出 → 400 `VALIDATION_ERROR`，服务层校验而非 Pydantic 422）；**null = 关闭提醒**；条目不存在**或非当前用户所有** → 404（两者不可区分，防探测）。更新 `watchlist_items.alert_threshold_percent` 并失效自选缓存。前端入口为 Watchlist 每行铃铛图标的内联编辑器（清空输入即关闭）

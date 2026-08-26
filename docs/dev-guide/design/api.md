@@ -652,8 +652,31 @@ GET    /api/v1/finance/watchlist               — 获取自选列表
 POST   /api/v1/finance/watchlist               — 添加到自选列表 (最多512项, 超出返回400 VALIDATION_ERROR)
 PATCH  /api/v1/finance/watchlist/{item_id}     — 设置/关闭自选涨跌提醒阈值 (见下方)
 DELETE /api/v1/finance/watchlist/{item_id}      — 从自选列表移除
-PUT    /api/v1/finance/watchlist/reorder        — 重排序自选列表
+PUT    /api/v1/finance/watchlist/reorder        — 重排序自选列表 (见下方)
 GET    /api/v1/finance/watchlist/quotes         — 自选列表所有行情
+```
+
+#### PUT `/api/v1/finance/watchlist/reorder` — 重排序自选列表
+
+```
+Body (WatchlistReorderRequest):
+  {
+    "items": [
+      { "item_id": "<uuid>", "display_order": 0 },
+      { "item_id": "<uuid>", "display_order": 1 }
+    ]
+  }                                     // display_order 0 起始, 按期望顺序递增
+
+Response 200: SuccessResponse[dict]
+  { "success": true, "data": { "message": "Watchlist order updated" } }
+  （仅确认, 不回传列表；前端按同一 display_order 本地落序）
+
+Errors:
+  422               — body 不符合 WatchlistReorderRequest（如旧的 {item_ids: [...]} 契约）
+  401 AUTH_REQUIRED — 未认证
+
+副作用: 逐条更新 watchlist_items.display_order 并失效自选缓存；
+        item_id 不存在或非当前用户所有的条目静默跳过（不泄露归属）
 ```
 
 #### PATCH `/api/v1/finance/watchlist/{item_id}` — 设置/关闭涨跌提醒阈值

@@ -1,5 +1,5 @@
 ---
-version: 1.4
+version: 1.5
 author: designer
 date: 2026-08-26
 status: draft
@@ -173,7 +173,9 @@ graph TD
     MIC --> TS2["时间戳"]
 ```
 
-> ⚠️ **未实现**：`MarketTicker` 顶部横向滚动条、卡片内 Mini Sparkline、盘前状态显示。
+**MarketTicker 顶部行情滚动条（✅ 已实现, `MarketTicker.vue`）**: FinanceView 顶部（FinanceSubNav 上方）高 36px（移动端 32px）的窄条，横向展示 `financeStore.marketIndices`（FinanceView init 加载 + SSE `market_index_update` 数组替换更新）全部指数条目，每项为 `名称 点位 涨跌幅%`，涨跌配色沿用全局 `change-up`/`change-down` 类（`--up-color`/`--down-color`，跟随涨跌配色方案设置）。滚动为**纯 CSS 动画**（无 JS 定时器）：条目内容复制一份，轨道 `translateX(0 → -50%)` 无缝循环，动画时长 = 条目数 × 6s（条目越多滚得越久、速度恒定），hover 暂停，`prefers-reduced-motion` 时静止并改为手动横向滚动（隐藏重复副本）。点击条目经 `setCurrentPanel("indices")` 切换到 Indices 子面板；无指数数据时整条不渲染。
+
+> ⚠️ **未实现**：卡片内 Mini Sparkline、盘前状态显示。
 
 #### 3.4.4 交易日历与市场状态判断（现状）
 
@@ -286,7 +288,7 @@ graph TD
 
 > ✅ **已实现**：右侧面板 "Top Finance News"（`FinanceNewsPanel.vue`）— 复用 P2-13 `GET /categories/{category_id}/items`（`sort=time&page_size=5`）：前端经分类列表解析预定义 `slug=finance` 分类，展示其最近 5 条条目（标题新窗口链接 + 来源名一行截断 + 相对时间）。口径收窄：**纯时间排序、无个性化推荐/无热度加权**（原设想的"头条新闻"聚合未实现）；加载骨架、失败行内 ErrorAlert+重试、成功但无条目时整面板不渲染。
 
-> ⚠️ **未实现**：`MarketTicker` 顶部滚动条（全前端无此组件）。
+> ✅ **已实现**：`MarketTicker` 顶部行情滚动条（`MarketTicker.vue`，挂载于 FinanceView 顶部；纯 CSS 无缝循环、点击切 Indices 子面板，见 §3.4.3）。
 
 **响应式适配（现状）**:
 

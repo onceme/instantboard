@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted } from "vue";
 import { useFinanceStore } from "@/stores/finance";
+import MarketTicker from "@/components/finance/MarketTicker.vue";
 import FinanceSubNav from "@/components/finance/FinanceSubNav.vue";
 import FinanceGrid from "@/components/finance/FinanceGrid.vue";
 
@@ -17,6 +18,7 @@ onUnmounted(() => {
 
 <template>
   <div class="finance-view">
+    <MarketTicker />
     <FinanceSubNav />
     <FinanceGrid />
   </div>

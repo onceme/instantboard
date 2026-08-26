@@ -4,6 +4,7 @@ import { useResponsive } from "@/composables/useResponsive";
 import { computed } from "vue";
 import WatchlistMini from "./WatchlistMini.vue";
 import MarketIndices from "./MarketIndices.vue";
+import FinanceOverview from "./FinanceOverview.vue";
 import Commodities from "./Commodities.vue";
 import Watchlist from "./Watchlist.vue";
 import SearchSymbols from "./SearchSymbols.vue";
@@ -20,7 +21,7 @@ const currentPanel = computed(() => financeStore.currentPanel);
   <div class="finance-grid">
     <div class="finance-main">
       <div v-if="currentPanel === 'overview'" class="panel-overview">
-        <MarketIndices />
+        <FinanceOverview />
       </div>
 
       <div v-if="currentPanel === 'watchlist'" class="panel-watchlist">

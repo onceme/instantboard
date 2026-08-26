@@ -40,6 +40,11 @@ export const useFinanceStore = defineStore("finance", () => {
   const marketIndicesError = ref<string | null>(null);
   const commoditiesError = ref<string | null>(null);
   const watchlistError = ref<string | null>(null);
+  // Session-level loaded flag: watchlist list + quotes are fetched on demand
+  // once; later consumers (Overview re-activation) reuse the data instead of
+  // re-requesting. Errors keep it false so the next activation retries.
+  const watchlistLoaded = ref(false);
+  let watchlistFetchPromise: Promise<void> | null = null;
 
   const watchlistTop5 = computed(() => {
     const sorted = [...watchlist.value].sort(
@@ -120,12 +125,33 @@ export const useFinanceStore = defineStore("finance", () => {
         quotesMap.set(q.symbol, q);
       }
       watchlistQuotes.value = quotesMap;
+      watchlistLoaded.value = true;
     } catch (err) {
+      watchlistLoaded.value = false;
       watchlistError.value = getApiErrorMessage(
         err,
         "加载自选股失败，请稍后重试。",
       );
     }
+  }
+
+  // Load watchlist list + quotes exactly once per session; share an in-flight
+  // request so Overview activation and init() never double-fetch. Successful
+  // loads make later calls no-ops (store data stays live via SSE quote_update
+  // and local add/remove mutations).
+  function ensureWatchlist(): Promise<void> {
+    if (watchlistLoaded.value) {
+      return Promise.resolve();
+    }
+    if (!watchlistFetchPromise) {
+      const task = fetchWatchlist().then(() => {
+        if (watchlistFetchPromise === task) {
+          watchlistFetchPromise = null;
+        }
+      });
+      watchlistFetchPromise = task;
+    }
+    return watchlistFetchPromise;
   }
 
   async function addToWatchlist(symbol: string) {
@@ -273,7 +299,9 @@ export const useFinanceStore = defineStore("finance", () => {
   }
 
   function init() {
-    fetchWatchlist();
+    // Shares the in-flight request when the Overview panel (child, mounted
+    // before this view's onMounted) already triggered ensureWatchlist()
+    ensureWatchlist();
     getMarketIndices();
     getCommodities();
     connectSSE();
@@ -297,6 +325,7 @@ export const useFinanceStore = defineStore("finance", () => {
     marketIndicesError,
     commoditiesError,
     watchlistError,
+    watchlistLoaded,
     watchlistTop5,
     setCurrentPanel,
     searchSymbols,
@@ -305,6 +334,7 @@ export const useFinanceStore = defineStore("finance", () => {
     getCommodities,
     getFundNAV,
     fetchWatchlist,
+    ensureWatchlist,
     addToWatchlist,
     removeFromWatchlist,
     reorderWatchlist,

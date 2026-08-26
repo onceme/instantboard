@@ -275,9 +275,14 @@ graph TD
     SubNav ~~~ Right
 ```
 
-各按钮对应的子面板：Overview（实际仅渲染 MarketIndices 组件）/ Watchlist（完整自选列表）/ Search（SearchSymbols 搜索框 + 结果列表 + 内联 QuoteCard）/ Indices（市场指数列表）/ Commodities（大宗商品列表）。
+各按钮对应的子面板：Overview（三段式混合视图，见下）/ Watchlist（完整自选列表）/ Search（SearchSymbols 搜索框 + 结果列表 + 内联 QuoteCard）/ Indices（市场指数列表）/ Commodities（大宗商品列表）。
 
-> ⚠️ **未实现**：Overview 混合视图（自选列表摘要 + 重点关注 + 顶部新闻）— 当前 Overview 面板只是 MarketIndices 的复用。
+> ✅ **已实现**：Overview 混合视图 — `FinanceOverview.vue` 自上而下渲染三段：
+> 1. **自选摘要**（`OverviewWatchlistSummary.vue`）：自选非空时渲染前 5 条自选行情（代码/现价/涨跌幅，涨跌配色跟随主题变量 `--up-color`/`--down-color`），右上角「查看全部」经 `setCurrentPanel("watchlist")` 切换到 Watchlist 子面板；**自选为空时该段整体不渲染**（保持简洁，仅剩指数 + 要闻两段）
+> 2. **市场指数**：复用 `MarketIndices.vue`（即原 Overview 的全部内容）
+> 3. **财经要闻**：复用 `FinanceNewsPanel.vue`（自带加载骨架/空态不渲染/失败行内重试，见下方条目）
+>
+> 数据加载：Overview 激活（组件挂载）时经 `financeStore.ensureWatchlist()` 加载自选列表 + 自选行情——会话级 `watchlistLoaded` 标志位 + 在途请求共享（`FinanceView.init()` 同走该入口），重复激活子面板不重复请求；加载失败时摘要段不渲染（降级为指数 + 要闻），`watchlistLoaded` 保持 false、下次激活自动重试。
 
 > ✅ **已实现**：右侧面板 "Top Finance News"（`FinanceNewsPanel.vue`）— 复用 P2-13 `GET /categories/{category_id}/items`（`sort=time&page_size=5`）：前端经分类列表解析预定义 `slug=finance` 分类，展示其最近 5 条条目（标题新窗口链接 + 来源名一行截断 + 相对时间）。口径收窄：**纯时间排序、无个性化推荐/无热度加权**（原设想的"头条新闻"聚合未实现）；加载骨架、失败行内 ErrorAlert+重试、成功但无条目时整面板不渲染。
 

@@ -521,7 +521,7 @@ graph TD
 | `t:{tid}:nav:{symbol}` | 120s | 主动更新覆盖 | 估值数据 |
 | `t:{tid}:dedup:{source_id}` | **永不过期** | 无 TTL | `processors/dedup.py:33` 的 `redis_sadd` 不设 TTL，与原设计"24h 自动清理"不符，**待修复**（当前仅靠 512mb + allkeys-lru 兜底） |
 | `t:{tid}:search:{hash}` | 5min | 被动过期 | 搜索结果缓存 |
-| `t:{tid}:watchlist:{uid}` | — | — | ⚠️ **未实现**：从无写入，只有增删改时 `redis_delete` 失效（`services/finance.py:403-443` 直接查 PG） |
+| `t:{tid}:watchlist:{uid}` | 600s | 读写 + 变异即失效 | `get_watchlist` 读穿透缓存：命中直返、未命中查 PG 后写入；加/删自选、重排、阈值 PATCH 均 `redis_delete` 失效；脏条目删除自愈；Redis 不可用降级直查（`services/finance.py`） |
 | `dashboard:system_metrics` | 10s | 主动更新覆盖 | 系统指标 |
 | `source_health:{sid}` | 5min | 主动更新覆盖 | 数据源健康 |
 

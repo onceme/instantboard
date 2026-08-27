@@ -50,6 +50,11 @@ class RedisKeys:
     CHANNEL = "channel:{category}"
     RATE_LIMIT = "rate:{tenant_id}:{ip}:{endpoint}"
     DEDUP = "t:{tenant_id}:dedup:{source_id}"
+    # Read-through cache of FinanceService.get_watchlist's response list: written
+    # on cache miss with REDIS_TTL_WATCHLIST (app/services/finance.py) and deleted
+    # by every watchlist mutation (add/remove/reorder/alert-threshold PATCH). A
+    # corrupt entry is dropped and rebuilt from PG; Redis down degrades the read
+    # to a plain PG query (database.md §3.2).
     WATCHLIST = "t:{tenant_id}:watchlist:{user_id}"
     SOURCE_HEALTH = "source_health:{source_id}"
     SYSTEM_METRICS = "dashboard:system_metrics"

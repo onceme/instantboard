@@ -11,10 +11,12 @@ from app.core.exceptions import (
     SymbolNotFound,
     ValidationError,
 )
+from app.core.redis import RedisKeys
 from app.services.finance import (
     DATA_TYPE_MARKET_INDICES,
     MARKET_INDICES_CONFIG,
     MAX_WATCHLIST_ITEMS,
+    REDIS_TTL_WATCHLIST,
     FinanceService,
     _MockSource,
 )
@@ -822,7 +824,9 @@ class TestNormalizeFundCode:
 
 
 class TestGetWatchlist:
-    async def test_get_watchlist(self):
+    @patch("app.services.finance.redis_set", new_callable=AsyncMock)
+    @patch("app.services.finance.redis_get", new_callable=AsyncMock, return_value=None)
+    async def test_get_watchlist(self, mock_get, mock_set):
         db, mock_result = _mock_db()
         redis = _mock_redis()
 
@@ -845,7 +849,9 @@ class TestGetWatchlist:
             assert len(result) == 1
             assert result[0]["symbol"] == "AAPL"
 
-    async def test_get_watchlist_no_symbol(self):
+    @patch("app.services.finance.redis_set", new_callable=AsyncMock)
+    @patch("app.services.finance.redis_get", new_callable=AsyncMock, return_value=None)
+    async def test_get_watchlist_no_symbol(self, mock_get, mock_set):
         db, mock_result = _mock_db()
         redis = _mock_redis()
 
@@ -861,7 +867,9 @@ class TestGetWatchlist:
             result = await service.get_watchlist("tenant-1", "user-1")
             assert result[0]["symbol"] is None
 
-    async def test_get_watchlist_with_alert_threshold(self):
+    @patch("app.services.finance.redis_set", new_callable=AsyncMock)
+    @patch("app.services.finance.redis_get", new_callable=AsyncMock, return_value=None)
+    async def test_get_watchlist_with_alert_threshold(self, mock_get, mock_set):
         db, mock_result = _mock_db()
         redis = _mock_redis()
 
@@ -877,6 +885,123 @@ class TestGetWatchlist:
             service = FinanceService(db, redis)
             result = await service.get_watchlist("tenant-1", "user-1")
             assert result[0]["alert_threshold_percent"] == 5.0
+
+
+class TestGetWatchlistCache:
+    def _db_with_items(self, items):
+        db, mock_result = _mock_db()
+        scalars = MagicMock()
+        scalars.all.return_value = items
+        mock_result.scalars.return_value = scalars
+        return db
+
+    async def test_cache_hit_returns_payload_without_db_query(self):
+        db = self._db_with_items([])
+        payload = [
+            {
+                "id": "wi-1",
+                "symbol_id": "s-1",
+                "symbol": "AAPL",
+                "name": "Apple Inc",
+                "display_order": 0,
+                "notes": None,
+                "alert_threshold_percent": None,
+                "current_price": None,
+                "change": None,
+                "change_percent": None,
+            }
+        ]
+
+        with (
+            patch(
+                "app.services.finance.redis_get", new_callable=AsyncMock, return_value=json.dumps(payload)
+            ) as mock_get,
+            patch("app.services.finance.redis_set", new_callable=AsyncMock) as mock_set,
+        ):
+            service = FinanceService(db, _mock_redis())
+            result = await service.get_watchlist("tenant-1", "user-1")
+
+        assert result == payload
+        mock_get.assert_awaited_once_with(RedisKeys.watchlist_key("tenant-1", "user-1"))
+        db.execute.assert_not_called()
+        mock_set.assert_not_awaited()
+
+    @patch("app.services.finance.redis_set", new_callable=AsyncMock)
+    @patch("app.services.finance.redis_get", new_callable=AsyncMock, return_value=None)
+    async def test_cache_miss_populates_cache_with_ttl(self, mock_get, mock_set):
+        item = _make_watchlist_item(display_order=0)
+        sym = _make_finance_symbol()
+        item.symbol = sym
+        db = self._db_with_items([item])
+
+        with patch.object(FinanceService, "_get_cached_quote", new_callable=AsyncMock, return_value=None):
+            service = FinanceService(db, _mock_redis())
+            result = await service.get_watchlist("tenant-1", "user-1")
+
+        mock_get.assert_awaited_once_with(RedisKeys.watchlist_key("tenant-1", "user-1"))
+        db.execute.assert_awaited_once()
+        mock_set.assert_awaited_once()
+        (key, value), kwargs = mock_set.call_args
+        assert key == RedisKeys.watchlist_key("tenant-1", "user-1")
+        assert kwargs["ex"] == REDIS_TTL_WATCHLIST == 600
+        assert json.loads(value) == result
+
+    @pytest.mark.parametrize("dirty", ["{not-json", "42", '{"a": 1}'])
+    @patch("app.services.finance.redis_delete", new_callable=AsyncMock)
+    @patch("app.services.finance.redis_get", new_callable=AsyncMock)
+    async def test_corrupt_cache_deleted_and_rebuilt_from_db(self, mock_get, mock_delete, dirty):
+        mock_get.return_value = dirty
+
+        item = _make_watchlist_item(display_order=0)
+        sym = _make_finance_symbol()
+        item.symbol = sym
+        db = self._db_with_items([item])
+
+        with (
+            patch("app.services.finance.redis_set", new_callable=AsyncMock) as mock_set,
+            patch.object(FinanceService, "_get_cached_quote", new_callable=AsyncMock, return_value=None),
+        ):
+            service = FinanceService(db, _mock_redis())
+            result = await service.get_watchlist("tenant-1", "user-1")
+
+        assert [row["symbol"] for row in result] == ["AAPL"]
+        db.execute.assert_awaited_once()
+        mock_delete.assert_awaited_once_with(RedisKeys.watchlist_key("tenant-1", "user-1"))
+        # Rebuilt entry replaces the corrupt one with a fresh TTL.
+        (key, value), kwargs = mock_set.call_args
+        assert key == RedisKeys.watchlist_key("tenant-1", "user-1")
+        assert kwargs["ex"] == REDIS_TTL_WATCHLIST
+        assert json.loads(value) == result
+
+    @patch("app.services.finance.redis_get", new_callable=AsyncMock, side_effect=ConnectionError("redis down"))
+    @patch("app.services.finance.redis_set", new_callable=AsyncMock)
+    async def test_redis_read_failure_degrades_to_db(self, mock_set, mock_get):
+        item = _make_watchlist_item(display_order=0)
+        sym = _make_finance_symbol()
+        item.symbol = sym
+        db = self._db_with_items([item])
+
+        with patch.object(FinanceService, "_get_cached_quote", new_callable=AsyncMock, return_value=None):
+            service = FinanceService(db, _mock_redis())
+            result = await service.get_watchlist("tenant-1", "user-1")
+
+        assert [row["symbol"] for row in result] == ["AAPL"]
+        db.execute.assert_awaited_once()
+
+    @patch("app.services.finance.redis_set", new_callable=AsyncMock, side_effect=ConnectionError("redis down"))
+    @patch("app.services.finance.redis_get", new_callable=AsyncMock, return_value=None)
+    async def test_redis_write_failure_still_returns_db_result(self, mock_get, mock_set):
+        item = _make_watchlist_item(display_order=0)
+        sym = _make_finance_symbol()
+        item.symbol = sym
+        db = self._db_with_items([item])
+
+        with patch.object(FinanceService, "_get_cached_quote", new_callable=AsyncMock, return_value=None):
+            service = FinanceService(db, _mock_redis())
+            result = await service.get_watchlist("tenant-1", "user-1")
+
+        assert [row["symbol"] for row in result] == ["AAPL"]
+        db.execute.assert_awaited_once()
 
 
 class TestAddToWatchlist:
@@ -916,6 +1041,7 @@ class TestAddToWatchlist:
             service = FinanceService(db, redis)
             result = await service.add_to_watchlist("tenant-1", "user-1", {"symbol_id": str(uuid.uuid4())})
             assert "id" in result
+        mock_redis_del.assert_awaited_once_with(RedisKeys.watchlist_key("tenant-1", "user-1"))
 
     async def test_add_limit_reached(self):
         db, mock_result = _mock_db()
@@ -989,6 +1115,7 @@ class TestAddToWatchlist:
             result = await service.add_to_watchlist("tenant-1", "user-1", {"symbol": "aapl"})
             assert result["symbol_id"] == str(sym.id)
             assert result["symbol"] == "AAPL"
+        mock_redis_del.assert_awaited_once_with(RedisKeys.watchlist_key("tenant-1", "user-1"))
         db.add.assert_called_once()
         added = db.add.call_args.args[0]
         assert added.symbol_id == str(sym.id)
@@ -1016,6 +1143,7 @@ class TestRemoveFromWatchlist:
         service = FinanceService(db, redis)
         await service.remove_from_watchlist("tenant-1", "user-1", str(item.id))
         db.delete.assert_called_once_with(item)
+        mock_redis_del.assert_awaited_once_with(RedisKeys.watchlist_key("tenant-1", "user-1"))
 
     async def test_remove_not_found(self):
         db, mock_result = _mock_db()
@@ -1025,6 +1153,23 @@ class TestRemoveFromWatchlist:
         service = FinanceService(db, redis)
         with pytest.raises(SymbolNotFound, match="Watchlist item not found"):
             await service.remove_from_watchlist("tenant-1", "user-1", "bad-id")
+
+    @patch("app.services.finance.redis_delete", new_callable=AsyncMock, side_effect=ConnectionError("redis down"))
+    async def test_remove_succeeds_when_invalidation_fails(self, mock_redis_del):
+        """A down Redis must not fail the mutation after the commit: the read
+        side degrades to PG queries, so a missed cache delete cannot serve
+        stale data."""
+        db, mock_result = _mock_db()
+        redis = _mock_redis()
+
+        item = _make_watchlist_item()
+        mock_result.scalar_one_or_none.return_value = item
+
+        service = FinanceService(db, redis)
+        await service.remove_from_watchlist("tenant-1", "user-1", str(item.id))
+        db.delete.assert_called_once_with(item)
+        db.commit.assert_awaited_once()
+        mock_redis_del.assert_awaited_once_with(RedisKeys.watchlist_key("tenant-1", "user-1"))
 
 
 class TestReorderWatchlist:
@@ -1061,6 +1206,7 @@ class TestReorderWatchlist:
         )
         assert item1.display_order == 1
         assert item2.display_order == 0
+        mock_redis_del.assert_awaited_once_with(RedisKeys.watchlist_key("tenant-1", "user-1"))
 
     @patch("app.services.finance.redis_delete", new_callable=AsyncMock)
     async def test_reorder_missing_item_skipped(self, mock_redis_del):
@@ -1162,6 +1308,7 @@ class TestUpdateWatchlistAlertThreshold:
             result = await service.update_watchlist_alert_threshold("tenant-1", "user-1", str(item.id), boundary)
             assert item.alert_threshold_percent == boundary
             assert result["alert_threshold_percent"] == boundary
+            mock_redis_del.assert_awaited_with(RedisKeys.watchlist_key("tenant-1", "user-1"))
 
     @patch("app.services.finance.redis_delete", new_callable=AsyncMock)
     async def test_null_threshold_clears_alert(self, mock_redis_del):
@@ -1176,7 +1323,7 @@ class TestUpdateWatchlistAlertThreshold:
         assert result["alert_threshold_percent"] is None
         db.commit.assert_called_once()
         # Watchlist cache invalidated after the update
-        mock_redis_del.assert_called_once()
+        mock_redis_del.assert_awaited_once_with(RedisKeys.watchlist_key("tenant-1", "user-1"))
 
     async def test_item_not_found(self):
         db, mock_result = _mock_db()
@@ -1490,6 +1637,24 @@ class TestHelperMethods:
         redis = _mock_redis()
         service = FinanceService(db, redis)
         await service._cache_quote("tenant-1", "AAPL", {"price": 150})
+
+    @patch("app.services.finance.redis_get", new_callable=AsyncMock, side_effect=ConnectionError("redis down"))
+    async def test_get_cached_quote_redis_down_returns_none(self, mock_get):
+        """Redis failure degrades to a cache miss, never an error."""
+        db, _ = _mock_db()
+        redis = _mock_redis()
+        service = FinanceService(db, redis)
+        result = await service._get_cached_quote("tenant-1", "AAPL")
+        assert result is None
+
+    @patch("app.services.finance.redis_set", new_callable=AsyncMock, side_effect=ConnectionError("redis down"))
+    async def test_cache_quote_redis_down_does_not_raise(self, mock_set):
+        """A failed write-back must not discard an already-fetched quote."""
+        db, _ = _mock_db()
+        redis = _mock_redis()
+        service = FinanceService(db, redis)
+        await service._cache_quote("tenant-1", "AAPL", {"price": 150})
+        mock_set.assert_awaited_once()
 
 
 class TestMockSource:

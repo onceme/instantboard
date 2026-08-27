@@ -324,7 +324,7 @@ CREATE INDEX idx_dashboard_snapshots_time ON dashboard_snapshots(tenant_id, time
 | **搜索缓存** | `t:{tenant_id}:search:{query_hash}` | String (JSON) | 300s | 金融搜索结果缓存（query_hash = md5(q:type:market)） |
 | **去重集合** | `t:{tenant_id}:dedup:{source_id}` | Set | ⚠️ **无 TTL（永不过期）** | 成员为 `MD5(title:url)` 十六进制摘要（processors/dedup.py:41-43），快速去重 |
 | **数据源健康缓存** | `source_health:{source_id}` | ⚠️ 混用两种格式 | 300s / 无 | 采集路径写 JSON 字符串 `ex=300`（collectors/base.py:186）；创建数据源时写 Hash 且**无 TTL**（services/source.py:277-285）——格式不一致，待统一修复 |
-| **自选列表缓存** | `t:{tenant_id}:watchlist:{user_id}` | — | — | 见下方未实现标注 |
+| **自选列表缓存** | `t:{tenant_id}:watchlist:{user_id}` | String (JSON) | 600s | `get_watchlist` 响应数组的读写缓存：命中直接返回，未命中查库后写入；加自选/删自选/重排/阈值 PATCH 四条变异路径均 `redis_delete` 即时失效；脏条目（非 JSON/非 list）删除自愈；Redis 不可用 → 读写均降级直查 PG，变异照常提交（services/finance.py，finance-tab.md §3.2） |
 | **系统指标缓存** | `dashboard:system_metrics` | Hash | 10s | 实时系统指标 |
 | **请求指标（累计）** | `dashboard:api_metrics:totals` | Hash | ⚠️ 无 TTL | RequestLoggingMiddleware 每请求 `HINCRBY requests_total 1`；`GET /dashboard/system` `api` 分组读取（跨 api 重启不归零） |
 | **请求指标（分钟桶）** | `dashboard:api_metrics:minute:{minute}` | Hash | 120s | 字段 `count` / `latency_ms`(响应时间累计) / `count_2xx` / `count_4xx` / `count_5xx`；中间件每请求单条 pipeline 原子递增（跨多 worker 精确），读侧按滑动 60s 窗口合并上一分钟+当前分钟计算 QPS/平均响应/错误率（core/middleware.py + services/dashboard.py） |
@@ -341,9 +341,6 @@ CREATE INDEX idx_dashboard_snapshots_time ON dashboard_snapshots(tenant_id, time
 
 > ⚠️ **未实现（限流）**：`rate:{tenant_id}:{ip}:{endpoint}` 键与 `rate_limit_key()` helper
 > 存在定义，但全代码库零调用，**应用层限流完全未落地**（见 security.md §3.3）。
->
-> ⚠️ **未实现（自选列表缓存）**：`t:{tid}:watchlist:{uid}` 只删不写——从未有任何逻辑向其填充
-> 数据，实际是死键。
 >
 > ⚠️ **未实现（IP 黑名单）**：`ip_blacklist` 仅有 `RedisKeys.IP_BLACKLIST` 定义，零使用点，
 > 无封禁与检查逻辑。

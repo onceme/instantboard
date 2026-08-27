@@ -65,6 +65,7 @@ REDIS_TTL_MARKET_INDEX = 60
 REDIS_TTL_COMMODITY = 60
 REDIS_TTL_NAV = 120
 REDIS_TTL_SEARCH = 300
+REDIS_TTL_WATCHLIST = 600
 
 MAX_WATCHLIST_ITEMS = 512
 
@@ -679,7 +680,38 @@ class FinanceService:
                 break
         return code if len(code) == 6 and code.isdigit() else None
 
+    async def _invalidate_watchlist_cache(self, tenant_id: str, user_id: str) -> None:
+        """Delete the watchlist cache key (database.md §3.2). Never raises: the
+        callers either already committed the mutation to PG or are about to fall
+        back to a PG query, so a failed delete against a down Redis cannot serve
+        stale data nor turn the request into an error."""
+        cache_key = RedisKeys.watchlist_key(tenant_id, user_id)
+        try:
+            await redis_delete(cache_key)
+        except Exception as e:
+            logger.debug(f"Watchlist cache invalidation failed for {cache_key}: {e}")
+
     async def get_watchlist(self, tenant_id: str, user_id: str) -> list[dict]:
+        cache_key = RedisKeys.watchlist_key(tenant_id, user_id)
+        # Best-effort read-through cache (database.md §3.2): every Redis failure
+        # — connection down, unparseable or non-list payload — degrades to the
+        # PG query below, never to an error response.
+        try:
+            cached = await redis_get(cache_key)
+        except Exception as e:
+            logger.debug(f"Watchlist cache read failed for {cache_key}: {e}")
+            cached = None
+
+        if cached:
+            try:
+                payload = json.loads(cached)
+            except (json.JSONDecodeError, TypeError):
+                payload = None
+            if isinstance(payload, list):
+                return payload
+            # Corrupt entry: drop it so the next read rebuilds from PG.
+            await self._invalidate_watchlist_cache(tenant_id, user_id)
+
         stmt = (
             select(WatchlistItem)
             .options(selectinload(WatchlistItem.symbol))
@@ -717,6 +749,11 @@ class FinanceService:
                     "change_percent": quote_data.get("change_percent") if quote_data else None,
                 }
             )
+
+        try:
+            await redis_set(cache_key, json.dumps(response), ex=REDIS_TTL_WATCHLIST)
+        except Exception as e:
+            logger.debug(f"Watchlist cache write failed for {cache_key}: {e}")
 
         return response
 
@@ -786,8 +823,7 @@ class FinanceService:
 
         quote_data = await self._get_cached_quote(tenant_id, symbol_data.symbol if symbol_data else "")
 
-        watchlist_cache_key = RedisKeys.watchlist_key(tenant_id, user_id)
-        await redis_delete(watchlist_cache_key)
+        await self._invalidate_watchlist_cache(tenant_id, user_id)
 
         return {
             "id": str(new_item.id),
@@ -819,8 +855,7 @@ class FinanceService:
         await self.db.delete(item)
         await self.db.commit()
 
-        watchlist_cache_key = RedisKeys.watchlist_key(tenant_id, user_id)
-        await redis_delete(watchlist_cache_key)
+        await self._invalidate_watchlist_cache(tenant_id, user_id)
 
     async def reorder_watchlist(self, tenant_id: str, user_id: str, order_items: list[dict]) -> None:
         for order_item in order_items:
@@ -836,8 +871,7 @@ class FinanceService:
 
         await self.db.commit()
 
-        watchlist_cache_key = RedisKeys.watchlist_key(tenant_id, user_id)
-        await redis_delete(watchlist_cache_key)
+        await self._invalidate_watchlist_cache(tenant_id, user_id)
 
     async def update_watchlist_alert_threshold(
         self,
@@ -883,8 +917,7 @@ class FinanceService:
         await self.db.commit()
         await self.db.refresh(item)
 
-        watchlist_cache_key = RedisKeys.watchlist_key(tenant_id, user_id)
-        await redis_delete(watchlist_cache_key)
+        await self._invalidate_watchlist_cache(tenant_id, user_id)
 
         stmt_symbol = select(FinanceSymbol).where(FinanceSymbol.id == item.symbol_id)
         sym_result = await self.db.execute(stmt_symbol)
@@ -1019,7 +1052,13 @@ class FinanceService:
 
     async def _get_cached_quote(self, tenant_id: str, symbol: str) -> dict | None:
         cache_key = RedisKeys.quote_key(tenant_id, symbol)
-        cached = await redis_get(cache_key)
+        try:
+            cached = await redis_get(cache_key)
+        except Exception as e:
+            # Redis down degrades to "no cached quote" instead of failing the
+            # caller (e.g. the get_watchlist fallback path, database.md §3.2).
+            logger.debug(f"Quote cache read failed for {cache_key}: {e}")
+            return None
         if cached:
             try:
                 return json.loads(cached)
@@ -1029,7 +1068,11 @@ class FinanceService:
 
     async def _cache_quote(self, tenant_id: str, symbol: str, quote_data: dict) -> None:
         cache_key = RedisKeys.quote_key(tenant_id, symbol)
-        await redis_set(cache_key, json.dumps(quote_data), ex=REDIS_TTL_QUOTE)
+        try:
+            await redis_set(cache_key, json.dumps(quote_data), ex=REDIS_TTL_QUOTE)
+        except Exception as e:
+            # A write-back failure must not discard an already-fetched quote.
+            logger.debug(f"Quote cache write failed for {cache_key}: {e}")
 
     async def _store_quote_to_db(self, tenant_id: str, symbol: str, quote_data: dict) -> None:
         stmt = select(FinanceSymbol).where(

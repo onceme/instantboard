@@ -73,6 +73,8 @@ async def search_symbols(tenant_id, q, type, market, page, page_size):
 
 **Watchlist 数据模型** (见 [database.md](database.md) `watchlist_items` 表)
 
+**查询缓存口径**：`GET /api/v1/finance/watchlist`（`get_watchlist`）走 Redis 读穿透缓存 `t:{tenant_id}:watchlist:{user_id}`（**TTL 600s = 10 分钟**，序列化即响应数组）；加自选/删自选/重排/阈值 PATCH 任一条变异路径提交后即 `redis_delete` 失效；脏条目（非 JSON/非 list）删除自愈；Redis 不可用时读写均降级直查 PG、变异照常提交，不产生错误响应（见 [database.md](database.md) §3.2 Redis 键表）。
+
 **交互流程（现状）**:
 ```
 1. Watchlist 子面板: 展示自选列表 (symbol + name + 当前价 + 涨跌幅, 红涨绿跌默认配色)

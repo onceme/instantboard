@@ -505,7 +505,7 @@ sequenceDiagram
 %%{init: {"theme": "base", "themeVariables": {"primaryColor": "#ffffff", "primaryTextColor": "#000000", "primaryBorderColor": "#767676", "lineColor": "#767676", "arrowheadColor": "#767676", "secondaryColor": "#ffffff", "secondaryTextColor": "#000000", "secondaryBorderColor": "#767676", "tertiaryColor": "#ffffff", "tertiaryTextColor": "#000000", "tertiaryBorderColor": "#767676", "edgeLabelBackground": "#ffffff", "textColor": "#000000", "nodeTextColor": "#000000", "mainBkg": "#ffffff", "nodeBorder": "#767676", "clusterBkg": "#ffffff", "clusterBdr": "#767676", "clusterTextColor": "#000000", "titleColor": "#000000", "fontSize": "14px"}, "flowchart": {"nodeSpacing": 40, "rankSpacing": 50, "wrappingWidth": 180, "useMaxWidth": true}}}%%
 graph TD
     L1["L1: Redis — 实时缓存, TTL 短<br>行情/指数/商品/NAV 估值/搜索结果/自选列表<br>去重集合/系统指标/限流计数"]
-    L2["L2: PostgreSQL — 持久化<br>items/finance_quotes/fund_nav_estimates/categories<br>sources/watchlist_items/source_health/dashboard_snapshots"]
+    L2["L2: PostgreSQL — 持久化<br>items/finance_quotes/fund_nav_estimates/categories<br>sources/watchlist_items/source_health/dashboard_snapshots<br>(finance_quotes 按月 RANGE 分区, database.md §3.1)"]
     L3["L3: MongoDB — 原始数据, 按需启用<br>raw_crawled_content/historical_quotes/news_full_text"]
     L1 -->|"缓存未命中"| L2
     L2 -->|"需要原始数据"| L3

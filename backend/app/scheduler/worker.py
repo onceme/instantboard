@@ -337,6 +337,10 @@ async def main() -> None:
     # §3.8.2), same ownership rule as the market refresh jobs.
     await scheduler_manager.add_fund_nav_job()
 
+    # Daily finance_quotes partition roll: cron 00:30 UTC (database.md §3.1),
+    # same ownership rule as the market refresh jobs.
+    await scheduler_manager.add_quote_partition_job()
+
     stop_event = asyncio.Event()
 
     def _signal_handler() -> None:

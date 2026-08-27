@@ -6,6 +6,7 @@ from sqlalchemy.pool import NullPool
 
 from app.config import settings
 from app.core.constants import SYSTEM_TENANT_ID
+from app.db.partitions import ensure_quote_partitions
 from app.db.session import async_session_factory
 from app.models.base import Base
 from app.models.category import Category
@@ -24,6 +25,12 @@ async def create_tables():
         async with _engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         logger.info("All database tables created")
+        # finance_quotes is a partitioned parent on PostgreSQL; inserts fail
+        # until month partitions exist, so supply them right after table
+        # creation. No-op on SQLite and on plain pre-partitioning tables
+        # (database.md §3.1) — the entrypoint.sh create-tables fallback, the
+        # main.py lifespan and the worker startup all go through here.
+        await ensure_quote_partitions(_engine)
     finally:
         await _engine.dispose()
 

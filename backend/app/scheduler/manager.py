@@ -55,6 +55,16 @@ FUND_NAV_REFRESH_HOUR = 20
 FUND_NAV_REFRESH_MINUTE = 0
 FUND_NAV_REFRESH_TIMEZONE = "Asia/Shanghai"
 
+# Daily finance_quotes partition roll (database.md §3.1): cron, not an
+# interval — finance_quotes is monthly RANGE-partitioned on timestamp (UTC),
+# so the next month's partition must exist before the calendar rolls over.
+# The job re-runs ensure_quote_partitions at 00:30 UTC every day; it is
+# idempotent and a no-op off PostgreSQL.
+QUOTE_PARTITION_ROLL_JOB_ID = "finance_quotes_partition_roll"
+QUOTE_PARTITION_ROLL_HOUR = 0
+QUOTE_PARTITION_ROLL_MINUTE = 30
+QUOTE_PARTITION_ROLL_TIMEZONE = "UTC"
+
 _source_category_cache: dict[str, str] = {}
 
 
@@ -410,6 +420,58 @@ class AsyncSchedulerManager:
             else:
                 logger.info(f"{job_id}: no official NAV updates (no fund symbols or collector returned nothing)")
             self._last_run_results[job_id] = {"success": True, "items_count": updated}
+        except Exception as e:
+            logger.error(f"{job_id} failed: {e}")
+            self._last_run_results[job_id] = {"success": False, "error": str(e), "items_count": 0}
+
+    async def add_quote_partition_job(self) -> None:
+        """Register the daily finance_quotes partition roll (database.md §3.1).
+
+        Cron trigger at 00:30 UTC — the partition bounds are UTC month
+        boundaries, so the job must have created next month's partition before
+        the last instant of the current month passes. Registered from the same
+        two entry points as add_fund_nav_job (main.py lifespan for the dev
+        embedded scheduler, scheduler/worker.py main for prod). Like the fund
+        NAV cron it is deliberately NOT added to _original_intervals (that map
+        drives interval-based adaptive/load rescheduling) and is independent of
+        market_refresh_jobs_enabled.
+        """
+        self.scheduler.add_job(
+            self._run_quote_partition_roll,
+            trigger=CronTrigger(
+                hour=QUOTE_PARTITION_ROLL_HOUR,
+                minute=QUOTE_PARTITION_ROLL_MINUTE,
+                timezone=ZoneInfo(QUOTE_PARTITION_ROLL_TIMEZONE),
+            ),
+            id=QUOTE_PARTITION_ROLL_JOB_ID,
+            replace_existing=True,
+        )
+        logger.info(
+            f"Job {QUOTE_PARTITION_ROLL_JOB_ID} added "
+            f"(daily {QUOTE_PARTITION_ROLL_HOUR:02d}:{QUOTE_PARTITION_ROLL_MINUTE:02d} {QUOTE_PARTITION_ROLL_TIMEZONE})"
+        )
+
+    async def _run_quote_partition_roll(self) -> None:
+        """Job body of finance_quotes_partition_roll (database.md §3.1).
+
+        Re-runs ensure_quote_partitions, which is idempotent: on a healthy PG
+        database it creates at most the one newly-rolled month and otherwise
+        returns an empty list (recorded as success — "nothing to create" is
+        the normal outcome for 27 of 30 days, and always on SQLite). Any
+        exception is logged and stored in _last_run_results but never raised —
+        a periodic job survives one bad round and retries at the next fire.
+        """
+        job_id = QUOTE_PARTITION_ROLL_JOB_ID
+        self._last_run_times[job_id] = datetime.now(UTC)
+        try:
+            from app.db.partitions import ensure_quote_partitions
+
+            created = await ensure_quote_partitions()
+            if created:
+                logger.info(f"{job_id}: created partitions {', '.join(created)}")
+            else:
+                logger.info(f"{job_id}: partitions already present (nothing to create)")
+            self._last_run_results[job_id] = {"success": True, "items_count": len(created)}
         except Exception as e:
             logger.error(f"{job_id} failed: {e}")
             self._last_run_results[job_id] = {"success": False, "error": str(e), "items_count": 0}

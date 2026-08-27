@@ -388,19 +388,20 @@ graph TD
 
 **统一采集任务**：每个数据源一个任务，ID 为 `collect_{source_id}`（`scheduler/manager.py`），周期取自 `source.refresh_interval_seconds`（经租户覆盖解析，见 content-categories.md §3.4.4），首次立即执行。金融种子源（东方财富 15s、yfinance 指数 30s、大宗商品 60s）确实会周期采集，但产出走通用 items 管道并被 `FilterProcessor` 过滤，**不进入行情展示链路**。
 
-**行情定时刷新任务组** ✅ 已实现（`scheduler/manager.py::add_market_refresh_jobs` + `add_fund_nav_job`；开发内嵌调度器在 `main.py` lifespan、生产在 `scheduler/worker.py::main()` 注册——`SCHEDULER_ENABLED=false` 的 api 进程不注册）：
+**行情定时刷新任务组** ✅ 已实现（`scheduler/manager.py::add_market_refresh_jobs` + `add_fund_nav_job` + `add_quote_partition_job`；开发内嵌调度器在 `main.py` lifespan、生产在 `scheduler/worker.py::main()` 注册——`SCHEDULER_ENABLED=false` 的 api 进程不注册）：
 
 | 任务 ID | 间隔 | 任务体 |
 |--------|------|--------|
 | `market_indices_refresh` | 30s（`MARKET_INDICES_REFRESH_INTERVAL`） | 开市门控 → `FinanceService.refresh_market_indices` |
 | `commodities_refresh` | 60s（`COMMODITIES_REFRESH_INTERVAL`） | 开市门控 → `FinanceService.refresh_commodities` |
 | `fund_nav_official_refresh` | 每日 20:00（cron，Asia/Shanghai） | `FinanceService.update_official_nav`：天天基金官方净值 → `fund_nav_estimates` upsert（`estimate_method='official'`，见 §3.3）；**无开市门控**（官方净值每交易日收盘后发布一次，与盘中行情刷新不同）；失败记日志不杀任务 |
+| `finance_quotes_partition_roll` | 每日 00:30（cron，UTC） | `db/partitions.py::ensure_quote_partitions`：`finance_quotes` 按月 RANGE 分区（database.md §3.1）幂等供给上月/当月/下月分区（命名 `finance_quotes_y{yyyy}m{mm}`）；"无可创建"是常态结果（记成功）；非 PostgreSQL 为 no-op；失败仅日志不杀任务 |
 
 - **开市门控**：`FinanceService.is_any_market_open()`（复用 `MARKET_TRADING_HOURS` / `_is_market_open`），任一主要市场开市才执行；全休市时静默跳过（省外部 API 调用）——替代原设计的 `market_indices_off_hours` 低频任务
 - **刷新路径**：与按需缓存未命中同一条路径（`_refresh_*`）——failover 拉取 → 格式化 → 写 Redis（`t:{tid}:market_indices` / `commodities`，TTL 60s）→ SSE 推送（`market_index_update` / `commodity_update`，数组载荷）；**载荷与缓存一致时跳过 SSE 推送但仍重写缓存续 TTL**。job_defaults 与源采集任务一致（调度器级 `max_instances=1` / `misfire_grace_time=60` / `coalesce=True`）
 - **容错**：全部 failover 源无数据返回 False，异常只记日志不杀任务，下一周期重试；`_last_run_results` 记录成败供 `get_jobs_status` 观测
 - **租户口径**：系统租户（`SYSTEM_TENANT_ID`，与 dashboard 指标采集一致；SSE 租户路由为精确字符串匹配）；`fund_nav_official_refresh` 同口径
-- **cron 任务不受降频机制影响**：`fund_nav_official_refresh` 是 cron 触发器，刻意不进 `_original_intervals` 簿记，健康降频/负载降频/自适应暂停（均为 interval 语义）不会触碰它
+- **cron 任务不受降频机制影响**：`fund_nav_official_refresh` 与 `finance_quotes_partition_roll` 都是 cron 触发器，刻意不进 `_original_intervals` 簿记，健康降频/负载降频/自适应暂停（均为 interval 语义）不会触碰它们；`finance_quotes_partition_roll` 与租户/行情无关（纯 DDL 供给），也不受 `market_refresh_jobs_enabled` 开关影响
 - 原设计的 `scheduler/jobs.py` / `FINANCE_SCHEDULE_CONFIG`（`active_hours` / `pause_on_holiday` 等）未实现；`watchlist_quotes_realtime` 与 `nav_estimates` 定时估值推送保留按需，属后续特性（NAV 的官方净值每日落库已由 `fund_nav_official_refresh` 覆盖，见 §3.3）
 
 #### 3.8.3 动态频率调整（现状）
@@ -458,7 +459,7 @@ graph TD
 
 - → [frontend.md](frontend.md): 财经界面组件层级、布局、响应式适配
 - → [api.md](api.md): 财经API端点定义、SSE事件类型
-- → [database.md](database.md): finance_symbols、finance_quotes、fund_nav_estimates、watchlist_items 表
+- → [database.md](database.md): finance_symbols、finance_quotes（按月 RANGE 分区，database.md §3.1）、fund_nav_estimates、watchlist_items 表
 - → [data-sources.md](data-sources.md): 数据源详细配置、API Key管理
 - → [data-flow.md](data-flow.md): 数据采集→处理→缓存→推送完整流程
 - → [architecture.md](architecture.md): 模块划分 (finance模块职责)

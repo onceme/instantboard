@@ -87,6 +87,10 @@ async def lifespan(app: FastAPI):
         # Daily official fund NAV refresh: cron 20:00 Asia/Shanghai (finance-tab.md
         # §3.8.2). Same ownership rule as the market refresh jobs above.
         await scheduler_manager.add_fund_nav_job()
+
+        # Daily finance_quotes partition roll: cron 00:30 UTC (database.md §3.1).
+        # Same ownership rule as the market refresh jobs above.
+        await scheduler_manager.add_quote_partition_job()
     else:
         logger.info("Scheduler disabled")
 

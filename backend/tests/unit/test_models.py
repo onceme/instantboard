@@ -790,6 +790,24 @@ class TestFinanceQuote:
         assert isinstance(col.type, UUID)
         assert _default_fn_name(col) == "uuid4"
 
+    def test_composite_pk_includes_partition_key(self):
+        # finance_quotes is monthly RANGE-partitioned on timestamp in
+        # PostgreSQL; PG requires the partition key inside every unique
+        # constraint, so the PK must be composite (id, timestamp) — database.md
+        # §3.1.
+        pk_names = [c.name for c in FinanceQuote.__table__.primary_key.columns]
+        assert pk_names == ["id", "timestamp"]
+
+    def test_timestamp_column(self):
+        col = _get_column(FinanceQuote, "timestamp")
+        assert col.nullable is False
+        assert col.primary_key is True
+
+    def test_partition_by_range_dialect_option(self):
+        # Ignored by SQLite (plain table), rendered as PARTITION BY RANGE
+        # (timestamp) on PostgreSQL.
+        assert FinanceQuote.__table__.dialect_options["postgresql"]["partition_by"] == "RANGE (timestamp)"
+
     def test_tenant_id_column(self):
         col = _get_column(FinanceQuote, "tenant_id")
         assert isinstance(col.type, UUID)
@@ -861,10 +879,6 @@ class TestFinanceQuote:
         col = _get_column(FinanceQuote, "52_week_low")
         assert isinstance(col.type, Numeric)
         assert col.nullable is True
-
-    def test_timestamp_column(self):
-        col = _get_column(FinanceQuote, "timestamp")
-        assert col.nullable is False
 
     def test_source_name_column(self):
         col = _get_column(FinanceQuote, "source_name")

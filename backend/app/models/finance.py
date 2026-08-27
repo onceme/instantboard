@@ -57,6 +57,21 @@ class FinanceSymbol(BaseModel):
 
 
 class FinanceQuote(Base):
+    """Monthly RANGE-partitioned quote history (database.md §3.1).
+
+    On PostgreSQL this table is created with ``PARTITION BY RANGE (timestamp)``
+    (``postgresql_partition_by`` in ``__table_args__``); the concrete month
+    partitions are supplied by ``app/db/partitions.py::ensure_quote_partitions``.
+    SQLite ignores the dialect option and gets a plain table with the same
+    schema.
+
+    PostgreSQL requires the partition key to be part of every unique
+    constraint, so the PK is composite ``(id, timestamp)`` instead of id alone.
+    Impact: ORM identity lookups (``session.get``) need the full composite key;
+    no code fetches quotes by PK — quotes are write-only rows
+    (``services/finance.py::_store_quote_to_db``) queried by symbol/time.
+    """
+
     __tablename__ = "finance_quotes"
 
     id = Column(
@@ -87,7 +102,8 @@ class FinanceQuote(Base):
     pe_ratio = Column(Numeric(8, 2), nullable=True)
     week_high_52 = Column("52_week_high", Numeric(18, 4), nullable=True)
     week_low_52 = Column("52_week_low", Numeric(18, 4), nullable=True)
-    timestamp = Column(DateTime(timezone=True), nullable=False)
+    # Partition key on PostgreSQL — must be part of the PK (see class docstring).
+    timestamp = Column(DateTime(timezone=True), nullable=False, primary_key=True)
     source_name = Column(String(50), nullable=True)
     created_at = Column(
         DateTime(timezone=True),
@@ -99,6 +115,7 @@ class FinanceQuote(Base):
     __table_args__ = (
         Index("idx_finance_quotes_symbol_time", "symbol_id", "timestamp"),
         Index("idx_finance_quotes_tenant", "tenant_id"),
+        {"postgresql_partition_by": "RANGE (timestamp)"},
     )
 
     tenant = relationship("Tenant", lazy="selectin")

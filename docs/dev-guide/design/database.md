@@ -1,9 +1,9 @@
 ---
-version: 1.2
+version: 1.3
 author: designer
-date: 2026-08-26
+date: 2026-08-27
 status: revised
-cross_refs: [architecture.md, api.md, security.md, data-flow.md, admin-login.md]
+cross_refs: [architecture.md, api.md, security.md, data-flow.md, admin-login.md, finance-tab.md]
 ---
 
 # InstantBoard 数据库设计
@@ -204,7 +204,7 @@ CREATE INDEX idx_finance_symbols_type ON finance_symbols(tenant_id, type);
 CREATE INDEX idx_finance_symbols_market ON finance_symbols(tenant_id, market);
 
 CREATE TABLE finance_quotes (
-    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id              UUID NOT NULL DEFAULT gen_random_uuid(),
     tenant_id       UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     symbol_id       UUID NOT NULL REFERENCES finance_symbols(id) ON DELETE CASCADE,
     current_price   DECIMAL(18,4),
@@ -221,15 +221,57 @@ CREATE TABLE finance_quotes (
     52_week_low     DECIMAL(18,4),
     timestamp       TIMESTAMPTZ NOT NULL,
     source_name     VARCHAR(50),                  -- 数据来源名称
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
-);
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (id, timestamp)   -- PG 要求分区键包含在所有唯一约束中，见下方分区说明
+) PARTITION BY RANGE (timestamp);
 
 CREATE INDEX idx_finance_quotes_symbol_time ON finance_quotes(symbol_id, timestamp DESC);
 CREATE INDEX idx_finance_quotes_tenant ON finance_quotes(tenant_id);
 
--- 分区 (待定, 未实现): 当前代码中 finance_quotes 是普通表 (无 PARTITION BY);
--- 历史行情量增大后再启用按月分区:
--- ALTER TABLE finance_quotes PARTITION BY RANGE (timestamp);
+-- 分区 ✅ 已实现（按月 RANGE 分区）: models/finance.py 声明
+-- postgresql_partition_by = "RANGE (timestamp)"，主键因此为复合键 (id, timestamp) ——
+-- PostgreSQL "分区键必须包含在所有唯一约束中" 的硬性要求；ORM 恒等查询 (session.get)
+-- 需带完整复合键（当前代码仅写入行情行、不按主键查询，无影响）。SQLite 忽略该方言
+-- 选项，建为普通表。
+--
+-- 分区供给 (app/db/partitions.py::ensure_quote_partitions，PG-only，幂等):
+--  - 新库建表后由 create_tables 自动供给上月/当月/下月分区，命名
+--    finance_quotes_y{yyyy}m{mm}，范围半开 [UTC 月初, 下次月初)；
+--  - 并发启动竞争（check 与 CREATE 之间被抢先建出）按 42P07 (duplicate_table) 容错；
+--  - finance_quotes 已存在为普通表（存量库）时建表无法修改既有表，记警告跳过，
+--    需按文末手工迁移指引操作；无表 / 非 PG 方言直接跳过。
+--  - 实现细节: asyncpg 不支持 DDL 绑定参数，分区边界以 ISO-8601 字面量写入；
+--    pg_class.relkind 在 asyncpg 下解码为 bytes，查询需 ::text。
+--
+-- 月度滚动: 调度器每日 00:30 UTC cron finance_quotes_partition_roll
+-- (scheduler/manager.py::add_quote_partition_job，main.py lifespan 与 worker.py
+-- 双接线)，重查上月/当月/下月覆盖，保证跨月前下月分区就位；失败仅记日志不杀任务。
+-- 无默认分区：分区未覆盖的时间戳写入会报错，这正是每日滚动任务要防止的失效模式。
+--
+-- 存量普通表手工迁移指引（PG 不支持原地 ALTER TABLE ... PARTITION BY，需重建表；
+-- 以下要点已在 PostgreSQL 15 实测）:
+--   -- 1) 建分区新表 (LIKE INCLUDING DEFAULTS 保留 NOT NULL 与默认值；
+--   --    PG 的 LIKE 不把主键/外键带到分区表，主键须含分区键)
+--   CREATE TABLE finance_quotes_new (LIKE finance_quotes INCLUDING DEFAULTS)
+--       PARTITION BY RANGE (timestamp);
+--   ALTER TABLE finance_quotes_new ADD PRIMARY KEY (id, timestamp);
+--   ALTER TABLE finance_quotes_new
+--       ADD CONSTRAINT fk_fq_new_tenant  FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
+--       ADD CONSTRAINT fk_fq_new_symbol FOREIGN KEY (symbol_id) REFERENCES finance_symbols(id) ON DELETE CASCADE;
+--   -- 2) 建覆盖历史数据范围的分区 (命名与 ensure_quote_partitions 一致，缺哪个历史月补哪个)
+--   CREATE TABLE finance_quotes_new_y2026m08 PARTITION OF finance_quotes_new
+--       FOR VALUES FROM ('2026-08-01') TO ('2026-09-01');
+--   -- 3) 迁移数据 (超出已建分区范围的行会报错)
+--   INSERT INTO finance_quotes_new SELECT * FROM finance_quotes;
+--   -- 4) rename 切换 (低峰分步执行)。注意: 表改名不会重命名索引——旧表占用的
+--   --    idx_finance_quotes_* 索引名需先改名 (*_old) 或新索引先起别名再统一改回
+--   ALTER TABLE finance_quotes RENAME TO finance_quotes_old;
+--   ALTER TABLE finance_quotes_new RENAME TO finance_quotes;
+--   DROP TABLE finance_quotes_old;  -- 验证后再删
+--   -- 子表名切换后保留 finance_quotes_new_ 前缀（不影响路由），可统一 rename 为
+--   -- finance_quotes_y{yyyy}m{mm}；切换完成后应用侧 ensure_quote_partitions 接管
+--   -- 后续的按月分区供给。
 
 CREATE TABLE fund_nav_estimates (
     id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -486,7 +528,7 @@ CREATE POLICY tenant_isolation ON categories
 | 多租户隔离 | 行级隔离 + RLS（**RLS 未实现**，当前纯应用层隔离，见 §3.5） | 共享数据库成本最低、运维简单 |
 | 历史行情存储 | PostgreSQL 近期 (初始版本) | 初始版本仅用PostgreSQL分区存储近期行情，历史数据归档策略后续优化；MongoDB时序存储为后续版本可选增强 |
 | 去重策略 | PostgreSQL UNIQUE + Redis Set | 双重保障：PG持久化去重、Redis快速去重 |
-| 是否分区 | finance_quotes 按月分区（**未实现**，当前为普通表，见 §3.1） | 行情数据量大，分区查询性能好 |
+| 是否分区 | finance_quotes 按月 RANGE(timestamp) 分区 ✅ 已实现（新库 `create_tables` 自动建分区父表并供给上月/当月/下月分区；调度每日 00:30 UTC 滚动补下月；存量普通表需手工重建，见 §3.1） | 行情数据量大，分区查询性能好 |
 | 连接池 | SQLAlchemy async session + pool | FastAPI async 需要异步连接池 |
 
 ## 5. 边界情况

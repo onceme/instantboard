@@ -1,6 +1,6 @@
 import json
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -329,6 +329,57 @@ class TestGetCommodities:
                 await service.get_commodities("tenant-1")
 
 
+def _make_nav_record(
+    nav_official=None,
+    nav_official_date=None,
+    nav_estimate=None,
+    nav_estimate_deviation_percent=None,
+    estimate_method=None,
+    underlying_index_symbol=None,
+    underlying_index_value=None,
+    underlying_index_change_percent=None,
+):
+    record = MagicMock()
+    record.nav_official = nav_official
+    record.nav_official_date = nav_official_date
+    record.nav_estimate = nav_estimate
+    record.nav_estimate_deviation_percent = nav_estimate_deviation_percent
+    record.estimate_method = estimate_method
+    record.underlying_index_symbol = underlying_index_symbol
+    record.underlying_index_value = underlying_index_value
+    record.underlying_index_change_percent = underlying_index_change_percent
+    return record
+
+
+def _fund_nav_execute(db, *, symbol, official=None, latest=None, save_lookup=None):
+    """db.execute side effect for get_fund_nav (+ optional _save_nav_estimate).
+
+    Call order: 1 symbol lookup, 2 official row, 3 latest row, 4 the estimate
+    upsert lookup inside _save_nav_estimate (only when the estimate branch
+    fires). Unknown/extra calls return an empty result so a MagicMock never
+    leaks into float() conversions.
+    """
+    call_count = 0
+
+    async def execute_side_effect(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        mock_r = MagicMock()
+        if call_count == 1:
+            mock_r.scalar_one_or_none.return_value = symbol
+        elif call_count == 2:
+            mock_r.scalar_one_or_none.return_value = official
+        elif call_count == 3:
+            mock_r.scalar_one_or_none.return_value = latest
+        elif call_count == 4 and save_lookup is not None:
+            mock_r.scalar_one_or_none.return_value = save_lookup
+        else:
+            mock_r.scalar_one_or_none.return_value = None
+        return mock_r
+
+    db.execute = execute_side_effect
+
+
 class TestGetFundNav:
     @patch("app.services.finance.event_router")
     @patch("app.services.finance.redis_set", new_callable=AsyncMock)
@@ -339,35 +390,21 @@ class TestGetFundNav:
         redis = _mock_redis()
 
         fund = _make_finance_symbol(type_="fund")
+        nav_record = _make_nav_record(
+            nav_official=1.5,
+            nav_official_date=date(2024, 1, 1),
+            nav_estimate=1.52,
+            nav_estimate_deviation_percent=1.3,
+            estimate_method="official",
+        )
 
-        nav_record = MagicMock()
-        nav_record.nav_official = 1.5
-        nav_record.nav_official_date = "2024-01-01"
-        nav_record.nav_estimate = 1.52
-        nav_record.nav_estimate_deviation_percent = 1.3
-        nav_record.estimate_method = "official"
-        nav_record.underlying_index_symbol = None
-        nav_record.underlying_index_value = None
-        nav_record.underlying_index_change_percent = None
-
-        call_count = 0
-
-        async def execute_side_effect(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            mock_r = MagicMock()
-            if call_count == 1:
-                mock_r.scalar_one_or_none.return_value = fund
-            elif call_count == 2:
-                mock_r.scalar_one_or_none.return_value = nav_record
-            return mock_r
-
-        db.execute = execute_side_effect
+        _fund_nav_execute(db, symbol=fund, official=nav_record, latest=nav_record)
 
         service = FinanceService(db, redis)
         result = await service.get_fund_nav("tenant-1", "FUND001")
         assert result["symbol"] == "FUND001"
         assert result["nav_official"] == 1.5
+        assert result["nav_official_date"] == "2024-01-01"
 
     @patch("app.services.finance.redis_get", new_callable=AsyncMock)
     async def test_get_fund_nav_cached(self, mock_get):
@@ -393,36 +430,66 @@ class TestGetFundNav:
     @patch("app.services.finance.event_router")
     @patch("app.services.finance.redis_set", new_callable=AsyncMock)
     @patch("app.services.finance.redis_get", new_callable=AsyncMock, return_value=None)
+    async def test_get_fund_nav_official_row_preferred_over_latest(self, mock_get, mock_set, mock_router):
+        """nav_official must come from the latest row carrying an official NAV,
+        even when a newer estimate row (without nav_official) is the latest row."""
+        mock_router.push_event = AsyncMock()
+        db, mock_result = _mock_db()
+        redis = _mock_redis()
+
+        fund = _make_finance_symbol(type_="fund")
+        official_record = _make_nav_record(
+            nav_official=3.3,
+            nav_official_date=date(2024, 3, 1),
+            estimate_method="official",
+        )
+        latest_record = _make_nav_record(
+            nav_estimate=3.31,
+            nav_estimate_deviation_percent=0.3,
+            estimate_method="index_tracking",
+        )
+
+        _fund_nav_execute(db, symbol=fund, official=official_record, latest=latest_record)
+
+        service = FinanceService(db, redis)
+        result = await service.get_fund_nav("tenant-1", "FUND001", estimate_type="latest")
+        assert result["nav_official"] == 3.3
+        assert result["nav_official_date"] == "2024-03-01"
+        # estimate fields still come from the latest row
+        assert result["nav_estimate"] == 3.31
+        assert result["estimate_method"] == "index_tracking"
+
+    @patch("app.services.finance.event_router")
+    @patch("app.services.finance.redis_set", new_callable=AsyncMock)
+    @patch("app.services.finance.redis_get", new_callable=AsyncMock, return_value=None)
     async def test_get_fund_nav_realtime_estimate(self, mock_get, mock_set, mock_router):
         mock_router.push_event = AsyncMock()
         db, mock_result = _mock_db()
         redis = _mock_redis()
 
         fund = _make_finance_symbol(type_="fund")
+        official_record = _make_nav_record(
+            nav_official=2.0,
+            nav_official_date=date(2024, 1, 1),
+            estimate_method="official",
+        )
+        latest_record = _make_nav_record(
+            nav_official=2.0,
+            nav_official_date=date(2024, 1, 1),
+            nav_estimate=2.01,
+            nav_estimate_deviation_percent=0.5,
+            estimate_method="index_tracking",
+            underlying_index_symbol="000300.SS",
+            underlying_index_value=3500,
+            underlying_index_change_percent=1.0,
+        )
 
-        nav_record = MagicMock()
-        nav_record.nav_official = 2.0
-        nav_record.nav_official_date = "2024-01-01"
-        nav_record.nav_estimate = 2.01
-        nav_record.nav_estimate_deviation_percent = 0.5
-        nav_record.estimate_method = "official"
-        nav_record.underlying_index_symbol = "000300.SS"
-        nav_record.underlying_index_value = 3500
-        nav_record.underlying_index_change_percent = 1.0
-
-        call_count = 0
-
-        async def execute_side_effect(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            mock_r = MagicMock()
-            if call_count == 1:
-                mock_r.scalar_one_or_none.return_value = fund
-            elif call_count == 2:
-                mock_r.scalar_one_or_none.return_value = nav_record
-            return mock_r
-
-        db.execute = execute_side_effect
+        # Estimate branch fires → _save_nav_estimate runs a 4th query (the
+        # upsert lookup); return an existing row so it takes the update path.
+        existing_estimate_row = MagicMock()
+        _fund_nav_execute(
+            db, symbol=fund, official=official_record, latest=latest_record, save_lookup=existing_estimate_row
+        )
 
         index_quote = {"name": "CSI 300", "current_price": 3550, "change_percent": 1.5}
 
@@ -432,16 +499,141 @@ class TestGetFundNav:
             assert result["estimate_method"] == "index_tracking"
             assert result["underlying_index"]["name"] == "CSI 300"
 
+        # A successful realtime estimate is persisted: the existing estimate
+        # row was updated in place and committed.
+        assert existing_estimate_row.nav_estimate == pytest.approx(2.0 * (1 + 1.5 / 100))
+        assert existing_estimate_row.estimate_method == "index_tracking"
+        db.commit.assert_awaited()
+
     @patch("app.services.finance.event_router")
     @patch("app.services.finance.redis_set", new_callable=AsyncMock)
     @patch("app.services.finance.redis_get", new_callable=AsyncMock, return_value=None)
     async def test_get_fund_nav_no_nav_record(self, mock_get, mock_set, mock_router):
+        """No rows at all → a gentle all-None response, never an error."""
         mock_router.push_event = AsyncMock()
         db, mock_result = _mock_db()
         redis = _mock_redis()
 
         fund = _make_finance_symbol(type_="fund")
+        _fund_nav_execute(db, symbol=fund)
 
+        service = FinanceService(db, redis)
+        result = await service.get_fund_nav("tenant-1", "FUND001")
+        assert result["nav_official"] is None
+        assert result["nav_official_date"] is None
+        assert result["nav_estimate"] is None
+        assert result["estimate_method"] is None
+        assert result["underlying_index"] is None
+        # Cached anyway (Redis semantics unchanged) and pushed to SSE.
+        mock_set.assert_awaited()
+        mock_router.push_event.assert_awaited()
+
+
+class TestSaveNavEstimate:
+    """Persistence of successful realtime estimates (_save_nav_estimate)."""
+
+    async def test_insert_new_estimate_row(self):
+        db, _ = _mock_db()
+        fund = _make_finance_symbol(type_="fund")
+
+        mock_r = MagicMock()
+        mock_r.scalar_one_or_none.return_value = None
+        db.execute = AsyncMock(return_value=mock_r)
+
+        service = FinanceService(db, None)
+        await service._save_nav_estimate(
+            tenant_id="tenant-1",
+            fund=fund,
+            nav_official=2.0,
+            nav_official_date=date(2024, 1, 1),
+            nav_estimate=2.03,
+            nav_estimate_deviation_percent=1.5,
+            underlying_index_info={"symbol": "000300.SS", "current_value": 3550, "change_percent": 1.5},
+        )
+
+        assert db.add.call_count == 1
+        row = db.add.call_args[0][0]
+        assert row.nav_official == 2.0
+        assert row.nav_official_date == date(2024, 1, 1)
+        assert row.nav_estimate == 2.03
+        assert row.estimate_method == "index_tracking"
+        assert row.underlying_index_symbol == "000300.SS"
+        db.commit.assert_awaited_once()
+
+    async def test_update_existing_estimate_row(self):
+        db, _ = _mock_db()
+        fund = _make_finance_symbol(type_="fund")
+
+        existing = MagicMock()
+        mock_r = MagicMock()
+        mock_r.scalar_one_or_none.return_value = existing
+        db.execute = AsyncMock(return_value=mock_r)
+
+        service = FinanceService(db, None)
+        await service._save_nav_estimate(
+            tenant_id="tenant-1",
+            fund=fund,
+            nav_official=2.0,
+            nav_official_date=date(2024, 1, 1),
+            nav_estimate=2.04,
+            nav_estimate_deviation_percent=2.0,
+            underlying_index_info={"symbol": "000300.SS", "current_value": 3560, "change_percent": 2.0},
+        )
+
+        db.add.assert_not_called()
+        assert existing.nav_estimate == 2.04
+        assert existing.underlying_index_change_percent == 2.0
+        db.commit.assert_awaited_once()
+
+    async def test_skip_persist_without_official_nav_date(self):
+        db, _ = _mock_db()
+        fund = _make_finance_symbol(type_="fund")
+
+        service = FinanceService(db, None)
+        await service._save_nav_estimate(
+            tenant_id="tenant-1",
+            fund=fund,
+            nav_official=2.0,
+            nav_official_date=None,
+            nav_estimate=2.03,
+            nav_estimate_deviation_percent=1.5,
+            underlying_index_info=None,
+        )
+
+        db.add.assert_not_called()
+        db.commit.assert_not_awaited()
+
+    async def test_commit_failure_rolled_back_not_raised(self):
+        db, _ = _mock_db()
+        fund = _make_finance_symbol(type_="fund")
+
+        mock_r = MagicMock()
+        mock_r.scalar_one_or_none.return_value = None
+        db.execute = AsyncMock(return_value=mock_r)
+        db.commit = AsyncMock(side_effect=RuntimeError("db gone"))
+        db.rollback = AsyncMock()
+
+        service = FinanceService(db, None)
+        # Must not raise: persistence trouble never breaks the read path.
+        await service._save_nav_estimate(
+            tenant_id="tenant-1",
+            fund=fund,
+            nav_official=2.0,
+            nav_official_date=date(2024, 1, 1),
+            nav_estimate=2.03,
+            nav_estimate_deviation_percent=1.5,
+            underlying_index_info=None,
+        )
+        db.rollback.assert_awaited_once()
+
+
+class TestUpdateOfficialNav:
+    """Daily official NAV refresh service entry (fund_nav_official_refresh job)."""
+
+    def _fund(self, symbol="110011"):
+        return _make_finance_symbol(symbol=symbol, type_="fund")
+
+    def _execute_for(self, db, funds, upsert_row=None):
         call_count = 0
 
         async def execute_side_effect(*args, **kwargs):
@@ -449,17 +641,184 @@ class TestGetFundNav:
             call_count += 1
             mock_r = MagicMock()
             if call_count == 1:
-                mock_r.scalar_one_or_none.return_value = fund
-            elif call_count == 2:
-                mock_r.scalar_one_or_none.return_value = None
+                mock_r.scalars.return_value.all.return_value = funds
+            else:
+                mock_r.scalar_one_or_none.return_value = upsert_row
             return mock_r
 
         db.execute = execute_side_effect
 
-        service = FinanceService(db, redis)
-        result = await service.get_fund_nav("tenant-1", "FUND001")
-        assert result["nav_official"] is None
-        assert result["nav_estimate"] is None
+    async def test_inserts_official_rows(self):
+        from app.collectors.base import CollectionResult
+
+        db, _ = _mock_db()
+        fund = self._fund()
+        self._execute_for(db, [fund], upsert_row=None)
+
+        collection = CollectionResult(
+            items=[{"symbol": "110011", "nav": 4.2133, "nav_date": "2026-08-26", "source": "tiantian_fund"}],
+            success=True,
+        )
+        mock_collector = MagicMock()
+        mock_collector.collect = AsyncMock(return_value=collection)
+
+        with patch("app.collectors.finance.fund_nav_collector.TiantianFundCollector", return_value=mock_collector):
+            service = FinanceService(db, None)
+            updated = await service.update_official_nav("tenant-1")
+
+        assert updated == 1
+        assert db.add.call_count == 1
+        row = db.add.call_args[0][0]
+        assert row.nav_official == 4.2133
+        assert row.nav_official_date == date(2026, 8, 26)
+        assert row.estimate_method == "official"
+        db.commit.assert_awaited_once()
+        # Collector received the normalized fund code from finance_symbols.
+        collect_source = mock_collector.collect.call_args[0][0]
+        assert collect_source.config["fund_codes"] == ["110011"]
+
+    async def test_updates_existing_official_row_same_day(self):
+        """Re-running the daily job on the same NAV date updates, not duplicates."""
+        from app.collectors.base import CollectionResult
+
+        db, _ = _mock_db()
+        fund = self._fund()
+        existing = MagicMock()
+        self._execute_for(db, [fund], upsert_row=existing)
+
+        collection = CollectionResult(
+            items=[{"symbol": "110011", "nav": 4.22, "nav_date": "2026-08-26"}],
+            success=True,
+        )
+        mock_collector = MagicMock()
+        mock_collector.collect = AsyncMock(return_value=collection)
+
+        with patch("app.collectors.finance.fund_nav_collector.TiantianFundCollector", return_value=mock_collector):
+            service = FinanceService(db, None)
+            updated = await service.update_official_nav("tenant-1")
+
+        assert updated == 1
+        db.add.assert_not_called()
+        assert existing.nav_official == 4.22
+        assert existing.estimate_method == "official"
+        db.commit.assert_awaited_once()
+
+    async def test_normalizes_yaml_style_symbols(self):
+        from app.collectors.base import CollectionResult
+
+        db, _ = _mock_db()
+        fund = self._fund(symbol="510300.SS")
+        self._execute_for(db, [fund], upsert_row=None)
+
+        collection = CollectionResult(items=[{"symbol": "510300", "nav": 3.9, "nav_date": "2026-08-26"}], success=True)
+        mock_collector = MagicMock()
+        mock_collector.collect = AsyncMock(return_value=collection)
+
+        with patch("app.collectors.finance.fund_nav_collector.TiantianFundCollector", return_value=mock_collector):
+            service = FinanceService(db, None)
+            updated = await service.update_official_nav("tenant-1")
+
+        assert updated == 1
+        collect_source = mock_collector.collect.call_args[0][0]
+        assert collect_source.config["fund_codes"] == ["510300"]
+
+    async def test_no_fund_symbols_is_noop(self):
+        db, _ = _mock_db()
+        self._execute_for(db, [])
+
+        with patch("app.collectors.finance.fund_nav_collector.TiantianFundCollector") as mock_cls:
+            service = FinanceService(db, None)
+            updated = await service.update_official_nav("tenant-1")
+
+        assert updated == 0
+        mock_cls.assert_not_called()
+        db.add.assert_not_called()
+        db.commit.assert_not_awaited()
+
+    async def test_unmappable_symbols_is_noop(self):
+        db, _ = _mock_db()
+        # type=fund but the symbol is not a usable 6-digit Chinese fund code.
+        self._execute_for(db, [self._fund(symbol="AAPL")])
+
+        with patch("app.collectors.finance.fund_nav_collector.TiantianFundCollector") as mock_cls:
+            service = FinanceService(db, None)
+            updated = await service.update_official_nav("tenant-1")
+
+        assert updated == 0
+        mock_cls.assert_not_called()
+
+    async def test_collection_failure_returns_zero_without_raising(self):
+        from app.collectors.base import CollectionResult
+
+        db, _ = _mock_db()
+        self._execute_for(db, [self._fund()])
+
+        collection = CollectionResult(items=[], success=False, error="All retry attempts failed")
+        mock_collector = MagicMock()
+        mock_collector.collect = AsyncMock(return_value=collection)
+
+        with patch("app.collectors.finance.fund_nav_collector.TiantianFundCollector", return_value=mock_collector):
+            service = FinanceService(db, None)
+            updated = await service.update_official_nav("tenant-1")
+
+        assert updated == 0
+        db.add.assert_not_called()
+        db.commit.assert_not_awaited()
+
+    async def test_collector_exception_returns_zero_without_raising(self):
+        db, _ = _mock_db()
+        self._execute_for(db, [self._fund()])
+
+        mock_collector = MagicMock()
+        mock_collector.collect = AsyncMock(side_effect=RuntimeError("network partition"))
+
+        with patch("app.collectors.finance.fund_nav_collector.TiantianFundCollector", return_value=mock_collector):
+            service = FinanceService(db, None)
+            updated = await service.update_official_nav("tenant-1")
+
+        assert updated == 0
+        db.add.assert_not_called()
+        db.commit.assert_not_awaited()
+
+    async def test_items_not_matching_tracked_funds_are_skipped(self):
+        from app.collectors.base import CollectionResult
+
+        db, _ = _mock_db()
+        self._execute_for(db, [self._fund(symbol="110011")])
+
+        collection = CollectionResult(
+            items=[
+                {"symbol": "999999", "nav": 1.0, "nav_date": "2026-08-26"},
+                {"symbol": "110011", "nav": None, "nav_date": "2026-08-26"},
+                {"symbol": "110011", "nav": 4.2, "nav_date": "not-a-date"},
+            ],
+            success=True,
+        )
+        mock_collector = MagicMock()
+        mock_collector.collect = AsyncMock(return_value=collection)
+
+        with patch("app.collectors.finance.fund_nav_collector.TiantianFundCollector", return_value=mock_collector):
+            service = FinanceService(db, None)
+            updated = await service.update_official_nav("tenant-1")
+
+        assert updated == 0
+        db.commit.assert_not_awaited()
+
+
+class TestNormalizeFundCode:
+    def test_bare_six_digit_code(self):
+        assert FinanceService._normalize_fund_code("110011") == "110011"
+
+    def test_strips_market_suffixes(self):
+        assert FinanceService._normalize_fund_code("510300.SS") == "510300"
+        assert FinanceService._normalize_fund_code("159915.SZ") == "159915"
+        assert FinanceService._normalize_fund_code("110011.OF") == "110011"
+
+    def test_non_codes_return_none(self):
+        assert FinanceService._normalize_fund_code("AAPL") is None
+        assert FinanceService._normalize_fund_code("FUND001") is None
+        assert FinanceService._normalize_fund_code("12345") is None
+        assert FinanceService._normalize_fund_code("") is None
 
 
 class TestGetWatchlist:

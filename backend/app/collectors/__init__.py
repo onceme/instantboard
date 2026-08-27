@@ -1,6 +1,7 @@
 from app.collectors.finance.alpha_vantage_collector import AlphaVantageCollector
 from app.collectors.finance.eastmoney_collector import EastMoneyCollector
 from app.collectors.finance.finnhub_collector import FinnhubCollector
+from app.collectors.finance.fund_nav_collector import TiantianFundCollector
 from app.collectors.finance.iex_cloud_collector import IEXCloudCollector
 from app.collectors.finance.yfinance_collector import YFinanceCollector
 from app.collectors.tech.arxiv_collector import ArxivCollector
@@ -16,6 +17,10 @@ COLLECTOR_REGISTRY = {
     "eastmoney": EastMoneyCollector,
     "finnhub": FinnhubCollector,
     "iex_cloud": IEXCloudCollector,
+    # Official Chinese fund NAV (finance-tab.md §3.3); resolved via
+    # config.library=tiantian_fund (bare api/web_scrape source_types do not
+    # match it), same override pattern as eastmoney/yfinance/reddit.
+    "tiantian_fund": TiantianFundCollector,
     "rss": RSSCollector,
     "hackernews": HackerNewsCollector,
     "arxiv": ArxivCollector,

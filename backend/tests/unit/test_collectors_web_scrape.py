@@ -96,7 +96,7 @@ def _articles_html(count: int) -> str:
 # ── Registry / resolve_collector ─────────────────────────────────
 class TestWebScrapeRegistry:
     def test_registered_in_collector_registry(self):
-        assert len(COLLECTOR_REGISTRY) == 11
+        assert len(COLLECTOR_REGISTRY) == 12
         assert "web_scrape" in COLLECTOR_REGISTRY
         assert get_collector("web_scrape") is WebScrapeCollector
 
@@ -157,14 +157,9 @@ class TestWebScrapeSeeds:
         assert eastmoney.get("is_active", True) is True
         assert resolve_collector(eastmoney["source_type"], eastmoney["config"]) is EastMoneyCollector
 
-    def test_tiantian_fund_seed_stays_template(self):
-        from app.db.init_db import FINANCE_SOURCES
-
-        fund = next(src for src in FINANCE_SOURCES if src["name"] == "天天基金-官方NAV")
-        # Collector is resolvable now, but the NAV consumption chain is a follow-up
-        # feature, so the seed remains an inactive template.
-        assert fund["is_active"] is False
-        assert resolve_collector(fund["source_type"], fund["config"]) is WebScrapeCollector
+    # The 天天基金-官方NAV seed assertions live in test_collectors_fund_nav.py:
+    # the seed is now a dedicated fund-NAV source (source_type=api +
+    # library=tiantian_fund), no longer a web_scrape template.
 
 
 # ── fetch_data ────────────────────────────────────────────────────

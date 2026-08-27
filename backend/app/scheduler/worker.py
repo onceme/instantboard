@@ -333,6 +333,10 @@ async def main() -> None:
     # (the api process runs with SCHEDULER_ENABLED=false and registers nothing).
     await scheduler_manager.add_market_refresh_jobs()
 
+    # Daily official fund NAV refresh: cron 20:00 Asia/Shanghai (finance-tab.md
+    # §3.8.2), same ownership rule as the market refresh jobs.
+    await scheduler_manager.add_fund_nav_job()
+
     stop_event = asyncio.Event()
 
     def _signal_handler() -> None:

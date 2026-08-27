@@ -42,7 +42,7 @@ cross_refs: [architecture.md, api.md, database.md, data-flow.md, finance-tab.md,
 | 3 | 东方财富 | 公开数据接口 | push2.eastmoney.com | 15s + failover按需 | JSON | 免费 | 财经 | ✅ 活跃种子 + 指数failover第一顺位 |
 | 4 | Finnhub | REST API | finnhub.io | 按需 (failover链内) | JSON | 免费(限量)/付费 | 财经 | ✅ 采集器已实现; 无定时种子源 |
 | 5 | IEX Cloud | REST API | iexcloud.io | - | JSON | 免费(限量)/付费 | 财经 | ✅ 采集器已实现; 种子为未激活可选模板 |
-| 6 | 天天基金 | Web抓取 | fund.eastmoney.com | 每日 | HTML→JSON | 免费 | 财经 | ⚠️ 未激活模板 (web_scrape采集器已实现; 基金NAV消费链路为后续特性) |
+| 6 | 天天基金 | 公开数据接口 (httpx直连, **需 Referer 头**) | api.fund.eastmoney.com/f10/lsjz | 每日 (20:00 官方NAV任务 + 24h 种子) | JSON | 免费 | 财经 | ✅ 活跃 (tiantian_fund 采集器; 基金NAV管道, 见 §3.2.5) |
 | 7 | MIT Tech Review | RSS | technologyreview.com/feed | 5min | RSS XML | 免费 | 科技-AI | ✅ 活跃 |
 | 8 | HackerNews | RSS | hnrss.org | 2min | RSS/JSON | 免费 | 科技-全领域 | ✅ 活跃 |
 | 9 | Arxiv CS.AI | RSS/API | arxiv.org/rss/cs.AI | 30min | RSS XML | 免费 | 科技-AI | ✅ 活跃 |
@@ -62,8 +62,8 @@ cross_refs: [architecture.md, api.md, database.md, data-flow.md, finance-tab.md,
 | 23 | Twitter/X | API v2 (recent search, httpx直连) | api.twitter.com/2/tweets/search/recent | 10min | JSON | 付费(限额) | 科技-全领域 | ✅ 采集器已实现 (需 `TWITTER_BEARER_TOKEN`, 付费档); 种子未激活待凭据 |
 
 > ⚠️ **种子与采集器现状**（以 `app/db/init_db.py` 与 `app/collectors/__init__.py` 为准）：
-> - 已注册采集器共 11 个：`yfinance` / `alpha_vantage` / `eastmoney` / `finnhub` / `iex_cloud` / `rss` / `hackernews` / `arxiv` / `reddit` / `twitter` / `web_scrape`（`COLLECTOR_REGISTRY`）。
-> - **`web_scrape` 通用采集器已实现**：`WebScrapeCollector`（`app/collectors/tech/web_scrape_collector.py`，注册名 `web_scrape`，source_type 直接命中）。httpx 拉取（自定义 `User-Agent`—源级 `config.user_agent`，默认 `instantboard-collector/1.0`、10s 超时、跟随重定向），`BeautifulSoup(html, "lxml")` 解析（lxml 失败回退 `html.parser`）。解析规则全部来自 `config.parse_rules`（CSS 选择器驱动）：`item_selector`（条目容器，缺省时以 `title_selector` 命中元素自身为条目）、`title_selector`（缺省回退条目内首个 h1-h4）、`link_selector`（取 href，缺省回退容器自身 href 或首个 `<a href>`；相对链接用 `urljoin(source.url)` 补全；`javascript:`/`mailto:`/`tel:`/`#` 链接丢弃）、`summary_selector`（可选，截断 300 字符）、`date_selector`（可选，优先 `<time datetime>` 属性，dateutil 解析失败用当前时间兜底）、`limit`（默认 20，上限 100）。缺 title 或 url 的条目跳过；429/403 → 记日志并返回空结果（本轮视为空成功），其他异常走 `BaseCollector` 重试/失败路径。种子 #10/#15/#18 及机器人领域 Automotive News 已 `is_active=True`；**#6 天天基金保持未激活模板**——采集器已可用，但基金 NAV 消费链路（`get_fund_nav` 展示管道）属后续特性。
+> - 已注册采集器共 12 个：`yfinance` / `alpha_vantage` / `eastmoney` / `finnhub` / `iex_cloud` / `tiantian_fund` / `rss` / `hackernews` / `arxiv` / `reddit` / `twitter` / `web_scrape`（`COLLECTOR_REGISTRY`）。
+> - **`web_scrape` 通用采集器已实现**：`WebScrapeCollector`（`app/collectors/tech/web_scrape_collector.py`，注册名 `web_scrape`，source_type 直接命中）。httpx 拉取（自定义 `User-Agent`—源级 `config.user_agent`，默认 `instantboard-collector/1.0`、10s 超时、跟随重定向），`BeautifulSoup(html, "lxml")` 解析（lxml 失败回退 `html.parser`）。解析规则全部来自 `config.parse_rules`（CSS 选择器驱动）：`item_selector`（条目容器，缺省时以 `title_selector` 命中元素自身为条目）、`title_selector`（缺省回退条目内首个 h1-h4）、`link_selector`（取 href，缺省回退容器自身 href 或首个 `<a href>`；相对链接用 `urljoin(source.url)` 补全；`javascript:`/`mailto:`/`tel:`/`#` 链接丢弃）、`summary_selector`（可选，截断 300 字符）、`date_selector`（可选，优先 `<time datetime>` 属性，dateutil 解析失败用当前时间兜底）、`limit`（默认 20，上限 100）。缺 title 或 url 的条目跳过；429/403 → 记日志并返回空结果（本轮视为空成功），其他异常走 `BaseCollector` 重试/失败路径。种子 #10/#15/#18 及机器人领域 Automotive News 已 `is_active=True`。**#6 天天基金已激活为基金 NAV 专用源**（不再是 web_scrape 模板）——`TiantianFundCollector`（注册名 `tiantian_fund`），见 §3.2.5。
 > - **Reddit（social）种子已激活**：`RedditCollector`（`app/collectors/tech/reddit_collector.py`，注册名 `reddit`，公开 JSON 接口、无需凭据），经 `source_type=social` + `config.library=reddit` 解析（见 §3.5.1）；种子"Reddit-科技全领域" `is_active=True`，`config.subreddits=["artificial", "robotics", "embedded", "space"]`（逐子版拉取、按 post id 聚合去重，600s）。**Twitter/X 采集器已实现、种子未激活待凭据**：`TwitterCollector`（`app/collectors/tech/twitter_collector.py`，注册名 `twitter`，API v2 recent search `api.twitter.com/2/tweets/search/recent`，Bearer token 认证），经 `source_type=social` + `config.library=twitter` 解析（见 §3.5.1）；种子"Twitter/X-科技话题" `is_active=False`——需配置 `TWITTER_BEARER_TOKEN`，且 recent search 端点仅付费档可用。
 > - **IEX Cloud** 采集器已实现（可选启用），种子为未激活模板。
 > - Finnhub 无定时采集种子源（种子财经源共 7 条，不含 Finnhub），仅在财经 failover 链内按需调用（见 §3.5）。
@@ -185,19 +185,20 @@ cross_refs: [architecture.md, api.md, database.md, data-flow.md, finance-tab.md,
 
 | 属性 | 值 |
 |------|-----|
-| **类型** | Web抓取 |
-| **覆盖范围** | 中国基金官方NAV |
-| **URL** | `https://fund.eastmoney.com/f10/F10DataApi.aspx?type=...` |
-| **数据格式** | HTML→JSON |
+| **类型** | 公开数据接口（httpx 直连东方财富 f10 历史净值 JSON API，非网页抓取） |
+| **覆盖范围** | 中国基金官方 NAV（6 位基金代码） |
+| **URL** | `https://api.fund.eastmoney.com/f10/lsjz?fundCode={code}&pageIndex=1&pageSize=1` |
+| **必需请求头** | `Referer: https://fundf10.eastmoney.com/`（**缺失时接口仍返回 HTTP 200，但带内报错** `Data=""`/`ErrCode=-999`，拿不到数据；采集器恒带该头） |
+| **数据格式** | JSON（`Data.LSJZList[0]`：`DWJZ` 单位净值、`FSRQ` 净值日期；`LSJZList` 按净值日降序） |
 | **费用** | 免费 |
-| **API Key** | 无需 |
-| **频率限制** | 需控制 (≤5次/min) |
-| **数据延迟** | T+1日官方NAV |
-| **优点** | 官方NAV数据源、数据权威 |
+| **API Key** | 无需（请求带浏览器风格 UA 降低指纹拦截概率） |
+| **频率限制** | 采集器限速 30 次/分钟；多代码逐个拉取，请求间 0.5s 礼貌延迟 |
+| **数据延迟** | T+1 日官方 NAV（收盘后发布，任务定在每晚 20:00） |
+| **优点** | 官方 NAV 数据源、数据权威；即页面 `fundf10.eastmoney.com/jjjz_{code}.html` 渲染所用的同源接口，结构化 JSON、无 DOM 脆弱性（因此优先于网页抓取方案） |
 | **缺点** | 仅中国基金、非官方接口 |
-| **优先级** | **中国基金NAV必备** |
+| **优先级** | **中国基金 NAV 必备** |
 
-> ⚠️ **未激活模板**：种子"天天基金-官方NAV"（`is_active=False`，`init_db.py:116-127`）。通用 `web_scrape` 采集器（`WebScrapeCollector`）已实现、该源也可被解析，但官方 NAV 抓取与消费链路（`get_fund_nav` 只读取库中已有的 NAV 估算数据，不做在线采集）属后续特性，故保持模板状态（见 §3.5.1）。
+> ✅ **已实现（基金 NAV 管道）**：采集器 `TiantianFundCollector`（`app/collectors/finance/fund_nav_collector.py`，注册名 `tiantian_fund`，经种子 `config.library=tiantian_fund` 解析）；种子"天天基金-官方NAV" `is_active=True`（`source_type=api` + 默认 `fund_codes` 列表）。**失败语义**：单个代码 429/403/超时 → 记日志并跳过该代码（不炸整轮）；HTTP 200 带内错误（`Data` 非 dict / `LSJZList` 空 / `DWJZ` 空或非数字 / `FSRQ` 不可解析）→ 该代码无产出。消费链路：`FinanceService.update_official_nav`（每日 20:00 cron 任务 `fund_nav_official_refresh`）把官方净值落 `fund_nav_estimates`（`estimate_method='official'`），`get_fund_nav` 优先读该表、实时估值成功后回写估值行（`estimate_method='index_tracking'`）——详见 finance-tab.md §3.3。种子走 `collect_{source_id}` 通用 items 管道的产出与其他财经种子一样被 `FilterProcessor` 过滤，与展示无关。
 
 #### 3.2.6 IEX Cloud (可选)
 

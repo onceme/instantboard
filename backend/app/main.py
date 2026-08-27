@@ -83,6 +83,10 @@ async def lifespan(app: FastAPI):
         # Only the scheduler-owning process registers these: with SCHEDULER_ENABLED=false
         # (prod api process) this block is skipped and the worker registers them instead.
         await scheduler_manager.add_market_refresh_jobs()
+
+        # Daily official fund NAV refresh: cron 20:00 Asia/Shanghai (finance-tab.md
+        # §3.8.2). Same ownership rule as the market refresh jobs above.
+        await scheduler_manager.add_fund_nav_job()
     else:
         logger.info("Scheduler disabled")
 

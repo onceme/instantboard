@@ -29,10 +29,9 @@ async def create_tables():
 
 
 # Sources with is_active=False are disabled because no collector can run for them
-# yet, or the collected data has no consumption chain yet (e.g. 天天基金: the generic
-# web_scrape collector exists, but the fund-NAV pipeline is a follow-up feature).
-# They are kept as templates for future development. Sources whose collector resolves
-# via app.collectors.resolve_collector (source_type match or config.library override)
+# yet, or the collected data has no consumption chain yet. They are kept as
+# templates for future development. Sources whose collector resolves via
+# app.collectors.resolve_collector (source_type match or config.library override)
 # are active by default.
 
 FINANCE_SOURCES = [
@@ -114,16 +113,27 @@ FINANCE_SOURCES = [
         "is_active": True,
     },
     {
+        # Dedicated fund-NAV source (finance-tab.md §3.3): TiantianFundCollector
+        # is registered as "tiantian_fund"; the explicit config.library overrides
+        # source_type=api (bare "api" resolves to nothing) — see
+        # app.collectors.resolve_collector. The collector fetches the EastMoney
+        # f10 historical-NAV JSON API (https://api.fund.eastmoney.com/f10/lsjz),
+        # which requires the fundf10.eastmoney.com Referer header the collector
+        # always sends. fund_codes below are a reasonable default list for the
+        # periodic collect_ items pipeline (its rows are FilterProcessor-dropped
+        # like the other finance seeds); the daily official-NAV refresh
+        # (FinanceService.update_official_nav, cron 20:00 Asia/Shanghai) derives
+        # its codes from fund-type finance_symbols instead.
         "name": "天天基金-官方NAV",
-        "source_type": "web_scrape",
-        "url": "https://fund.eastmoney.com/f10/F10DataApi.aspx",
-        "config": {"selector": "table", "url_pattern": "fund.eastmoney.com"},
+        "source_type": "api",
+        "url": "https://api.fund.eastmoney.com/f10/lsjz",
+        "config": {
+            "library": "tiantian_fund",
+            "fund_codes": ["110011", "161725", "005827", "320007", "260108"],
+        },
         "refresh_interval_seconds": 86400,
         "priority": 1,
-        # The generic web_scrape collector exists now, but the fund-NAV consumption
-        # chain (get_fund_nav / display pipeline) is a follow-up feature; activating
-        # this source earlier would only collect data nothing consumes.
-        "is_active": False,
+        "is_active": True,
     },
 ]
 

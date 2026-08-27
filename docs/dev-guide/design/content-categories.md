@@ -99,14 +99,14 @@ graph TD
 | 财经 | finance | 世界市场指数 | market-indices | Alpha Vantage(failover) | api | 30s |
 | 财经 | finance | 大宗商品/期货 | commodities | yfinance(GC=F, SI=F, CL=F, NG=F, HG=F, ZS=F, ZC=F) | api | 60s |
 | 财经 | finance | 大宗商品/期货 | commodities | Alpha Vantage(failover) | api | 60s |
-| 财经 | finance | 基金NAV估值 | fund-nav | 天天基金(官方NAV) | web_scrape | 每日20:00 |
+| 财经 | finance | 基金NAV估值 | fund-nav | 天天基金(官方NAV, tiantian_fund 采集器) | api | 每日20:00 |
 | 财经 | finance | 基金NAV估值 | fund-nav | 东方财富(NAV补充) | web_scrape | 每日 |
 | 财经 | finance | 基金NAV估值 | fund-nav | yfinance(指数行情,用于估值计算) | api | 120s(交易时段) |
 | 财经 | finance | 自选行情 | watchlist | yfinance(用户自选symbols) | api | 30s |
 | 财经 | finance | 自选行情 | watchlist | Finnhub(failover) | api | 30s |
 | 财经 | finance | 财经新闻 | finance-news | Google News Finance RSS | rss | 5min |
 
-> ⚠️ **种子现状提示**（另见 data-sources.md §3.1）：当前财经种子源共 7 条——东方财富-A股实时（15s，活跃，兼市场指数 failover 链第一顺位）、yfinance×3（沪深300/世界指数/大宗商品，活跃）、Alpha Vantage failover 模板、IEX Cloud 可选模板与天天基金 NAV 模板均 `is_active=False`（天天基金：通用 web_scrape 采集器已实现，但基金 NAV 消费链路属后续特性）；Finnhub 无定时种子源（仅作 failover 按需调用）；Google News Finance RSS 未播种。
+> ⚠️ **种子现状提示**（另见 data-sources.md §3.1）：当前财经种子源共 7 条——东方财富-A股实时（15s，活跃，兼市场指数 failover 链第一顺位）、yfinance×3（沪深300/世界指数/大宗商品，活跃）、天天基金-官方NAV（活跃，已改造为基金 NAV 专用源：`source_type=api` + `config.library=tiantian_fund`，配套每日 20:00 官方 NAV 任务，见 finance-tab.md §3.3）；Alpha Vantage failover 模板与 IEX Cloud 可选模板 `is_active=False`；Finnhub 无定时种子源（仅作 failover 按需调用）；Google News Finance RSS 未播种。
 
 #### 3.2.2 科技分类映射 — 机器人领域
 

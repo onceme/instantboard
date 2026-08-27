@@ -2,8 +2,10 @@ import asyncio
 import logging
 from datetime import UTC, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy.orm import selectinload
 
@@ -44,6 +46,14 @@ LOAD_MULTIPLIER = 2.0
 # gated on at least one major market being open.
 MARKET_INDICES_REFRESH_JOB_ID = "market_indices_refresh"
 COMMODITIES_REFRESH_JOB_ID = "commodities_refresh"
+
+# Daily official fund NAV refresh (finance-tab.md §3.8.2): cron, not an
+# interval — CN official NAVs are published once per trading day after the
+# close, so the job runs at 20:00 Asia/Shanghai.
+FUND_NAV_OFFICIAL_REFRESH_JOB_ID = "fund_nav_official_refresh"
+FUND_NAV_REFRESH_HOUR = 20
+FUND_NAV_REFRESH_MINUTE = 0
+FUND_NAV_REFRESH_TIMEZONE = "Asia/Shanghai"
 
 _source_category_cache: dict[str, str] = {}
 
@@ -342,6 +352,64 @@ class AsyncSchedulerManager:
                     "error": "all failover sources returned no data",
                     "items_count": 0,
                 }
+        except Exception as e:
+            logger.error(f"{job_id} failed: {e}")
+            self._last_run_results[job_id] = {"success": False, "error": str(e), "items_count": 0}
+
+    async def add_fund_nav_job(self) -> None:
+        """Register the daily official fund NAV refresh (finance-tab.md §3.8.2).
+
+        Cron trigger at 20:00 Asia/Shanghai (CN official NAVs come out once
+        per trading day after the close, so cron instead of an interval).
+        Registered from the same two entry points as add_market_refresh_jobs —
+        the main.py lifespan (dev embedded scheduler) and scheduler/worker.py
+        main() (prod) — while the SCHEDULER_ENABLED semantics stay unchanged.
+        The job is deliberately NOT added to _original_intervals: that map
+        drives the interval-based adaptive/load rescheduling, which must never
+        touch a cron trigger. Independent of market_refresh_jobs_enabled (that
+        switch only governs the market indices / commodities interval jobs).
+        """
+        self.scheduler.add_job(
+            self._run_fund_nav_official_refresh,
+            trigger=CronTrigger(
+                hour=FUND_NAV_REFRESH_HOUR,
+                minute=FUND_NAV_REFRESH_MINUTE,
+                timezone=ZoneInfo(FUND_NAV_REFRESH_TIMEZONE),
+            ),
+            id=FUND_NAV_OFFICIAL_REFRESH_JOB_ID,
+            replace_existing=True,
+        )
+        logger.info(
+            f"Job {FUND_NAV_OFFICIAL_REFRESH_JOB_ID} added "
+            f"(daily {FUND_NAV_REFRESH_HOUR:02d}:{FUND_NAV_REFRESH_MINUTE:02d} {FUND_NAV_REFRESH_TIMEZONE})"
+        )
+
+    async def _run_fund_nav_official_refresh(self) -> None:
+        """Job body of fund_nav_official_refresh (finance-tab.md §3.8.2).
+
+        Scoped to the system tenant like the other display-chain refresh jobs;
+        the refresh itself goes through FinanceService.update_official_nav
+        (Tiantian Fund collector → fund_nav_estimates upsert). Zero updates is
+        a normal outcome (no fund symbols yet / collector returned nothing)
+        and is recorded as success; any exception is logged and stored in
+        _last_run_results but never raised — a periodic job survives one bad
+        round and retries at the next fire.
+        """
+        job_id = FUND_NAV_OFFICIAL_REFRESH_JOB_ID
+        self._last_run_times[job_id] = datetime.now(UTC)
+        try:
+            from app.db.session import async_session_factory
+            from app.services.finance import FinanceService
+
+            async with async_session_factory() as session:
+                service = FinanceService(db=session, redis=None)
+                updated = await service.update_official_nav(str(SYSTEM_TENANT_ID))
+
+            if updated:
+                logger.info(f"{job_id}: official NAV updated for {updated} fund(s)")
+            else:
+                logger.info(f"{job_id}: no official NAV updates (no fund symbols or collector returned nothing)")
+            self._last_run_results[job_id] = {"success": True, "items_count": updated}
         except Exception as e:
             logger.error(f"{job_id} failed: {e}")
             self._last_run_results[job_id] = {"success": False, "error": str(e), "items_count": 0}

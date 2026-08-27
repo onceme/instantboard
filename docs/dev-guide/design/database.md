@@ -235,11 +235,11 @@ CREATE TABLE fund_nav_estimates (
     id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id           UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     symbol_id           UUID NOT NULL REFERENCES finance_symbols(id) ON DELETE CASCADE,
-    nav_official        DECIMAL(18,4),             -- 最新官方NAV
+    nav_official        DECIMAL(18,4),             -- 最新官方NAV (每日20:00由 fund_nav_official_refresh 写入)
     nav_official_date   DATE,                      -- 官方NAV日期
-    nav_estimate        DECIMAL(18,4),             -- 实时估值
+    nav_estimate        DECIMAL(18,4),             -- 实时估值 (get_fund_nav 估值成功后回写)
     nav_estimate_deviation_percent DECIMAL(8,4),   -- 估值偏差百分比
-    estimate_method     VARCHAR(50),                -- 估值方法名称
+    estimate_method     VARCHAR(50),                -- 行类型/估值方法: 'official'(每日官方净值行) / 'index_tracking'(实时估值行, 按 基金+官方净值日期 upsert)
     estimate_timestamp  TIMESTAMPTZ NOT NULL,
     underlying_index_symbol VARCHAR(20),            -- 跟踪指数代码
     underlying_index_value  DECIMAL(18,4),          -- 指数当前值

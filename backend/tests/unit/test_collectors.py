@@ -32,12 +32,13 @@ def _make_source(**kwargs):
 # ── COLLECTOR_REGISTRY ────────────────────────────────────────────
 class TestCollectorRegistry:
     def test_all_collectors_registered(self):
-        assert len(COLLECTOR_REGISTRY) == 11
+        assert len(COLLECTOR_REGISTRY) == 12
         assert "yfinance" in COLLECTOR_REGISTRY
         assert "alpha_vantage" in COLLECTOR_REGISTRY
         assert "eastmoney" in COLLECTOR_REGISTRY
         assert "finnhub" in COLLECTOR_REGISTRY
         assert "iex_cloud" in COLLECTOR_REGISTRY
+        assert "tiantian_fund" in COLLECTOR_REGISTRY
         assert "rss" in COLLECTOR_REGISTRY
         assert "hackernews" in COLLECTOR_REGISTRY
         assert "arxiv" in COLLECTOR_REGISTRY

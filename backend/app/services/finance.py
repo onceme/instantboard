@@ -1,7 +1,7 @@
 import hashlib
 import json
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from redis.asyncio import Redis
 from sqlalchemy import func, or_, select
@@ -81,6 +81,12 @@ ALERT_THRESHOLD_MAX = 50.0
 DATA_TYPE_STOCK_QUOTE = "stock_quote"
 DATA_TYPE_MARKET_INDICES = "market_indices"
 DATA_TYPE_COMMODITY = "commodity"
+
+# fund_nav_estimates row kinds (estimate_method column): "official" rows are
+# written by the daily fund_nav_official_refresh job (update_official_nav),
+# "index_tracking" rows by get_fund_nav when a realtime estimate succeeds.
+ESTIMATE_METHOD_OFFICIAL = "official"
+ESTIMATE_METHOD_INDEX_TRACKING = "index_tracking"
 
 
 class FinanceService:
@@ -373,6 +379,27 @@ class FinanceService:
         if not fund:
             raise SymbolNotFound(message=f"Fund symbol not found: {symbol}")
 
+        # Official NAV: the latest row that actually carries one, newest NAV
+        # date first (the daily fund_nav_official_refresh job writes those
+        # rows; nulls_last because PG puts NULLs first on DESC by default).
+        official_stmt = (
+            select(FundNAVEstimate)
+            .where(
+                FundNAVEstimate.tenant_id == tenant_id,
+                FundNAVEstimate.symbol_id == fund.id,
+                FundNAVEstimate.nav_official.is_not(None),
+            )
+            .order_by(
+                FundNAVEstimate.nav_official_date.desc().nulls_last(),
+                FundNAVEstimate.estimate_timestamp.desc(),
+            )
+            .limit(1)
+        )
+        official_result = await self.db.execute(official_stmt)
+        official_record = official_result.scalar_one_or_none()
+
+        # Latest row of any kind (legacy query): source of the previous
+        # estimate values and of the underlying-index binding.
         nav_stmt = (
             select(FundNAVEstimate)
             .where(
@@ -387,14 +414,23 @@ class FinanceService:
 
         nav_official = None
         nav_official_date = None
+        nav_official_date_obj: date | None = None
         nav_estimate = None
         nav_estimate_deviation_percent = None
         estimate_method = None
         underlying_index_info = None
 
+        # Official value prefers the dedicated official row; rows without one
+        # (legacy/manual data) still surface their stored value. No row at all
+        # leaves everything None — the response stays a gentle "no official NAV
+        # yet" shape, never an error.
+        official_source = official_record if official_record is not None else nav_record
+        if official_source is not None:
+            nav_official = float(official_source.nav_official) if official_source.nav_official else None
+            nav_official_date = str(official_source.nav_official_date) if official_source.nav_official_date else None
+            nav_official_date_obj = official_source.nav_official_date
+
         if nav_record:
-            nav_official = float(nav_record.nav_official) if nav_record.nav_official else None
-            nav_official_date = str(nav_record.nav_official_date) if nav_record.nav_official_date else None
             nav_estimate = float(nav_record.nav_estimate) if nav_record.nav_estimate else None
             nav_estimate_deviation_percent = (
                 float(nav_record.nav_estimate_deviation_percent) if nav_record.nav_estimate_deviation_percent else None
@@ -425,7 +461,18 @@ class FinanceService:
             nav_estimate_deviation_percent = (
                 round((nav_estimate - nav_official) / nav_official * 100, 4) if nav_official else None
             )
-            estimate_method = "index_tracking"
+            estimate_method = ESTIMATE_METHOD_INDEX_TRACKING
+            # Persist the successful estimate (previously Redis-only); the
+            # Redis cache semantics below are unchanged.
+            await self._save_nav_estimate(
+                tenant_id=tenant_id,
+                fund=fund,
+                nav_official=nav_official,
+                nav_official_date=nav_official_date_obj,
+                nav_estimate=nav_estimate,
+                nav_estimate_deviation_percent=nav_estimate_deviation_percent,
+                underlying_index_info=underlying_index_info,
+            )
 
         response = {
             "symbol": symbol,
@@ -457,6 +504,180 @@ class FinanceService:
         )
 
         return response
+
+    async def _save_nav_estimate(
+        self,
+        tenant_id: str,
+        fund: FinanceSymbol,
+        nav_official: float,
+        nav_official_date: date | None,
+        nav_estimate: float,
+        nav_estimate_deviation_percent: float | None,
+        underlying_index_info: dict | None,
+    ) -> None:
+        """Persist a freshly computed realtime estimate into fund_nav_estimates.
+
+        Upsert policy: one estimate row per (fund, official NAV date) —
+        repeated intraday estimates against the same official NAV overwrite
+        the same row (table stays bounded); each new official NAV date starts
+        a new row. Rows are keyed by estimate_method=index_tracking so they
+        never collide with the daily "official" rows written by
+        update_official_nav. Rows are keyed by the official NAV date, so an
+        estimate without a known official NAV date is not persisted. A
+        persistence failure never breaks the read path: it is logged, rolled
+        back, and the response still returns (the Redis cache is unaffected).
+        """
+        if nav_official_date is None:
+            return
+
+        try:
+            stmt = select(FundNAVEstimate).where(
+                FundNAVEstimate.tenant_id == tenant_id,
+                FundNAVEstimate.symbol_id == fund.id,
+                FundNAVEstimate.estimate_method == ESTIMATE_METHOD_INDEX_TRACKING,
+                FundNAVEstimate.nav_official_date == nav_official_date,
+            )
+            result = await self.db.execute(stmt)
+            row = result.scalar_one_or_none()
+
+            now = datetime.now(UTC)
+            if row is None:
+                row = FundNAVEstimate(
+                    tenant_id=tenant_id,
+                    symbol_id=fund.id,
+                    estimate_timestamp=now,
+                )
+                self.db.add(row)
+
+            row.nav_official = nav_official
+            row.nav_official_date = nav_official_date
+            row.nav_estimate = nav_estimate
+            row.nav_estimate_deviation_percent = nav_estimate_deviation_percent
+            row.estimate_method = ESTIMATE_METHOD_INDEX_TRACKING
+            row.estimate_timestamp = now
+            row.underlying_index_symbol = (underlying_index_info or {}).get("symbol")
+            row.underlying_index_value = (underlying_index_info or {}).get("current_value")
+            row.underlying_index_change_percent = (underlying_index_info or {}).get("change_percent")
+
+            await self.db.commit()
+        except Exception as e:
+            logger.warning(f"Failed to persist NAV estimate for {fund.symbol}: {e}")
+            await self.db.rollback()
+
+    async def update_official_nav(self, tenant_id: str) -> int:
+        """Daily official NAV refresh (fund_nav_official_refresh job, 20:00
+        Asia/Shanghai, finance-tab.md §3.8.2).
+
+        Fetches the latest official unit NAV + NAV date for every active
+        type='fund' FinanceSymbol of the tenant via TiantianFundCollector
+        (EastMoney f10 lsjz API) and upserts one "official" row per
+        (fund, NAV date) into fund_nav_estimates — a re-run on the same day
+        updates the same row instead of duplicating it. System-tenant scoped
+        like the other display-chain refresh jobs. Never raises on collection
+        trouble: a failed/empty collector round logs and returns 0 so the
+        scheduled job survives; returns the number of funds updated.
+        """
+        stmt = select(FinanceSymbol).where(
+            FinanceSymbol.tenant_id == tenant_id,
+            FinanceSymbol.type == "fund",
+            FinanceSymbol.is_active,
+        )
+        result = await self.db.execute(stmt)
+        funds = list(result.scalars().all())
+        if not funds:
+            logger.info("update_official_nav: no fund symbols for tenant, nothing to do")
+            return 0
+
+        # Tiantian Fund addresses funds by bare 6-digit codes; symbols stored
+        # in other shapes (Yahoo suffixes, external tickers) are skipped.
+        code_map: dict[str, FinanceSymbol] = {}
+        for fund in funds:
+            code = self._normalize_fund_code(fund.symbol)
+            if code and code not in code_map:
+                code_map[code] = fund
+        if not code_map:
+            logger.info("update_official_nav: no fund symbols map to Chinese fund codes")
+            return 0
+
+        try:
+            from app.collectors.finance.fund_nav_collector import TiantianFundCollector
+
+            collector = TiantianFundCollector()
+            source = _MockSource(
+                tenant_id=tenant_id,
+                name=TiantianFundCollector.SOURCE_NAME,
+                config={"fund_codes": list(code_map)},
+            )
+            collection = await collector.collect(source)
+        except Exception as e:
+            logger.warning(f"update_official_nav: collector run failed: {e}")
+            return 0
+
+        if not collection.success or not collection.items:
+            logger.warning(
+                f"update_official_nav: collector returned no data "
+                f"(success={collection.success}, error={collection.error})"
+            )
+            return 0
+
+        updated = 0
+        now = datetime.now(UTC)
+        for item in collection.items:
+            fund = code_map.get(str(item.get("symbol")))
+            nav = item.get("nav")
+            nav_date_raw = item.get("nav_date")
+            if fund is None or not nav or not nav_date_raw:
+                continue
+            try:
+                nav_date = date.fromisoformat(str(nav_date_raw))
+            except ValueError:
+                logger.debug(f"update_official_nav: unparsable NAV date {nav_date_raw!r} for {fund.symbol}")
+                continue
+
+            upsert_stmt = select(FundNAVEstimate).where(
+                FundNAVEstimate.tenant_id == tenant_id,
+                FundNAVEstimate.symbol_id == fund.id,
+                FundNAVEstimate.estimate_method == ESTIMATE_METHOD_OFFICIAL,
+                FundNAVEstimate.nav_official_date == nav_date,
+            )
+            upsert_result = await self.db.execute(upsert_stmt)
+            row = upsert_result.scalar_one_or_none()
+            if row is None:
+                row = FundNAVEstimate(
+                    tenant_id=tenant_id,
+                    symbol_id=fund.id,
+                    estimate_timestamp=now,
+                )
+                self.db.add(row)
+
+            row.nav_official = nav
+            row.nav_official_date = nav_date
+            row.estimate_method = ESTIMATE_METHOD_OFFICIAL
+            row.estimate_timestamp = now
+            updated += 1
+
+        if updated:
+            await self.db.commit()
+            logger.info(f"update_official_nav: updated official NAV for {updated} fund(s)")
+        else:
+            logger.info("update_official_nav: collector items did not match any tracked fund")
+        return updated
+
+    @staticmethod
+    def _normalize_fund_code(symbol: str) -> str | None:
+        """Reduce a finance_symbols entry to a 6-digit Chinese fund code.
+
+        Tiantian Fund only addresses funds by bare 6-digit codes, so
+        Yahoo-style suffixes are stripped (510300.SS → 510300); anything that
+        does not end up as exactly 6 digits is not collectable and is skipped
+        by update_official_nav.
+        """
+        code = str(symbol or "").strip().upper()
+        for suffix in (".SS", ".SZ", ".OF"):
+            if code.endswith(suffix):
+                code = code[: -len(suffix)]
+                break
+        return code if len(code) == 6 and code.isdigit() else None
 
     async def get_watchlist(self, tenant_id: str, user_id: str) -> list[dict]:
         stmt = (

@@ -1,4 +1,10 @@
 <script setup lang="ts">
+// No "加入自选" entry on commodity rows (finance-tab.md §3.2): the watchlist API
+// resolves the {symbol} text against finance_symbols, but the commodities batch
+// path (_fetch_commodities_with_failover → Redis) never writes those symbols
+// (GC=F, CL=F, …) into the table and nothing seeds them, so the POST would fail
+// with 404 SymbolNotFound in the default environment. Revisit if the backend
+// starts persisting commodity symbols (or accepts unresolved symbols).
 import { useFinanceStore } from "@/stores/finance";
 import { formatCurrency, formatPercent, getChangeClass } from "@/utils/format";
 import { computed, ref } from "vue";

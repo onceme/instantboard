@@ -239,7 +239,7 @@ graph LR
 - 主内容区: FinanceSubNav (子面板切换) + FinanceGrid 动态内容
 - Overview 子面板: 三段式混合视图 — 自选摘要（top 5，空自选不渲染）+ MarketIndices + FinanceNewsPanel（`FinanceOverview.vue`，见 [finance-tab.md](finance-tab.md) §3.6.2）
 - 右侧面板 (≥1440px): WatchlistMini + FundNAV + FinanceNewsPanel（财经要闻）
-- 搜索交互: 选中结果打开 DetailDrawer 行情详情抽屉（近 5 日 sparkline、加入自选、SSE 联动），内联 QuoteCard 保留为快速预览（见 [finance-tab.md](finance-tab.md) §3.1）
+- 搜索交互: 选中结果打开 DetailDrawer 行情详情抽屉（近 5 日 sparkline、加入自选、SSE 联动），内联 QuoteCard 保留为快速预览并带「加入自选」星标按钮（加载/已加入 409 归一/已在自选中禁用/失败行内提示，见 [finance-tab.md](finance-tab.md) §3.1、§3.2）
 
 ### 3.6 Tab2 科技界面详细设计
 

@@ -83,7 +83,11 @@ async def search_symbols(tenant_id, q, type, market, page, page_size):
 6. 涨跌提醒阈值: PATCH /api/v1/finance/watchlist/{item_id} (见下方已实现说明)
 ```
 
-> ⚠️ **已知 bug**：「加入自选」链路当前损坏 — 前端 `financeStore.addToWatchlist` 发送 `{symbol}`（stores/finance.ts），而后端 `WatchlistItemCreate` 必填 `symbol_id`（UUID，schemas/finance.py），请求必然 422；且目前没有任何组件调用该 action，界面上不存在可见的"加入自选"入口。
+> ✅ **已实现**：「加入自选」链路 —— 契约已修复：`WatchlistItemCreate` 现接受 `symbol_id` 或 `symbol` 二选一（校验至少其一），文本入参由 `add_to_watchlist` 对 `finance_symbols` 大小写不敏感解析为 `symbol_id`；入口已接入全部行情展示面（`financeStore.addToWatchlist` 发送 `{symbol}`）——
+> - **入口清单**：`DetailDrawer` 全宽按钮（见 §3.1）+ `QuoteCard` 头部星标图标按钮（搜索内联预览卡，24px 图标按钮，与 Watchlist 行内操作按钮同款视觉）；`WatchlistMini` / `OverviewWatchlistSummary` 展示的本就是自选条目，无需入口
+> - **状态机**：idle → loading（请求在途，按钮禁用、图标换 Loader）→ added（成功 → 实心星标 + 行内提示「已加入自选」）；若 symbol 已在 `financeStore.watchlist` 中则为「已在自选中」禁用态（响应式：经其他入口添加后自动切换）
+> - **409 归一**：跨会话重复添加返回 `DuplicateWatchlistItem`（409），前端归一为与成功相同的「已在自选中」禁用态、不报错；其余失败行内提示错误信息（`getApiErrorMessage`），按钮恢复可点
+> - **有意跳过的展示面**：`MarketIndices` / `Commodities` 行未加入口——后端文本入参需命中 `finance_symbols` 表，而指数/商品的批量链路（failover 拉取 → Redis 缓存）**不把这些 symbol（`^GSPC`/`GC=F` 等）写入该表**、亦无种子数据，默认环境下 POST 必然 404 SymbolNotFound；两组件已留注释说明，待后端持久化这些 symbol（或接受未解析 symbol）后再评估
 
 > ✅ **已实现**：拖拽排序（`Watchlist.vue` + `financeStore.reorderWatchlist`）——
 > - **契约**：前端发送后端 `WatchlistReorderRequest` 要求的 `{items: [{item_id, display_order}]}`（display_order **0 起始**按新顺序递增），旧 `{item_ids: string[]}` 契约已废弃；后端响应 `SuccessResponse(data={"message": "Watchlist order updated"})`（仅确认，不回传列表，成功后前端以同一 display_order 本地落序）

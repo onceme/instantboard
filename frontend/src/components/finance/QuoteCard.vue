@@ -6,12 +6,18 @@ import {
   formatVolume,
   getChangeClass,
 } from "@/utils/format";
-import { computed } from "vue";
+import { computed, ref, watch } from "vue";
+import { Loader2, Star } from "lucide-vue-next";
+import axios from "axios";
+import { useFinanceStore } from "@/stores/finance";
+import { getApiErrorMessage } from "@/utils/api";
 
 const props = defineProps<{
   quote: FinanceQuote;
   showSparkline?: boolean;
 }>();
+
+const financeStore = useFinanceStore();
 
 const changeColorClass = computed(() => {
   const cls = getChangeClass(props.quote.change_percent);
@@ -19,6 +25,70 @@ const changeColorClass = computed(() => {
   if (cls === "down") return "change-down";
   return "change-neutral";
 });
+
+// Watchlist action mirrors DetailDrawer's contract (finance-tab.md §3.2):
+// POST {symbol} text, backend resolves against finance_symbols; a 409 from
+// another session is normalized to the same "already in watchlist" state.
+type WatchlistState = "idle" | "loading" | "added" | "failed";
+const watchlistState = ref<WatchlistState>("idle");
+const watchlistError = ref<string | null>(null);
+
+const inWatchlist = computed(() =>
+  financeStore.watchlist.some((item) => item.symbol === props.quote.symbol),
+);
+
+const watchlistDisabled = computed(
+  () =>
+    inWatchlist.value ||
+    watchlistState.value === "added" ||
+    watchlistState.value === "loading",
+);
+
+const watchlistAdded = computed(
+  () => inWatchlist.value || watchlistState.value === "added",
+);
+
+const watchlistAriaLabel = computed(() => {
+  if (watchlistAdded.value) return "已在自选中";
+  if (watchlistState.value === "loading") return "加入中…";
+  return "加入自选";
+});
+
+const watchlistHint = computed(() => {
+  if (watchlistState.value === "added") return "已加入自选";
+  if (watchlistState.value === "failed") return watchlistError.value ?? "";
+  return "";
+});
+
+// The card instance is reused across search selections (same component,
+// new quote prop), so per-symbol action state must reset on symbol switch.
+watch(
+  () => props.quote.symbol,
+  () => {
+    watchlistState.value = "idle";
+    watchlistError.value = null;
+  },
+);
+
+async function addToWatchlist() {
+  if (watchlistDisabled.value) return;
+  watchlistState.value = "loading";
+  watchlistError.value = null;
+  try {
+    await financeStore.addToWatchlist(props.quote.symbol);
+    watchlistState.value = "added";
+  } catch (err) {
+    if (axios.isAxiosError(err) && err.response?.status === 409) {
+      watchlistState.value = "added";
+    } else {
+      watchlistState.value = "failed";
+      watchlistError.value = getApiErrorMessage(
+        err,
+        "加入自选失败，请稍后重试。",
+      );
+    }
+  }
+}
 </script>
 
 <template>
@@ -28,10 +98,40 @@ const changeColorClass = computed(() => {
         <span class="symbol">{{ quote.symbol }}</span>
         <span class="name text-truncate">{{ quote.name }}</span>
       </div>
-      <div v-if="quote.type" class="quote-type">
-        {{ quote.type }}
+      <div class="header-actions">
+        <div v-if="quote.type" class="quote-type">
+          {{ quote.type }}
+        </div>
+        <button
+          type="button"
+          class="watchlist-btn"
+          :class="{ 'watchlist-added': watchlistAdded }"
+          :disabled="watchlistDisabled"
+          :title="watchlistAriaLabel"
+          :aria-label="watchlistAriaLabel"
+          @click="addToWatchlist"
+        >
+          <Loader2
+            v-if="watchlistState === 'loading'"
+            :size="14"
+            class="spinning"
+          />
+          <Star
+            v-else
+            :size="14"
+            :fill="watchlistAdded ? 'currentColor' : 'none'"
+          />
+        </button>
       </div>
     </div>
+
+    <p
+      v-if="watchlistHint"
+      class="watchlist-hint"
+      :class="watchlistState === 'failed' ? 'hint-error' : 'hint-success'"
+    >
+      {{ watchlistHint }}
+    </p>
 
     <div class="quote-price">
       <span class="current-price">{{
@@ -121,12 +221,71 @@ const changeColorClass = computed(() => {
   max-width: 200px;
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .quote-type {
   font-size: 12px;
   color: var(--text-muted);
   padding: 2px 8px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
+}
+
+/* Same 24px icon-button convention as Watchlist row actions (alert-btn etc.) */
+.watchlist-btn {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.watchlist-btn:hover:not(:disabled) {
+  color: var(--accent);
+  background-color: var(--bg-hover);
+}
+
+.watchlist-btn.watchlist-added {
+  color: var(--accent);
+  cursor: not-allowed;
+}
+
+.watchlist-btn:disabled:not(.watchlist-added) {
+  cursor: wait;
+}
+
+.spinning {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.watchlist-hint {
+  margin-top: -6px;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+
+.hint-success {
+  color: var(--text-muted);
+}
+
+.hint-error {
+  color: var(--danger);
 }
 
 .quote-price {

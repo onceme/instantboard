@@ -1,4 +1,10 @@
 <script setup lang="ts">
+// No "加入自选" entry on index rows (finance-tab.md §3.2): the watchlist API
+// resolves the {symbol} text against finance_symbols, but the market-indices
+// batch path (_fetch_indices_with_failover → Redis) never writes those symbols
+// (^GSPC, 000001.SS, …) into the table and nothing seeds them, so the POST
+// would fail with 404 SymbolNotFound in the default environment. Revisit if the
+// backend starts persisting index symbols (or accepts unresolved symbols).
 import { useFinanceStore } from "@/stores/finance";
 import { formatNumber, formatPercent, getChangeClass } from "@/utils/format";
 import { computed, ref } from "vue";

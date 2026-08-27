@@ -1,5 +1,5 @@
 ---
-version: 1.3
+version: 1.4
 author: designer
 date: 2026-08-27
 status: revised
@@ -74,9 +74,11 @@ CREATE INDEX idx_users_sso ON users(sso_provider, sso_provider_id);
 -- 应用层通过 ENABLED_SSO_PROVIDERS 环境变量控制哪些 SSO 提供商可被使用,
 -- 数据库约束保留全部值以确保向后兼容。
 
--- 注意: preferences 列由 create_all 在全新库上自动建出 (项目尚无 Alembic 迁移,
--- tables 靠 app/db/init_db.py create_tables); 存量库需手工执行:
+-- 注意: preferences 列在全新库上由 baseline 迁移 (versions/bb1a61d49502)
+-- 或 create_all 建出；引入该列之前建库的存量库仍需手工补齐:
 --   ALTER TABLE users ADD COLUMN preferences jsonb NOT NULL DEFAULT '{}';
+-- 补齐全库schema与baseline一致后 `alembic stamp bb1a61d49502` 接入迁移
+-- 链路（见 §3.4）。
 
 -- ============================================
 -- 分类与数据源
@@ -236,7 +238,10 @@ CREATE INDEX idx_finance_quotes_tenant ON finance_quotes(tenant_id);
 -- 选项，建为普通表。
 --
 -- 分区供给 (app/db/partitions.py::ensure_quote_partitions，PG-only，幂等):
---  - 新库建表后由 create_tables 自动供给上月/当月/下月分区，命名
+--  - 新库建表后供给上月/当月/下月分区。两条建表路径都会调用:
+--    create_tables 路径在 create_all 后立即调用; Alembic 迁移路径由
+--    entrypoint.sh 在 upgrade head 成功后调用（baseline 迁移只建分区父表,
+--    月分区是运行时状态, 不写死进迁移文件）。命名
 --    finance_quotes_y{yyyy}m{mm}，范围半开 [UTC 月初, 下次月初)；
 --  - 并发启动竞争（check 与 CREATE 之间被抢先建出）按 42P07 (duplicate_table) 容错；
 --  - finance_quotes 已存在为普通表（存量库）时建表无法修改既有表，记警告跳过，
@@ -464,21 +469,54 @@ CREATE INDEX idx_dashboard_snapshots_time ON dashboard_snapshots(tenant_id, time
 
 ### 3.4 数据迁移策略
 
-**规划工具**: Alembic (SQLAlchemy 生态标准)
+**工具**: Alembic (SQLAlchemy 生态标准) — ✅ **已实现**（2026-08-27，baseline + upgrade-first 启动）
 
-> ⚠️ **未实现**：迁移体系尚未建立。`backend/app/alembic/` 目录下只有 `alembic.ini` 与
-> `env.py`，**没有 `versions/` 目录、没有任何迁移脚本**。实际的建表入口是容器启动时
-> `entrypoint.sh` 检测到不存在可用迁移，回退执行 `init_db.create_tables()`
-> （即 `Base.metadata.create_all`）。
+**迁移体系**:
 
-**待办（建立迁移体系）**:
-1. `alembic revision --autogenerate -m "baseline"` 生成基线迁移（= 当前 12 张表）并人工复核
-2. `entrypoint.sh` 改为优先 `alembic upgrade head`，仅在无迁移时回退 `create_tables()`
-3. 无损迁移: 添加列/表可在线执行；有损迁移: 先添加新列 → 数据迁移 → 再删除旧列（多步）
-4. MongoDB 不涉及迁移工具（schema-free，直接修改应用代码）
+- 目录: `app/alembic/` = `alembic.ini` + `env.py` + `script.py.mako` + `versions/`
+- `env.py`: 异步引擎（asyncpg + `connection.run_sync` + `asyncio.run`），
+  `target_metadata = Base.metadata`，`compare_type=True`；**必须 import `app.models`
+  包**（只 import `app.models.base` 时 metadata 为空，autogenerate 检测不到任何表）。
+  数据库 URL 运行时取自 `settings.database_url`（覆盖 ini 中的占位值），因此
+  `alembic -c app/alembic/alembic.ini ...` 始终作用于当前环境配置的库
+- Baseline 迁移 `versions/bb1a61d49502_baseline_schema.py` = 当前 12 张表全集
+  （tenants/users/categories/sources/source_health/items/finance_symbols/
+  fund_nav_estimates/watchlist_items/finance_quotes/dashboard_snapshots/
+  sse_connections）。在干净 PG 库上 `revision --autogenerate` 生成后人工复核，
+  `alembic upgrade head` 应用，并与 `create_all` 建出的 schema 做了
+  `pg_dump` 对比——逐字一致（仅多 `alembic_version` 表）。`downgrade()` 为
+  逆序 drop 全部表
 
-**现状风险**: `create_tables()` 不会修改已存在的表——模型变更（新增列、约束扩展等）在存量
-数据库上**不会自动生效**，需手工执行 DDL（示例见 admin-login.md §6 的 CHECK 约束手工变更）。
+**启动链路（upgrade-first）**: `entrypoint.sh` 检测 `versions/` 是否含迁移脚本：
+
+- 有迁移 → `alembic upgrade head`（失败回退 `create_tables()`）；upgrade 成功后
+  补一次 `ensure_quote_partitions()` 供给月分区——迁移只建分区父表
+  （`PARTITION BY RANGE (timestamp)`），具体月分区是运行时状态（见 §3.1）
+- 无迁移（versions 为空）→ 保持旧行为，回退 `init_db.create_tables()`
+  （`Base.metadata.create_all` + 分区供给）
+- `main.py` lifespan 与 worker 启动的 `create_tables()` 调用保留：`create_all`
+  checkfirst 跳过已存在表、`ensure_quote_partitions` 幂等，两条路径互为兜底
+
+**新增迁移流程**: `make makemigration msg="描述"`（= `alembic -c
+app/alembic/alembic.ini revision --autogenerate -m "..."`）→ **人工审查** →
+`make migrate`（= `upgrade head`）。autogenerate 盲区（本次已逐项核对，以后每次
+复核时对照）：
+
+- 分区: `postgresql_partition_by` 与复合主键 `(id, timestamp)` 本次被捕获，但
+  **月度分区 DDL 永远不会**出现在迁移里——分区供给始终走
+  `ensure_quote_partitions` + 每日 00:30 UTC 滚动任务（时间边界不可写死进迁移）
+- CHECK 约束、JSONB `server_default`（`'{}'::jsonb` 等）、部分索引
+  （`postgresql_where`）、GIN 索引、`52_week_high` 这类需引号的列名——本次均被
+  捕获，但 autogenerate 对 server_default 的方言差异并不可靠，逐表对照模型审查
+- 存量库接入: 已由 `create_all` 建库且 schema 与 baseline 等价的，执行
+  `alembic stamp bb1a61d49502` 标记已迁移，后续增量迁移在其上执行
+- 无损迁移（加列/加表）可在线执行；有损迁移多步走（加新列 → 数据迁移 → 删旧列）
+- MongoDB 不涉及迁移工具（schema-free，直接修改应用代码）
+
+**历史风险（已收敛）**: `create_tables()` 不修改已存在的表——引入迁移体系前，
+模型变更在存量库上不会自动生效（如 admin-login.md §6 的 CHECK 约束手工变更）。
+现在模型变更一律走"改模型 → `make makemigration` → 审查 → `make migrate`"；
+`create_tables()` 仅作无迁移时的兜底，不再承担 schema 演进。
 
 ### 3.5 多租户数据隔离方案
 
@@ -528,7 +566,7 @@ CREATE POLICY tenant_isolation ON categories
 | 多租户隔离 | 行级隔离 + RLS（**RLS 未实现**，当前纯应用层隔离，见 §3.5） | 共享数据库成本最低、运维简单 |
 | 历史行情存储 | PostgreSQL 近期 (初始版本) | 初始版本仅用PostgreSQL分区存储近期行情，历史数据归档策略后续优化；MongoDB时序存储为后续版本可选增强 |
 | 去重策略 | PostgreSQL UNIQUE + Redis Set | 双重保障：PG持久化去重、Redis快速去重 |
-| 是否分区 | finance_quotes 按月 RANGE(timestamp) 分区 ✅ 已实现（新库 `create_tables` 自动建分区父表并供给上月/当月/下月分区；调度每日 00:30 UTC 滚动补下月；存量普通表需手工重建，见 §3.1） | 行情数据量大，分区查询性能好 |
+| 是否分区 | finance_quotes 按月 RANGE(timestamp) 分区 ✅ 已实现（新库经 baseline 迁移或 `create_tables` 建分区父表，`ensure_quote_partitions` 供给上月/当月/下月分区；调度每日 00:30 UTC 滚动补下月；存量普通表需手工重建，见 §3.1） | 行情数据量大，分区查询性能好 |
 | 连接池 | SQLAlchemy async session + pool | FastAPI async 需要异步连接池 |
 
 ## 5. 边界情况
@@ -536,7 +574,11 @@ CREATE POLICY tenant_isolation ON categories
 - **数据库连接失败**: FastAPI lifespan 中检测连接，失败时返回 503
 - **Redis 不可用**: 降级为直接 PostgreSQL 查询，SSE 降级为 REST 拉取
 - **MongoDB 不可用**: 初始版本不启用MongoDB，原始内容存储使用PostgreSQL JSONB字段 (items.extra_data)；后续版本启用MongoDB时，MongoDB不可用降级为PostgreSQL JSONB字段
-- **迁移冲突**: 迁移体系尚未建立（见 §3.4），当前 `create_tables()` 依赖 IF NOT EXISTS 语义可重复执行；未来启用 Alembic 后，多 worker 同时启动依赖 `alembic upgrade head` 的幂等性，只有一个成功执行
+- **迁移冲突**: 迁移体系已建立（见 §3.4），启动走 upgrade-first。多实例并发启动都执行
+  `alembic upgrade head`：先完成者落库（PG 事务性 DDL），后者冲突失败时经
+  `entrypoint.sh` 回退 `create_tables()`（IF NOT EXISTS 语义，schema 等价）；
+  `alembic_version` 表保证已执行的迁移不会重放。生产建议滚动发布时先让一个实例
+  完成 migrate 再扩容
 - **大表查询**: items 表可能百万级，依赖索引 + 分页，不使用全量查询
 
 ## 6. 与其他模块的依赖

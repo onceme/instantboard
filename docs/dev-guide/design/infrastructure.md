@@ -1,7 +1,7 @@
 ---
-version: 1.1
+version: 1.2
 author: designer
-date: 2026-08-24
+date: 2026-08-27
 status: reviewed
 cross_refs: [architecture.md, database.md, security.md]
 ---
@@ -36,7 +36,7 @@ instantboard/
 │   │   ├── main.py               # FastAPI 入口 (app 创建、路由注册、lifespan)
 │   │   ├── config.py             # ⚠️ 单文件 Pydantic BaseSettings（无 app/config/ 目录）
 │   │   ├── dependencies.py       # FastAPI 依赖 (get_db / get_optional_token / ...)
-│   │   ├── alembic/              # alembic.ini + env.py；⚠️ 无 versions/ 目录（无任何迁移脚本）
+│   │   ├── alembic/              # alembic.ini + env.py + script.py.mako + versions/（baseline 迁移 bb1a61d49502）
 │   │   ├── api/
 │   │   │   ├── router.py         # v1 路由汇总（注册 9 个模块, router.py:15-23）
 │   │   │   └── v1/
@@ -104,7 +104,7 @@ instantboard/
 │   ├── requirements/             # base.txt / dev.txt / prod.txt
 │   ├── pyproject.toml            # 元数据 + ruff + pytest + mypy 配置
 │   ├── Dockerfile                # ⚠️ 在 backend/ 根（多阶段: development / production）
-│   └── entrypoint.sh             # 容器入口（含 create_tables / alembic -c 正确用法）
+│   └── entrypoint.sh             # 容器入口（upgrade-first：alembic upgrade head + ensure_quote_partitions，无迁移时回退 create_tables）
 ├── frontend/
 │   ├── index.html                # ⚠️ SPA 入口在 frontend/ 根（非 public/）
 │   ├── src/
@@ -151,7 +151,7 @@ instantboard/
     └── deployment.md             # 部署指南（⚠️ 无 docs/api/ 目录）
 ```
 
-> ⚠️ **未实现**：Alembic 迁移体系——`app/alembic/` 仅有 `alembic.ini + env.py`，无 `versions/` 目录、无任何迁移脚本；建表依赖 `entrypoint.sh` 的 `create_tables()`。
+> ✅ **已实现**（2026-08-27）：Alembic 迁移体系——`app/alembic/` 含 `alembic.ini + env.py + script.py.mako + versions/`，baseline 迁移 `versions/bb1a61d49502_baseline_schema.py`（12 张表，autogenerate 后人工复核、与 `create_all` 的 `pg_dump` schema 对比一致）；`entrypoint.sh` upgrade-first：有迁移 → `alembic upgrade head` + `ensure_quote_partitions()` 补分区，无迁移 → 回退 `create_tables()`。详见 database.md §3.4。
 
 ### 3.2 Git 仓库初始化策略
 
@@ -588,8 +588,9 @@ build-prod
 
 # 数据库
 migrate / makemigration
-# ⚠️ 已知问题: 二者均未带 -c app/alembic/alembic.ini，从容器工作目录执行会找不到配置；
-# 正确用法参见 backend/entrypoint.sh:46
+# ✅ 均带 -c app/alembic/alembic.ini（已修复）：优先 compose exec api 容器内执行，
+# 回退宿主机 backend/ 目录；启动链路 upgrade-first（entrypoint.sh：有迁移 →
+# upgrade head + ensure_quote_partitions 补分区；无迁移 → create_tables 回退）
 seed:                       # 实际执行 python -c "from app.db.init_db import init_db; ..."（Makefile:143-145，非 manage.py）
 gen-admin-hash              # 生成 ADMIN_PASSWORD_HASH（PASS=... 或交互式）
 
@@ -599,7 +600,7 @@ prod-up / prod-down / prod-logs
 local-dev / local-dev-backend / local-dev-frontend
 ```
 
-> ⚠️ **未实现**：`frontend-build`（npm 生产构建）目标不存在——`build-frontend` 是构建前端 **Docker 镜像**；`test-e2e` 无任何用例；git hooks / Alembic 迁移脚本见上文对应标注。
+> ⚠️ **未实现**：`frontend-build`（npm 生产构建）目标不存在——`build-frontend` 是构建前端 **Docker 镜像**；`test-e2e` 无任何用例；git hooks 未落地。Alembic 迁移体系已建立（baseline + upgrade-first 启动，见 database.md §3.4）。
 
 ## 4. 关键决策
 

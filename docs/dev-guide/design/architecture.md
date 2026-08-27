@@ -1,7 +1,7 @@
 ---
-version: 1.1
+version: 1.2
 author: designer
-date: 2026-08-24
+date: 2026-08-27
 status: reviewed
 cross_refs: [infrastructure.md, api.md, database.md, data-flow.md, frontend.md]
 ---
@@ -142,7 +142,7 @@ graph TD
         Biz --> Infra
     end
     subgraph BackendOther["测试与迁移"]
-        Tests["backend/tests/ — unit + integration"] ~~~ Alembic["app/alembic/ — 迁移脚手架 (无 versions/)"]
+        Tests["backend/tests/ — unit + integration"] ~~~ Alembic["app/alembic/ — Alembic 迁移, 含 versions/ baseline"]
     end
     Backend ~~~ BackendOther
 ```

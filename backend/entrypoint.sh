@@ -47,6 +47,14 @@ if [ "$ALEMBIC_HAS_MIGRATIONS" = "true" ] && [ -f "app/alembic/alembic.ini" ]; t
     echo "Alembic migration failed, falling back to create_all..."
     python -c "from app.db.init_db import create_tables; import asyncio; asyncio.run(create_tables())"
   }
+  # The baseline migration creates finance_quotes as a partitioned parent
+  # (PARTITION BY RANGE (timestamp)) but never creates the month partitions:
+  # inserts fail until they exist. ensure_quote_partitions is the same
+  # idempotent PG-only supplier that create_tables calls on the fallback path
+  # (app/db/partitions.py), so the migration path ends up with the identical
+  # prev/current/next month partitions. Running it again is a no-op.
+  echo "Supplying finance_quotes month partitions..."
+  python -c "from app.db.partitions import ensure_quote_partitions; import asyncio; asyncio.run(ensure_quote_partitions())"
 else
   echo "No Alembic migrations found (empty versions directory), creating tables via SQLAlchemy..."
   python -c "from app.db.init_db import create_tables; import asyncio; asyncio.run(create_tables())"

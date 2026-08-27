@@ -18,7 +18,7 @@ cross_refs: [architecture.md, api.md, database.md, infrastructure.md, admin-logi
 
 > 📌 **现状提示（2026-08-24 审计修订）**：本文档为"设计 + 现状"混合文档——尚未落地的防护层
 > （Nginx 限流、CSP、应用层限流、IP 黑名单、请求验证、Origin/Referer 校验、OAuth state 校验、
-> RLS、email_verified 校验等）均已在对应小节加 `⚠️ 未实现` 标注，规划内容保留作为路线图；
+> RLS 等）均已在对应小节加 `⚠️ 未实现` 标注，规划内容保留作为路线图；
 > 代码已实现但此前未记录的机制统一补充在 §3.9。
 
 ## 3. 详细设计
@@ -216,8 +216,11 @@ SCOPE = "openid email profile"
 # 特殊要点:
 # - 必须在 Google Cloud Console 创建 OAuth 2.0 Client
 # - 支持 HD 参数限制组织域名 (企业租户)
-# - Token 包含 email_verified 字段，必须验证 —— ⚠️ 未实现：代码仅读取该字段存入
-#   SSOUserInfo，从未检查其值（sso_handlers.py:136、services/auth.py:292-364），待补
+# - Token 包含 email_verified 字段，必须验证 —— ✅ 已实现：`sso_login` 对 provider='google'
+#   强制校验——email_verified 显式为 False 时拒绝登录（400 VALIDATION_ERROR，
+#   消息 "Google account email is not verified"，在查库/建用户之前拦截）；字段缺失
+#   (None) 按放行处理（向后兼容）；非 Google 提供商不受影响
+#   （app/services/auth.py sso_login、app/core/sso_handlers.py GoogleSSOHandler，见 §3.4 说明）
 # - Refresh token 仅在首次授权时返回
 ```
 
@@ -333,7 +336,7 @@ class SSOUserInfo:
     email: str | None
     name: str | None
     avatar_url: str | None
-    email_verified: bool
+    email_verified: bool | None  # None=提供商未返回；仅 Google 登录时强制校验（见 §3.4 Google 要点）
     raw_data: dict         # 提供商返回的原始数据
 ```
 

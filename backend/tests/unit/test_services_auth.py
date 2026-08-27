@@ -13,6 +13,7 @@ from app.core.exceptions import (
     SSOProviderError,
     ValidationError,
 )
+from app.schemas.base import ErrorCode
 from app.services.auth import AuthService
 
 
@@ -49,7 +50,12 @@ def _make_tenant(tenant_id=None, slug="default", name="Default Tenant"):
 
 
 def _make_sso_user_info(
-    provider_id="12345", email="user@example.com", name="SSO User", avatar_url=None, provider="google"
+    provider_id="12345",
+    email="user@example.com",
+    name="SSO User",
+    avatar_url=None,
+    provider="google",
+    email_verified=None,
 ):
     info = MagicMock()
     info.provider_id = provider_id
@@ -57,6 +63,7 @@ def _make_sso_user_info(
     info.name = name
     info.avatar_url = avatar_url
     info.provider = provider
+    info.email_verified = email_verified
     return info
 
 
@@ -180,6 +187,106 @@ class TestSSOLogin:
         service = AuthService(db, redis)
         with pytest.raises(InvalidOAuthCode, match="no user ID"):
             await service.sso_login("google", "code", "https://redirect.example.com")
+
+    @patch("app.services.auth.SSOHandlerFactory")
+    async def test_sso_login_google_email_unverified_rejected(self, mock_factory):
+        """Google login with email_verified=False must be rejected with 400
+        VALIDATION_ERROR before any user lookup/provisioning happens (security.md §3.4)."""
+        db, _ = _mock_db_session()
+        redis = _mock_redis()
+        handler = AsyncMock()
+        sso_info = _make_sso_user_info(email_verified=False)
+        handler.authenticate = AsyncMock(return_value=sso_info)
+        handler.close = AsyncMock()
+        mock_factory.create.return_value = handler
+
+        service = AuthService(db, redis)
+        with (
+            patch("app.services.auth.AuthService._get_or_create_user", new_callable=AsyncMock) as mock_get_or_create,
+            pytest.raises(ValidationError) as exc_info,
+        ):
+            await service.sso_login("google", "code", "https://redirect.example.com")
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.error_code == ErrorCode.VALIDATION_ERROR
+        assert exc_info.value.error_message == "Google account email is not verified"
+        mock_get_or_create.assert_not_called()
+        handler.close.assert_called_once()
+
+    @patch("app.services.auth.redis_set")
+    @patch("app.services.auth.create_refresh_token", return_value="refresh_tok")
+    @patch("app.services.auth.create_access_token", return_value="access_tok")
+    @patch("app.services.auth.SSOHandlerFactory")
+    async def test_sso_login_google_email_verified_allowed(
+        self, mock_factory, mock_create_access, mock_create_refresh, mock_redis_set
+    ):
+        """Google login with email_verified=True proceeds normally."""
+        db, _ = _mock_db_session()
+        redis = _mock_redis()
+        user = _make_user()
+
+        with patch("app.services.auth.AuthService._get_or_create_user", new_callable=AsyncMock, return_value=user):
+            handler = AsyncMock()
+            sso_info = _make_sso_user_info(email_verified=True)
+            handler.authenticate = AsyncMock(return_value=sso_info)
+            handler.close = AsyncMock()
+            mock_factory.create.return_value = handler
+
+            service = AuthService(db, redis)
+            result = await service.sso_login("google", "code123", "https://redirect.example.com")
+
+            assert result["access_token"] == "access_tok"
+            assert result["user"]["email"] == user.email
+
+    @patch("app.services.auth.redis_set")
+    @patch("app.services.auth.create_refresh_token", return_value="refresh_tok")
+    @patch("app.services.auth.create_access_token", return_value="access_tok")
+    @patch("app.services.auth.SSOHandlerFactory")
+    async def test_sso_login_google_email_verified_none_allowed(
+        self, mock_factory, mock_create_access, mock_create_refresh, mock_redis_set
+    ):
+        """email_verified=None (field absent from the provider payload) passes for
+        backward compatibility."""
+        db, _ = _mock_db_session()
+        redis = _mock_redis()
+        user = _make_user()
+
+        with patch("app.services.auth.AuthService._get_or_create_user", new_callable=AsyncMock, return_value=user):
+            handler = AsyncMock()
+            sso_info = _make_sso_user_info(email_verified=None)
+            handler.authenticate = AsyncMock(return_value=sso_info)
+            handler.close = AsyncMock()
+            mock_factory.create.return_value = handler
+
+            service = AuthService(db, redis)
+            result = await service.sso_login("google", "code123", "https://redirect.example.com")
+
+            assert result["access_token"] == "access_tok"
+
+    @patch("app.services.auth.redis_set")
+    @patch("app.services.auth.create_refresh_token", return_value="refresh_tok")
+    @patch("app.services.auth.create_access_token", return_value="access_tok")
+    @patch("app.services.auth.SSOHandlerFactory")
+    async def test_sso_login_non_google_email_unverified_not_checked(
+        self, mock_factory, mock_create_access, mock_create_refresh, mock_redis_set
+    ):
+        """The email_verified enforcement applies to Google only; other providers are
+        unaffected even when their handler reports email_verified=False."""
+        db, _ = _mock_db_session()
+        redis = _mock_redis()
+        user = _make_user(sso_provider="github")
+
+        with patch("app.services.auth.AuthService._get_or_create_user", new_callable=AsyncMock, return_value=user):
+            handler = AsyncMock()
+            sso_info = _make_sso_user_info(provider="github", email_verified=False)
+            handler.authenticate = AsyncMock(return_value=sso_info)
+            handler.close = AsyncMock()
+            mock_factory.create.return_value = handler
+
+            service = AuthService(db, redis)
+            result = await service.sso_login("github", "code123", "https://redirect.example.com")
+
+            assert result["access_token"] == "access_tok"
 
 
 class TestRefreshToken:

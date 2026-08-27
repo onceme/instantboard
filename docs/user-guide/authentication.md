@@ -14,6 +14,10 @@
 
 > 所有提供商的代码实现均已保留，通过 `ENABLED_SSO_PROVIDERS` 环境变量控制启用/禁用，这是**配置驱动**而非代码删除。
 
+> 🔐 **Google 登录要求邮箱已验证**：若 Google 账号的 `email_verified` 为 `false`，`POST /api/v1/auth/sso/google` 会返回
+> `400 VALIDATION_ERROR`（消息 `Google account email is not verified`）并拒绝登录；字段缺失时按放行处理（向后兼容）。
+> 其他提供商不受此校验影响。
+
 **SSO 配置示例**：
 
 ```bash

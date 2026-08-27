@@ -22,7 +22,10 @@ class SSOUserInfo:
     email: str | None
     name: str | None
     avatar_url: str | None
-    email_verified: bool
+    # None = the provider did not report this field (unknown). Only provider='google'
+    # is enforced on login (False rejects, None passes for backward compatibility);
+    # see AuthService.sso_login and security.md §3.4.
+    email_verified: bool | None
     raw_data: dict
 
     def __init__(
@@ -32,7 +35,7 @@ class SSOUserInfo:
         email: str | None = None,
         name: str | None = None,
         avatar_url: str | None = None,
-        email_verified: bool = False,
+        email_verified: bool | None = None,
         raw_data: dict | None = None,
     ):
         self.provider = provider
@@ -127,13 +130,25 @@ class GoogleSSOHandler(BaseSSOHandler):
             logger.error("Google userinfo failed: status=%d", response.status_code)
             raise ValueError(f"Google userinfo request failed: {response.status_code}")
         data = response.json()
+        # Preserve None when the field is absent so AuthService.sso_login can tell
+        # "not reported" (pass, backward compatible) apart from an explicit False
+        # (reject); see security.md §3.4. Strings are coerced defensively like the
+        # Apple handler does.
+        raw_verified = data.get("email_verified")
+        email_verified: bool | None
+        if isinstance(raw_verified, bool):
+            email_verified = raw_verified
+        elif isinstance(raw_verified, str):
+            email_verified = raw_verified.lower() == "true"
+        else:
+            email_verified = None
         return SSOUserInfo(
             provider="google",
             provider_id=data.get("sub", ""),
             email=data.get("email"),
             name=data.get("name"),
             avatar_url=data.get("picture"),
-            email_verified=data.get("email_verified", False),
+            email_verified=email_verified,
             raw_data=data,
         )
 

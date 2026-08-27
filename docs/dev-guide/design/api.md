@@ -154,6 +154,10 @@ Response 200:
 Response 400:
   { "success": false, "error": { "code": "INVALID_OAUTH_CODE", ... } }    // 授权码无效
   { "success": false, "error": { "code": "VALIDATION_ERROR", ... } }      // provider 不受支持 / 未启用
+  { "success": false, "error": { "code": "VALIDATION_ERROR", ... } }      // Google 账号邮箱未验证
+                                                                           // (email_verified=false 显式拒绝，消息
+                                                                           //  "Google account email is not verified"，
+                                                                           //  字段缺失按放行；仅 google 生效，无独立错误码)
 
 Response 502:
   { "success": false, "error": { "code": "SSO_PROVIDER_ERROR", ... } }    // 上游提供商自身故障
@@ -1181,7 +1185,7 @@ GET /api/v1/health/detail — 依赖深度检查 (不需要认证, health.py:22)
 
 | 错误码 | HTTP 状态码 | 含义 |
 |--------|-----------|------|
-| VALIDATION_ERROR | 400 | 请求参数验证失败（含 SSO provider 未启用/不受支持——无独立错误码） |
+| VALIDATION_ERROR | 400 | 请求参数验证失败（含 SSO provider 未启用/不受支持、Google 账号邮箱未验证 `email_verified=false` 拒绝登录——均无独立错误码） |
 | INVALID_OAUTH_CODE | 400 | OAuth 授权码无效 |
 | NO_COLLECTOR_AVAILABLE | 400 | 激活数据源时无可用采集器（新增） |
 | AUTH_REQUIRED | 401 | 需要认证 |

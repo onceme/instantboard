@@ -61,7 +61,9 @@ class TestSSOUserInfo:
         assert info.email is None
         assert info.name is None
         assert info.avatar_url is None
-        assert info.email_verified is False
+        # None = provider did not report the field (unknown); only Google is enforced
+        # on login and None passes there for backward compatibility.
+        assert info.email_verified is None
         assert info.raw_data == {}
 
     def test_email_verified_default(self):
@@ -336,6 +338,61 @@ class TestGoogleSSOHandler:
 
         with pytest.raises(ValueError, match="Google userinfo request failed"):
             await handler.get_user_info(SSOTokenResponse("at123"))
+
+    async def test_get_user_info_email_verified_false(self):
+        """An explicit email_verified=False from Google must be preserved as-is so the
+        login can be rejected (security.md §3.4)."""
+        handler = GoogleSSOHandler()
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "sub": "user123",
+            "email": "test@gmail.com",
+            "email_verified": False,
+        }
+
+        mock_client = _make_mock_client()
+        mock_client.get.return_value = mock_response
+        handler._get_http_client = AsyncMock(return_value=mock_client)
+
+        user_info = await handler.get_user_info(SSOTokenResponse("at123"))
+        assert user_info.email_verified is False
+
+    async def test_get_user_info_email_verified_missing(self):
+        """A missing email_verified field maps to None (unknown) instead of False, so
+        backward compatibility is preserved for payloads without the field."""
+        handler = GoogleSSOHandler()
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "sub": "user123",
+            "email": "test@gmail.com",
+        }
+
+        mock_client = _make_mock_client()
+        mock_client.get.return_value = mock_response
+        handler._get_http_client = AsyncMock(return_value=mock_client)
+
+        user_info = await handler.get_user_info(SSOTokenResponse("at123"))
+        assert user_info.email_verified is None
+
+    async def test_get_user_info_email_verified_string_coerced(self):
+        """Defensive coercion: a string form is coerced to bool like the Apple handler."""
+        handler = GoogleSSOHandler()
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "sub": "user123",
+            "email": "test@gmail.com",
+            "email_verified": "false",
+        }
+
+        mock_client = _make_mock_client()
+        mock_client.get.return_value = mock_response
+        handler._get_http_client = AsyncMock(return_value=mock_client)
+
+        user_info = await handler.get_user_info(SSOTokenResponse("at123"))
+        assert user_info.email_verified is False
 
 
 class TestAzureADSSOHandler:

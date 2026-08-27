@@ -4,6 +4,7 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.core.security import create_access_token, create_refresh_token
+from app.core.sso_handlers import SSOUserInfo
 from tests.integration.conftest import make_admin_headers, make_auth_header
 
 
@@ -178,6 +179,65 @@ class TestSSOLogin:
         assert resp.status_code == 400
         data = resp.json()
         assert "not enabled" in data["detail"]["error"]["message"]
+
+    def test_google_login_email_unverified_returns_400(self, client):
+        """Google SSO login with an unverified email (email_verified=False) must be
+        rejected with 400 VALIDATION_ERROR before any user is provisioned
+        (security.md §3.4)."""
+        handler = AsyncMock()
+        handler.authenticate = AsyncMock(
+            return_value=SSOUserInfo(
+                provider="google",
+                provider_id=f"google-unverified-{uuid.uuid4().hex[:10]}",
+                email=f"unverified-{uuid.uuid4().hex[:8]}@gmail.com",
+                name="Unverified User",
+                email_verified=False,
+            )
+        )
+        handler.close = AsyncMock()
+
+        with patch("app.services.auth.SSOHandlerFactory") as mock_factory:
+            mock_factory.create.return_value = handler
+            resp = client.post(
+                "/api/v1/auth/sso/google",
+                json={"code": "code123", "redirect_uri": "http://localhost:3000/callback"},
+            )
+
+        assert resp.status_code == 400
+        data = resp.json()
+        assert data["detail"]["success"] is False
+        assert data["detail"]["error"]["code"] == "VALIDATION_ERROR"
+        assert data["detail"]["error"]["message"] == "Google account email is not verified"
+
+    def test_google_login_email_verified_returns_200(self, client):
+        """Google SSO login with a verified email proceeds end-to-end and provisions
+        the user."""
+        provider_id = f"google-verified-{uuid.uuid4().hex[:10]}"
+        handler = AsyncMock()
+        handler.authenticate = AsyncMock(
+            return_value=SSOUserInfo(
+                provider="google",
+                provider_id=provider_id,
+                email=f"verified-{uuid.uuid4().hex[:8]}@gmail.com",
+                name="Verified User",
+                email_verified=True,
+            )
+        )
+        handler.close = AsyncMock()
+
+        with patch("app.services.auth.SSOHandlerFactory") as mock_factory:
+            mock_factory.create.return_value = handler
+            resp = client.post(
+                "/api/v1/auth/sso/google",
+                json={"code": "code123", "redirect_uri": "http://localhost:3000/callback"},
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["success"] is True
+        assert data["data"]["access_token"]
+        assert data["data"]["user"]["sso_provider"] == "google"
+        assert data["data"]["user"]["role"] == "member"
 
 
 class TestRefreshToken:

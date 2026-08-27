@@ -88,6 +88,19 @@ class AuthService:
         if not user_info.provider_id:
             raise InvalidOAuthCode(message="OAuth code exchange returned no user ID")
 
+        # security.md §3.4 (Google): the token/userinfo carries email_verified and it must
+        # be enforced — an explicit False means the Google account's email is unverified,
+        # so the login is rejected before any user lookup/provisioning. None (field absent)
+        # passes for backward compatibility; non-Google providers are not affected.
+        # Raised as ValidationError (400 VALIDATION_ERROR) rather than 401 to match the
+        # existing SSO rejection conventions in this flow (all 4xx; InvalidCredentials/401
+        # is reserved for local admin password failures with a deliberately obscure
+        # message), and the reason is safe to state — the caller just authenticated with
+        # this very Google account, and the SSO callback page displays this message as-is.
+        if provider == "google" and user_info.email_verified is False:
+            logger.warning("Rejected Google SSO login: email not verified (provider_id=%s)", user_info.provider_id)
+            raise ValidationError(message="Google account email is not verified")
+
         user = await self._get_or_create_user(provider, user_info)
 
         token_data = {

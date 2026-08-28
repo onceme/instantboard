@@ -1208,7 +1208,7 @@ GET /api/v1/health/detail — 依赖深度检查 (不需要认证, health.py:22)
 | INVALID_REFRESH_TOKEN | 401 | Refresh Token 无效（含本地管理员登录被禁用后的续期拒绝） |
 | INVALID_CREDENTIALS | 401 | 本地管理员登录失败（密码错误/邮箱未知/锁定中，统一文案，新增） |
 | SSO_PROVIDER_ERROR | 502 | SSO 提供商返回错误（上游故障；**502 而非 401**，避免前端误跳登录页） |
-| FORBIDDEN | 403 | 权限不足 |
+| FORBIDDEN | 403 | 权限不足；另用于 Origin/Referer 校验中间件拒绝状态变更请求（跨站 `Origin`/`Referer` 不在 `CORS_ORIGINS` 允许列表，消息固定 "Origin not allowed"，见 security.md §3.2） |
 | CATEGORY_NOT_FOUND | 404 | 分类不存在 |
 | SOURCE_NOT_FOUND | 404 | 数据源不存在 |
 | SYMBOL_NOT_FOUND | 404 | 股票/基金代码不存在 |

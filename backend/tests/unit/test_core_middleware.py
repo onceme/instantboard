@@ -5,6 +5,7 @@ import pytest
 from app.core.middleware import (
     MILESTONE_LOG_EVERY,
     SLOW_REQUEST_THRESHOLD_MS,
+    OriginGuardMiddleware,
     RateLimitMiddleware,
     RequestLoggingMiddleware,
     _record_request_stats,
@@ -274,7 +275,10 @@ class TestSetupMiddlewares:
         app = MagicMock()
         setup_middlewares(app)
         call_list = [call[0][0].__name__ for call in app.add_middleware.call_args_list]
-        assert "RequestLoggingMiddleware" in call_list or app.add_middleware.call_count == 2
+        # Registration order: CORS -> OriginGuard -> RequestLogging. add_middleware
+        # prepends, so the runtime stack order is
+        # RequestLogging -> OriginGuard -> CORS -> app.
+        assert call_list == ["CORSMiddleware", "OriginGuardMiddleware", "RequestLoggingMiddleware"]
 
 
 class TestModuleConstants:
@@ -283,3 +287,130 @@ class TestModuleConstants:
 
     def test_milestone_interval(self):
         assert MILESTONE_LOG_EVERY == 1000
+
+
+ALLOWED_ORIGINS = ["http://localhost:3000", "https://ib.example.com:8443"]
+
+
+def _origin_guard_request(method="POST", headers=None):
+    request = MagicMock()
+    request.method = method
+    request.headers = headers or {}
+    request.url.path = "/api/v1/categories"
+    return request
+
+
+async def _dispatch_guard(method="POST", headers=None, allowed=ALLOWED_ORIGINS):
+    middleware = OriginGuardMiddleware(app=MagicMock())
+    response = MagicMock()
+    call_next = AsyncMock(return_value=response)
+    with patch("app.core.middleware.settings.cors_origins", allowed):
+        result = await middleware.dispatch(_origin_guard_request(method, headers), call_next)
+    return result, response, call_next
+
+
+def _assert_forbidden_envelope(result):
+    assert result.status_code == 403
+    assert result.body is not None
+    import json
+
+    payload = json.loads(result.body)
+    assert payload == {
+        "success": False,
+        "error": {"code": "FORBIDDEN", "message": "Origin not allowed", "details": None},
+    }
+
+
+class TestOriginGuardMiddleware:
+    async def test_allowed_origin_passes(self):
+        result, response, call_next = await _dispatch_guard(headers={"origin": "http://localhost:3000"})
+        assert result == response
+        call_next.assert_called_once()
+
+    async def test_disallowed_origin_returns_403_envelope(self):
+        result, _response, call_next = await _dispatch_guard(headers={"origin": "https://evil.example"})
+        _assert_forbidden_envelope(result)
+        call_next.assert_not_called()
+
+    async def test_origin_port_must_match_exactly(self):
+        result, _response, call_next = await _dispatch_guard(headers={"origin": "http://localhost:3001"})
+        _assert_forbidden_envelope(result)
+        call_next.assert_not_called()
+
+    async def test_allowed_origin_with_port_passes(self):
+        result, response, call_next = await _dispatch_guard(headers={"origin": "https://ib.example.com:8443"})
+        assert result == response
+        call_next.assert_called_once()
+
+    async def test_no_origin_with_allowed_referer_passes(self):
+        result, response, call_next = await _dispatch_guard(headers={"referer": "http://localhost:3000/board/new?x=1"})
+        assert result == response
+        call_next.assert_called_once()
+
+    async def test_no_origin_with_disallowed_referer_returns_403(self):
+        result, _response, call_next = await _dispatch_guard(headers={"referer": "https://evil.example/steal"})
+        _assert_forbidden_envelope(result)
+        call_next.assert_not_called()
+
+    async def test_referer_port_comparison(self):
+        result, response, call_next = await _dispatch_guard(headers={"referer": "https://ib.example.com:8443/x"})
+        assert result == response
+        call_next.assert_called_once()
+
+        result, _response, call_next = await _dispatch_guard(headers={"referer": "https://ib.example.com/x"})
+        _assert_forbidden_envelope(result)
+        call_next.assert_not_called()
+
+    async def test_unparseable_referer_is_allowed(self):
+        result, response, call_next = await _dispatch_guard(headers={"referer": "not-a-url"})
+        assert result == response
+        call_next.assert_called_once()
+
+    async def test_no_origin_and_no_referer_passes(self):
+        result, response, call_next = await _dispatch_guard(headers={})
+        assert result == response
+        call_next.assert_called_once()
+
+    @pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE"])
+    async def test_state_changing_methods_are_checked(self, method):
+        result, _response, call_next = await _dispatch_guard(method=method, headers={"origin": "https://evil.example"})
+        _assert_forbidden_envelope(result)
+        call_next.assert_not_called()
+
+    @pytest.mark.parametrize("method", ["GET", "HEAD", "OPTIONS"])
+    async def test_safe_methods_are_not_checked(self, method):
+        result, response, call_next = await _dispatch_guard(method=method, headers={"origin": "https://evil.example"})
+        assert result == response
+        call_next.assert_called_once()
+
+    async def test_wildcard_allows_any_origin(self):
+        result, response, call_next = await _dispatch_guard(
+            headers={"origin": "https://anything.example"}, allowed=["*"]
+        )
+        assert result == response
+        call_next.assert_called_once()
+
+    async def test_parsing_failure_fails_open(self):
+        middleware = OriginGuardMiddleware(app=MagicMock())
+        response = MagicMock()
+        call_next = AsyncMock(return_value=response)
+        with (
+            patch("app.core.middleware.settings.cors_origins", ALLOWED_ORIGINS),
+            patch("app.core.middleware.urlparse", side_effect=ValueError("boom")),
+        ):
+            result = await middleware.dispatch(
+                _origin_guard_request(headers={"referer": "https://evil.example/"}), call_next
+            )
+        assert result == response
+        call_next.assert_called_once()
+
+    async def test_parsing_failure_fails_open_logs_warning(self, caplog):
+        middleware = OriginGuardMiddleware(app=MagicMock())
+        call_next = AsyncMock(return_value=MagicMock())
+        with (
+            patch("app.core.middleware.settings.cors_origins", ALLOWED_ORIGINS),
+            patch("app.core.middleware.urlparse", side_effect=ValueError("boom")),
+            caplog.at_level("WARNING", logger="instantboard"),
+        ):
+            await middleware.dispatch(_origin_guard_request(headers={"referer": "https://evil.example/"}), call_next)
+        assert any("Origin guard check failed" in record.message for record in caplog.records)

@@ -1,13 +1,15 @@
 import logging
 import time
+from urllib.parse import urlparse
 
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import Response
+from starlette.responses import JSONResponse, Response
 
 from app.config import settings
 from app.core.redis import RedisKeys, get_redis_client
+from app.schemas.base import ErrorCode, ErrorDetail, ErrorResponse
 
 logger = logging.getLogger("instantboard")
 
@@ -121,6 +123,59 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         return response
 
 
+# Methods that mutate state. Only these are origin-checked; GET/HEAD/OPTIONS are
+# exempt (SSE is a GET, and OPTIONS preflights are handled by CORSMiddleware).
+_STATE_CHANGING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+class OriginGuardMiddleware(BaseHTTPMiddleware):
+    """Defense-in-depth origin check for state-changing requests.
+
+    Authentication is pure Bearer (no cookies), so CSRF is not possible today —
+    this guard instead blocks a cross-site request that somehow carries a valid
+    Authorization header (e.g. a stolen token replayed from a malicious page).
+
+    Policy: exact-match the request Origin against settings.cors_origins
+    (same list CORS uses, so the two layers never disagree); without an Origin
+    header, fall back to the Referer's scheme://host[:port] prefix. Requests
+    with neither header pass through: non-browser clients (curl, server-to-server
+    collectors, TestClient) legitimately omit them, while every browser-initiated
+    cross-site mutation carries at least one of the two.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        if request.method in _STATE_CHANGING_METHODS:
+            try:
+                allowed_origins = settings.cors_origins
+                # "*" keeps wildcard semantics consistent with CORS. Note: never use
+                # the wildcard in production — it disables this layer entirely.
+                if "*" not in allowed_origins:
+                    allowed = set(allowed_origins)
+                    origin = request.headers.get("origin")
+                    if origin is not None:
+                        if origin not in allowed:
+                            return self._forbidden()
+                    else:
+                        referer = request.headers.get("referer")
+                        if referer is not None:
+                            parsed = urlparse(referer)
+                            if not parsed.scheme or not parsed.netloc:
+                                logger.warning(f"Unparseable Referer header, allowing: {referer!r}")
+                            elif f"{parsed.scheme}://{parsed.netloc}" not in allowed:
+                                return self._forbidden()
+            except Exception as e:
+                # Availability first: a parsing/config hiccup must never lock out
+                # legitimate writers; the primary CSRF defense is cookie-free auth.
+                logger.warning(f"Origin guard check failed, allowing request: {e}")
+        return await call_next(request)
+
+    @staticmethod
+    def _forbidden() -> JSONResponse:
+        envelope = ErrorResponse(error=ErrorDetail(code=ErrorCode.FORBIDDEN, message="Origin not allowed"))
+        return JSONResponse(status_code=403, content=envelope.model_dump(mode="json"))
+
+
 def setup_middlewares(app):
     setup_cors(app)
+    app.add_middleware(OriginGuardMiddleware)
     app.add_middleware(RequestLoggingMiddleware)

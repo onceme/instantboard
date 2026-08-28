@@ -1,5 +1,5 @@
 ---
-version: 1.2
+version: 1.3
 author: designer
 date: 2026-08-28
 status: revised
@@ -16,11 +16,11 @@ cross_refs: [architecture.md, api.md, database.md, infrastructure.md, admin-logi
 
 采用 **多层防御 (Defense in Depth)** 策略：Nginx层限流/SSL → FastAPI中间件层认证/隔离 → 数据层RLS/参数化查询，5种SSO通过统一OAuth2流程集成。
 
-> 📌 **现状提示（2026-08-24 审计修订，2026-08-27 RLS 落地，2026-08-28 CSP 落地）**：本文档为"设计 + 现状"混合文档——尚未落地的防护层
-> （Nginx 限流、应用层限流、IP 黑名单、请求验证、Origin/Referer 校验等）
+> 📌 **现状提示（2026-08-24 审计修订，2026-08-27 RLS 落地，2026-08-28 CSP 与 Origin 校验落地）**：本文档为"设计 + 现状"混合文档——尚未落地的防护层
+> （Nginx 限流、应用层限流、IP 黑名单、请求验证等）
 > 均已在对应小节加 `⚠️ 未实现` 标注，规划内容保留作为路线图；
 > 代码已实现但此前未记录的机制统一补充在 §3.9。数据层 RLS 已实现（见 §3.5），
-> CSP 已实现（见 §3.2）。
+> CSP 与 Origin/Referer 校验已实现（见 §3.2）。
 
 ## 3. 详细设计
 
@@ -61,7 +61,7 @@ cross_refs: [architecture.md, api.md, database.md, infrastructure.md, admin-logi
 | 纯 Bearer token 认证 | 认证不使用 Cookie（后端无 `Set-Cookie`，浏览器不会自动附带任何认证 Cookie）→ CSRF 自然免疫 |
 | SSO OAuth State | ✅ **已实现**：authorize 端点生成的 `state`（`secrets.token_urlsafe(32)`）写入 `sso_state:{state}`（value=provider 名，TTL 10 分钟）；`POST /auth/sso/{provider}` 在 code 换取之前校验——必填、键存在、provider 匹配，通过后**立即删键（一次性）**；缺失/未知/过期/已用/不匹配统一 400 `VALIDATION_ERROR`（消息固定为 "Invalid or expired OAuth state"，不泄露具体原因）。前端另在客户端比对 sessionStorage 中的 state（`composables/useAuth.ts`）。Redis 不可用时 authorize 与校验两端均 **fail-open**（warning 日志）——登录可用性优先：攻击仍需诱导受害者完成完整 OAuth 流程、且恰逢该环境 Redis 故障，风险窗口可接受（见 §5） |
 | SSE Token | SSE 认证用 query param `token` — 不受 CSRF 影响 |
-| Origin验证 | ⚠️ **未实现**：无 Origin/Referer 校验中间件（`setup_middlewares` 仅注册 CORS + `RequestLoggingMiddleware`，core/middleware.py:135-137）；因采用纯 Bearer 无 Cookie 认证，缺失该项不引入 CSRF 风险 |
+| Origin验证 | ✅ **已实现**：`OriginGuardMiddleware`（core/middleware.py），`setup_middlewares` 在 CORS 之后注册（运行栈位于 `RequestLoggingMiddleware` 之内、CORS 之外，403 仍被请求统计记录）。仅校验**状态变更方法**（POST/PUT/PATCH/DELETE）；GET/HEAD/OPTIONS 放行（SSE 走 GET、preflight 由 CORS 处理）。判定：请求带 `Origin` 头 → 与 `settings.cors_origins`（与 CORS 共用同一允许列表，两层永不分歧）**精确匹配（含端口）**；无 `Origin` → 回退比对 `Referer` 的 `scheme://host[:port]` 前缀；**两者皆无 → 放行**——非浏览器客户端（curl / 服务端互调 / TestClient）合法地不携带这两类头，而浏览器发起的跨站状态变更请求必带其一，故该取舍不误伤任何合法写入。允许源集合含 `*` 时全放行（与 CORS 通配语义一致；**生产环境勿用通配**，否则本层形同虚设）。不匹配 → 403 `FORBIDDEN`（"Origin not allowed"，标准错误信封）；解析/配置异常 → 放行 + warning 日志（可用性优先）。**防御定位**：纯 Bearer 无 Cookie 认证本已对 CSRF 免疫，本层为纵深防御——拦截携带合法 Bearer token 的跨站伪造请求（如被盗 token 从恶意页面重放） |
 
 ### 3.3 DDoS 防护方案
 

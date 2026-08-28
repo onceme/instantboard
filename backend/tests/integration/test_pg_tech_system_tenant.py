@@ -184,31 +184,33 @@ async def test_get_news_subcategory_filter_uses_jsonb_containment(tech_env):
 
 
 async def test_search_items_matches_title_with_tenant_scoping(tech_env):
-    """q="tenant item" matches all three seeded titles; tenant A must see only
-    the system row and its own row, ordered published_at DESC (equal timestamps
+    """Search is a whole-string substring match (ILIKE %q%, not tokenized), so
+    q="tenant" matches all three seeded titles; tenant A must see only the
+    system row and its own row, ordered published_at DESC (equal timestamps
     here, so compare as a set)."""
     session = tech_env["session"]
     tenant_a_id = str(tech_env["tenant_a"].id)
 
-    result = await _make_service(session).search_items(tenant_a_id, q="tenant item")
+    result = await _make_service(session).search_items(tenant_a_id, q="tenant")
 
     assert result["meta"]["total"] == 2
     assert {row["title"] for row in result["data"]} == {"System tenant item", "Tenant A item"}
 
 
 async def test_search_items_domain_filter_uses_jsonb_containment(tech_env):
-    """domain stacks on top of the ILIKE match via topic_tags @> (jsonb): among
-    tenant A's visible rows only the system item carries the ai tag."""
+    """domain stacks on top of the ILIKE %q% substring match via topic_tags @>
+    (jsonb): q="tenant" matches all three seeded titles, and among tenant A's
+    visible rows only the system item carries the ai tag."""
     session = tech_env["session"]
     tenant_a_id = str(tech_env["tenant_a"].id)
 
-    result = await _make_service(session).search_items(tenant_a_id, q="tenant item", domain="ai")
+    result = await _make_service(session).search_items(tenant_a_id, q="tenant", domain="ai")
 
     assert result["meta"]["total"] == 1
     assert result["data"][0]["title"] == "System tenant item"
 
     # robotics is tenant A's own tag — the containment still applies on top of q
-    robotics = await _make_service(session).search_items(tenant_a_id, q="tenant item", domain="robotics")
+    robotics = await _make_service(session).search_items(tenant_a_id, q="tenant", domain="robotics")
     assert robotics["meta"]["total"] == 1
     assert robotics["data"][0]["title"] == "Tenant A item"
 

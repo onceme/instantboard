@@ -132,9 +132,7 @@ describe("API request stats", () => {
       }),
     );
 
-    const values = wrapper
-      .findAll(".api-row .api-value")
-      .map((v) => v.text());
+    const values = wrapper.findAll(".api-row .api-value").map((v) => v.text());
     expect(values).toEqual(["0.00", "0.0 ms", "0.00%", "0.00%", "0"]);
   });
 

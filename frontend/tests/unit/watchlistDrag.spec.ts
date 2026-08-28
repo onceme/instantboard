@@ -184,9 +184,7 @@ describe("Watchlist drag & drop reorder", () => {
 
     const row = wrapper.find(".watchlist-row");
     expect(row.attributes("draggable")).toBe("false");
-    expect(wrapper.find(".drag-handle").classes()).toContain(
-      "handle-disabled",
-    );
+    expect(wrapper.find(".drag-handle").classes()).toContain("handle-disabled");
 
     const moveButtons = wrapper.findAll(".move-btn");
     expect(moveButtons).toHaveLength(2);

@@ -42,7 +42,12 @@ describe("Watchlist alert-threshold editor", () => {
   it("renders a bell per row and marks rows that already have a threshold", async () => {
     const { wrapper } = await mountWatchlist([
       makeItem(),
-      makeItem({ id: "w2", symbol: "TSLA", display_order: 1, alert_threshold_percent: 3 }),
+      makeItem({
+        id: "w2",
+        symbol: "TSLA",
+        display_order: 1,
+        alert_threshold_percent: 3,
+      }),
     ]);
 
     const bells = wrapper.findAll(".alert-btn");
@@ -110,16 +115,18 @@ describe("Watchlist alert-threshold editor", () => {
 
   it("shows the backend error inline when the PATCH is rejected", async () => {
     const { store, wrapper } = await mountWatchlist([makeItem()]);
-    (store.updateWatchlistAlert as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
-      new Error("400"),
-    );
+    (
+      store.updateWatchlistAlert as ReturnType<typeof vi.fn>
+    ).mockRejectedValueOnce(new Error("400"));
 
     await wrapper.find(".alert-btn").trigger("click");
     await wrapper.find(".threshold-input").setValue("2");
     await wrapper.find('.editor-btn[title="保存"]').trigger("click");
     await flushPromises();
 
-    expect(wrapper.find(".editor-error").text()).toBe("保存阈值失败，请稍后重试");
+    expect(wrapper.find(".editor-error").text()).toBe(
+      "保存阈值失败，请稍后重试",
+    );
     expect(wrapper.find(".threshold-editor").exists()).toBe(true);
   });
 

@@ -60,7 +60,11 @@ onMounted(fetchNews);
     <ErrorAlert v-if="error" :message="error" retryable @retry="fetchNews" />
 
     <div v-else-if="isLoading" class="news-list" aria-busy="true">
-      <div v-for="n in TOP_NEWS_COUNT" :key="n" class="news-item news-item-skeleton">
+      <div
+        v-for="n in TOP_NEWS_COUNT"
+        :key="n"
+        class="news-item news-item-skeleton"
+      >
         <span class="skeleton-line skeleton-title" />
         <span class="skeleton-line skeleton-meta" />
       </div>
@@ -79,7 +83,9 @@ onMounted(fetchNews);
         </a>
         <div class="news-meta">
           <span class="news-source">{{ item.source_name ?? "未知来源" }}</span>
-          <span class="news-time">{{ formatRelativeTime(item.published_at) }}</span>
+          <span class="news-time">{{
+            formatRelativeTime(item.published_at)
+          }}</span>
         </div>
       </div>
     </div>

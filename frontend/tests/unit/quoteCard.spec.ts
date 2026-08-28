@@ -59,9 +59,7 @@ function watchlistItem(symbol: string, id = "w1") {
 
 const wrappers: VueWrapper[] = [];
 
-function mountCard(
-  props: Record<string, unknown> = {},
-): VueWrapper {
+function mountCard(props: Record<string, unknown> = {}): VueWrapper {
   const wrapper = mount(QuoteCard, {
     props: { quote: makeQuote(), ...props },
   });
@@ -190,7 +188,9 @@ describe("add-to-watchlist action", () => {
     await flushPromises();
     expect(btn(wrapper).getAttribute("aria-label")).toBe("已在自选中");
 
-    await wrapper.setProps({ quote: makeQuote({ symbol: "MSFT", name: "Microsoft" }) });
+    await wrapper.setProps({
+      quote: makeQuote({ symbol: "MSFT", name: "Microsoft" }),
+    });
     await flushPromises();
 
     const button = btn(wrapper);

@@ -46,8 +46,9 @@ export const useDashboardStore = defineStore("dashboard", () => {
   }
 
   async function fetchScheduler() {
-    const response =
-      await apiGet<SchedulerStatusResponse>("/dashboard/scheduler");
+    const response = await apiGet<SchedulerStatusResponse>(
+      "/dashboard/scheduler",
+    );
     scheduler.value = response.data;
   }
 

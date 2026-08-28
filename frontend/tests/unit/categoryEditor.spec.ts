@@ -359,7 +359,9 @@ describe("reclassify action", () => {
 // Captures the JSON body of a POST /categories or PUT /categories/{id} call.
 // config.data is already a JSON string by the time the adapter runs (axios
 // request transformers have executed).
-function requestBody(config: InternalAxiosRequestConfig): Record<string, unknown> {
+function requestBody(
+  config: InternalAxiosRequestConfig,
+): Record<string, unknown> {
   return JSON.parse(config.data as string) as Record<string, unknown>;
 }
 
@@ -381,14 +383,14 @@ describe("full category form", () => {
     expect(section.find(".input-keywords").exists()).toBe(true);
     const colorInput = section.find('input[type="color"]');
     expect(colorInput.exists()).toBe(true);
-    expect(
-      (colorInput.element as HTMLInputElement).value.toLowerCase(),
-    ).toBe("#3b82f6");
+    expect((colorInput.element as HTMLInputElement).value.toLowerCase()).toBe(
+      "#3b82f6",
+    );
     // 15 curated icon options, "folder" preselected
     expect(section.findAll(".icon-option")).toHaveLength(15);
-    expect(
-      section.find(".icon-option.selected").attributes("data-icon"),
-    ).toBe("folder");
+    expect(section.find(".icon-option.selected").attributes("data-icon")).toBe(
+      "folder",
+    );
   });
 
   it("submits icon/color/interval/keywords/slug as filled by the user", async () => {
@@ -416,9 +418,7 @@ describe("full category form", () => {
     await wrapper
       .find('.add-section .icon-option[data-icon="rocket"]')
       .trigger("click");
-    await wrapper
-      .find('.add-section input[type="color"]')
-      .setValue("#FF0000");
+    await wrapper.find('.add-section input[type="color"]').setValue("#FF0000");
 
     // Selection follows the click before submission
     expect(
@@ -532,12 +532,12 @@ describe("full form in edit mode", () => {
     await flushPromises();
 
     const row = wrapper.find(".edit-row");
-    expect(
-      (row.find(".input-name").element as HTMLInputElement).value,
-    ).toBe("机器人");
-    expect(
-      (row.find(".input-slug").element as HTMLInputElement).value,
-    ).toBe("robotics");
+    expect((row.find(".input-name").element as HTMLInputElement).value).toBe(
+      "机器人",
+    );
+    expect((row.find(".input-slug").element as HTMLInputElement).value).toBe(
+      "robotics",
+    );
     expect(
       (row.find(".input-interval").element as HTMLInputElement).value,
     ).toBe("60");

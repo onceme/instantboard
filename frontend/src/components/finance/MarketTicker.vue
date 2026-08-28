@@ -26,7 +26,11 @@ function goToIndices() {
 
 <template>
   <!-- No index data renders nothing, matching the other empty-state conventions -->
-  <div v-if="indices.length > 0" class="market-ticker" aria-label="市场指数行情">
+  <div
+    v-if="indices.length > 0"
+    class="market-ticker"
+    aria-label="市场指数行情"
+  >
     <div class="ticker-track" :style="{ animationDuration: scrollDuration }">
       <!-- Two identical copies; translateX(0 → -50%) yields a seamless loop -->
       <div

@@ -43,19 +43,20 @@ const countedButNotListed = computed(() => {
 
 type HeartbeatState = "fresh" | "stale" | "missing";
 
-const heartbeat = computed<{ state: HeartbeatState; ageSeconds: number | null }>(
-  () => {
-    const ts = scheduler.value?.last_heartbeat;
-    if (!ts) return { state: "missing", ageSeconds: null };
-    const parsed = Date.parse(ts);
-    if (Number.isNaN(parsed)) return { state: "missing", ageSeconds: null };
-    const ageSeconds = Math.max(0, Math.floor((Date.now() - parsed) / 1000));
-    return {
-      state: ageSeconds < HEARTBEAT_STALE_SECONDS ? "fresh" : "stale",
-      ageSeconds,
-    };
-  },
-);
+const heartbeat = computed<{
+  state: HeartbeatState;
+  ageSeconds: number | null;
+}>(() => {
+  const ts = scheduler.value?.last_heartbeat;
+  if (!ts) return { state: "missing", ageSeconds: null };
+  const parsed = Date.parse(ts);
+  if (Number.isNaN(parsed)) return { state: "missing", ageSeconds: null };
+  const ageSeconds = Math.max(0, Math.floor((Date.now() - parsed) / 1000));
+  return {
+    state: ageSeconds < HEARTBEAT_STALE_SECONDS ? "fresh" : "stale",
+    ageSeconds,
+  };
+});
 
 function formatElapsed(seconds: number): string {
   if (seconds < 60) return `${seconds}秒`;
@@ -128,7 +129,9 @@ function switchTab(tab: Tab) {
     >
       <template v-if="heartbeat.state === 'fresh'">
         <Activity :size="14" class="heartbeat-icon" />
-        <span>Worker 心跳正常 · {{ formatElapsed(heartbeat.ageSeconds!) }}前</span>
+        <span
+          >Worker 心跳正常 · {{ formatElapsed(heartbeat.ageSeconds!) }}前</span
+        >
       </template>
       <template v-else-if="heartbeat.state === 'stale'">
         <span class="heartbeat-warning">
@@ -176,12 +179,11 @@ function switchTab(tab: Tab) {
         生产模式：任务详情位于 worker 容器，此处仅展示心跳上报的计数
       </p>
 
-      <div
-        v-else-if="activeJobs.length === 0"
-        class="empty-wrapper"
-      >
+      <div v-else-if="activeJobs.length === 0" class="empty-wrapper">
         <EmptyState
-          :title="activeTab === 'running' ? '暂无运行中的任务' : '暂无暂停的任务'"
+          :title="
+            activeTab === 'running' ? '暂无运行中的任务' : '暂无暂停的任务'
+          "
           icon="inbox"
         />
       </div>
@@ -214,7 +216,9 @@ function switchTab(tab: Tab) {
                     ×{{ job.adaptive_multiplier }}
                   </span>
                 </template>
-                <template v-else>{{ formatInterval(job.current_interval) }}</template>
+                <template v-else>{{
+                  formatInterval(job.current_interval)
+                }}</template>
               </td>
               <td>
                 {{ job.last_run ? formatRelativeTime(job.last_run) : "--" }}
@@ -223,13 +227,18 @@ function switchTab(tab: Tab) {
               <td>
                 <span
                   class="status-badge"
-                  :style="{ backgroundColor: statusColor(job.status), color: 'white' }"
+                  :style="{
+                    backgroundColor: statusColor(job.status),
+                    color: 'white',
+                  }"
                 >
                   {{ job.status }}
                 </span>
               </td>
               <td class="cell-counts">
-                <span class="count-success">{{ job.success_count_24h ?? "--" }}</span>
+                <span class="count-success">{{
+                  job.success_count_24h ?? "--"
+                }}</span>
                 <span class="count-sep">/</span>
                 <span
                   class="count-failure"

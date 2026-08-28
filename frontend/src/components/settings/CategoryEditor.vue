@@ -161,7 +161,9 @@ async function fetchCategories() {
 
 async function addCategory() {
   if (!addForm.value.name.trim()) return;
-  const invalidInterval = intervalValidationError(addForm.value.refreshInterval);
+  const invalidInterval = intervalValidationError(
+    addForm.value.refreshInterval,
+  );
   if (invalidInterval) {
     addError.value = invalidInterval;
     return;
@@ -407,7 +409,11 @@ fetchCategories();
             />
             <label class="color-field">
               <span class="field-label">颜色</span>
-              <input v-model="editForm.color" type="color" class="input-color" />
+              <input
+                v-model="editForm.color"
+                type="color"
+                class="input-color"
+              />
             </label>
           </div>
           <div class="form-row">

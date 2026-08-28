@@ -257,7 +257,10 @@ describe("topic_stats_update SSE handler (tech-tab.md §3.8)", () => {
   function connectAndCaptureHandlers(store: ReturnType<typeof useTechStore>) {
     store.connectSSE();
     const options = captured.options;
-    expect(options, "connectSSE must construct an SSEConnection").not.toBeNull();
+    expect(
+      options,
+      "connectSSE must construct an SSEConnection",
+    ).not.toBeNull();
     expect(options!.category).toBe("tech");
     return options!.eventHandlers!;
   }
@@ -273,7 +276,12 @@ describe("topic_stats_update SSE handler (tech-tab.md §3.8)", () => {
   it("replaces the topics list wholesale when the event arrives", () => {
     const store = useTechStore();
     const pushPayload: TechTopic[] = [
-      { tag: "ai", label: "人工智能", count: 42, last_active_at: "2026-08-26T08:00:00+00:00" },
+      {
+        tag: "ai",
+        label: "人工智能",
+        count: 42,
+        last_active_at: "2026-08-26T08:00:00+00:00",
+      },
       { tag: "llm", label: "大语言模型", count: 7 },
     ];
     store.topics = [{ tag: "stale", label: "Stale", count: 1 }];
@@ -306,4 +314,3 @@ describe("topic_stats_update SSE handler (tech-tab.md §3.8)", () => {
     expect(store.topics).toEqual([{ tag: "keep", label: "Keep", count: 3 }]);
   });
 });
-

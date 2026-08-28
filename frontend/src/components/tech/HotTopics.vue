@@ -9,13 +9,19 @@ const HOT_TAGS_LIMIT = 12;
 // Backend /tech/topics already orders by count DESC; re-sort defensively and
 // cap at the top N so the row stays compact.
 const hotTags = computed(() =>
-  [...techStore.topics].sort((a, b) => b.count - a.count).slice(0, HOT_TAGS_LIMIT),
+  [...techStore.topics]
+    .sort((a, b) => b.count - a.count)
+    .slice(0, HOT_TAGS_LIMIT),
 );
 </script>
 
 <template>
   <!-- No topic data → render nothing (empty state is hidden by design) -->
-  <div v-if="techStore.topicsLoading && hotTags.length === 0" class="hot-topics" aria-busy="true">
+  <div
+    v-if="techStore.topicsLoading && hotTags.length === 0"
+    class="hot-topics"
+    aria-busy="true"
+  >
     <span v-for="n in 6" :key="n" class="skeleton-tag" />
   </div>
 

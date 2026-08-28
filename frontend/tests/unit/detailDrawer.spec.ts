@@ -151,9 +151,9 @@ describe("field rendering", () => {
     mountDrawer({ quote: makeQuote({ change_percent: -1.2, change: -2 }) });
     await flushPromises();
 
-    expect(
-      drawer()!.querySelector(".change-percent")!.classList,
-    ).toContain("change-down");
+    expect(drawer()!.querySelector(".change-percent")!.classList).toContain(
+      "change-down",
+    );
   });
 
   it("shows the load error message when the quote fetch fails", async () => {
@@ -230,9 +230,7 @@ describe("watchlist action", () => {
     mountDrawer();
     await flushPromises();
 
-    const btn = drawer()!.querySelector(
-      ".btn-watchlist",
-    ) as HTMLButtonElement;
+    const btn = drawer()!.querySelector(".btn-watchlist") as HTMLButtonElement;
     expect(btn.textContent).toBe("加入自选");
     btn.click();
     await flushPromises();
@@ -260,9 +258,7 @@ describe("watchlist action", () => {
     mountDrawer();
     await flushPromises();
 
-    const btn = drawer()!.querySelector(
-      ".btn-watchlist",
-    ) as HTMLButtonElement;
+    const btn = drawer()!.querySelector(".btn-watchlist") as HTMLButtonElement;
     expect(btn.textContent).toBe("已在自选中");
     expect(btn.disabled).toBe(true);
 
@@ -279,9 +275,7 @@ describe("watchlist action", () => {
     mountDrawer();
     await flushPromises();
 
-    const btn = drawer()!.querySelector(
-      ".btn-watchlist",
-    ) as HTMLButtonElement;
+    const btn = drawer()!.querySelector(".btn-watchlist") as HTMLButtonElement;
     btn.click();
     await flushPromises();
 
@@ -295,9 +289,7 @@ describe("watchlist action", () => {
     mountDrawer();
     await flushPromises();
 
-    const btn = drawer()!.querySelector(
-      ".btn-watchlist",
-    ) as HTMLButtonElement;
+    const btn = drawer()!.querySelector(".btn-watchlist") as HTMLButtonElement;
     btn.click();
     await flushPromises();
 

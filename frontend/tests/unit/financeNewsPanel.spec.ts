@@ -73,7 +73,10 @@ function stubApi(options: RequestOptions) {
   const requests: CapturedRequest[] = [];
   apiClient.defaults.adapter = async (config) => {
     const url = config.url || "";
-    requests.push({ url, params: config.params as Record<string, unknown> | undefined });
+    requests.push({
+      url,
+      params: config.params as Record<string, unknown> | undefined,
+    });
 
     if (url.includes("/items")) {
       if (options.itemsError) {

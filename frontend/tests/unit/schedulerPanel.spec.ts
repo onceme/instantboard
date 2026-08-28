@@ -177,9 +177,7 @@ describe("job table", () => {
     expect(cells[4].find(".status-badge").text()).toBe("active");
     expect(cells[5].text()).toContain("287");
     expect(cells[5].text()).toContain("1");
-    expect(cells[5].find(".count-failure").classes()).toContain(
-      "has-failures",
-    );
+    expect(cells[5].find(".count-failure").classes()).toContain("has-failures");
   });
 
   it("shows adaptive intervals as original → current with the multiplier", () => {
@@ -229,7 +227,11 @@ describe("tab switching", () => {
       makeStatus({
         running_jobs: [makeJob({ name: "运行中任务" })],
         paused_jobs: [
-          makeJob({ job_id: "collect_src-2", name: "暂停任务", status: "paused" }),
+          makeJob({
+            job_id: "collect_src-2",
+            name: "暂停任务",
+            status: "paused",
+          }),
         ],
       }),
     );

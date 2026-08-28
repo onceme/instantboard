@@ -95,9 +95,7 @@ interface TrendPoint {
   ms: number;
 }
 
-function trendPoints(
-  detail: DataSourceHealthDetailResponse,
-): TrendPoint[] {
+function trendPoints(detail: DataSourceHealthDetailResponse): TrendPoint[] {
   const entries = Array.isArray(detail.response_time_trend)
     ? detail.response_time_trend
     : [];
@@ -178,7 +176,11 @@ function retryDetail(id: string) {
         placeholder="按名称搜索…"
         aria-label="按名称搜索"
       />
-      <select v-model="statusFilter" class="filter-status" aria-label="状态过滤">
+      <select
+        v-model="statusFilter"
+        class="filter-status"
+        aria-label="状态过滤"
+      >
         <option value="">全部状态</option>
         <option value="healthy">healthy</option>
         <option value="degraded">degraded</option>
@@ -273,15 +275,14 @@ function retryDetail(id: string) {
                     重试
                   </button>
                 </div>
-                <div
-                  v-else-if="detailCache[source.id]"
-                  class="detail-panel"
-                >
+                <div v-else-if="detailCache[source.id]" class="detail-panel">
                   <div class="detail-metrics">
                     <div class="detail-metric">
                       <span class="detail-label">成功率 (24h)</span>
                       <span class="detail-value">{{
-                        formatSuccessRate(detailCache[source.id].success_rate_24h)
+                        formatSuccessRate(
+                          detailCache[source.id].success_rate_24h,
+                        )
                       }}</span>
                     </div>
                     <div class="detail-metric">
@@ -307,7 +308,9 @@ function retryDetail(id: string) {
                   <div class="detail-section">
                     <h4 class="detail-section-title">健康历史</h4>
                     <ul
-                      v-if="(detailCache[source.id].health_history ?? []).length > 0"
+                      v-if="
+                        (detailCache[source.id].health_history ?? []).length > 0
+                      "
                       class="history-list"
                     >
                       <li
@@ -319,22 +322,33 @@ function retryDetail(id: string) {
                         <span
                           class="status-badge"
                           :style="{
-                            backgroundColor: statusColor(asString(entry.status)),
+                            backgroundColor: statusColor(
+                              asString(entry.status),
+                            ),
                             color: 'white',
                           }"
                         >
                           {{ asString(entry.status) || "unknown" }}
                         </span>
                         <span v-if="asString(entry.last_success_at)">
-                          成功: {{ formatRelativeTime(asString(entry.last_success_at)) }}
+                          成功:
+                          {{
+                            formatRelativeTime(asString(entry.last_success_at))
+                          }}
                         </span>
                         <span v-if="asString(entry.last_failure_at)">
-                          失败: {{ formatRelativeTime(asString(entry.last_failure_at)) }}
+                          失败:
+                          {{
+                            formatRelativeTime(asString(entry.last_failure_at))
+                          }}
                         </span>
                         <span v-if="asNumber(entry.total_fetches_24h) !== null">
                           采集: {{ entry.total_fetches_24h }}
                         </span>
-                        <span v-if="asString(entry.last_error_message)" class="history-error">
+                        <span
+                          v-if="asString(entry.last_error_message)"
+                          class="history-error"
+                        >
                           {{ entry.last_error_message }}
                         </span>
                       </li>
@@ -360,7 +374,11 @@ function retryDetail(id: string) {
                             trendPoints(detailCache[source.id]),
                           )}px`,
                         }"
-                        :title="point.label ? `${point.label}: ${point.ms}ms` : `${point.ms}ms`"
+                        :title="
+                          point.label
+                            ? `${point.label}: ${point.ms}ms`
+                            : `${point.ms}ms`
+                        "
                       />
                     </div>
                     <p v-else class="detail-empty">暂无趋势</p>

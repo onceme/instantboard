@@ -12,12 +12,7 @@ import type {
   FinancePanel,
 } from "@/types";
 import { SSEEventType } from "@/types";
-import {
-  apiGet,
-  apiPost,
-  apiDelete,
-  getApiErrorMessage,
-} from "@/utils/api";
+import { apiGet, apiPost, apiDelete, getApiErrorMessage } from "@/utils/api";
 import { formatPercent } from "@/utils/format";
 import { financeApi } from "@/api/finance";
 import { SSEConnection, SSEConnectionState } from "@/utils/sse.ts";
@@ -196,7 +191,10 @@ export const useFinanceStore = defineStore("finance", () => {
 
   // PATCH the alert threshold of a watchlist entry; null disables the alert.
   // Errors are rethrown — the caller (Watchlist row editor) displays them.
-  async function updateWatchlistAlert(itemId: string, threshold: number | null) {
+  async function updateWatchlistAlert(
+    itemId: string,
+    threshold: number | null,
+  ) {
     const response = await financeApi.updateWatchlistItem(itemId, {
       alert_threshold_percent: threshold,
     });
@@ -310,10 +308,16 @@ export const useFinanceStore = defineStore("finance", () => {
     // granted. We deliberately never call Notification.requestPermission()
     // here — an unsolicited permission prompt is intrusive; granting stays an
     // explicit user/OS action (finance-tab.md §3.2).
-    if (typeof document === "undefined" || typeof Notification === "undefined") {
+    if (
+      typeof document === "undefined" ||
+      typeof Notification === "undefined"
+    ) {
       return;
     }
-    if (document.visibilityState !== "hidden" || Notification.permission !== "granted") {
+    if (
+      document.visibilityState !== "hidden" ||
+      Notification.permission !== "granted"
+    ) {
       return;
     }
     const directionLabel = alert.direction === "up" ? "涨" : "跌";
@@ -352,7 +356,8 @@ export const useFinanceStore = defineStore("finance", () => {
           updateCommodityFromSSE(data as never),
         [SSEEventType.NAV_ESTIMATE_UPDATE]: (data) =>
           updateNAVFromSSE(data as never),
-        [SSEEventType.ALERT_UPDATE]: (data) => updateAlertFromSSE(data as never),
+        [SSEEventType.ALERT_UPDATE]: (data) =>
+          updateAlertFromSSE(data as never),
       },
     });
 

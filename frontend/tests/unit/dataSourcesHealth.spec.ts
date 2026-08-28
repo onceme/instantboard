@@ -193,9 +193,24 @@ function makeManySources(count: number): DataSourceHealthDetail[] {
 
 describe("filters", () => {
   const threeSources = [
-    makeDetail({ id: "s1", name: "Alpha Feed", source_type: "rss", status: "healthy" }),
-    makeDetail({ id: "s2", name: "Beta API", source_type: "api", status: "degraded" }),
-    makeDetail({ id: "s3", name: "Gamma Scrape", source_type: "rss", status: "down" }),
+    makeDetail({
+      id: "s1",
+      name: "Alpha Feed",
+      source_type: "rss",
+      status: "healthy",
+    }),
+    makeDetail({
+      id: "s2",
+      name: "Beta API",
+      source_type: "api",
+      status: "degraded",
+    }),
+    makeDetail({
+      id: "s3",
+      name: "Gamma Scrape",
+      source_type: "rss",
+      status: "down",
+    }),
   ];
 
   it("filters by status", async () => {
@@ -243,7 +258,12 @@ describe("filters", () => {
   it("stacks status + type + keyword filters", async () => {
     const wrapper = mountWithSources([
       ...threeSources,
-      makeDetail({ id: "s4", name: "Delta Feed", source_type: "rss", status: "healthy" }),
+      makeDetail({
+        id: "s4",
+        name: "Delta Feed",
+        source_type: "rss",
+        status: "healthy",
+      }),
     ]);
 
     await wrapper.find(".filter-status").setValue("healthy");
@@ -307,7 +327,9 @@ describe("row expansion", () => {
     await flushPromises();
 
     expect(detailRequests).toHaveLength(1);
-    expect(detailRequests[0].url).toBe(`/dashboard/data-sources/${SOURCE_UUID}`);
+    expect(detailRequests[0].url).toBe(
+      `/dashboard/data-sources/${SOURCE_UUID}`,
+    );
 
     const detail = wrapper.find(".detail-row");
     expect(detail.exists()).toBe(true);

@@ -67,7 +67,9 @@ describe("MarketIndices holiday hint", () => {
 
     const statuses = wrapper.findAll(".index-status");
     expect(statuses.map((s) => s.text())).toEqual(["休市", "休市"]);
-    expect(statuses.some((s) => s.classes().includes("index-status-holiday"))).toBe(false);
+    expect(
+      statuses.some((s) => s.classes().includes("index-status-holiday")),
+    ).toBe(false);
   });
 
   it("shows the open label while the market is open (reason null)", () => {

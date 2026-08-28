@@ -108,7 +108,11 @@ async function refresh() {
               <span class="index-name">{{ index.name }}</span>
               <span
                 class="index-status"
-                :class="{ 'index-status-holiday': index.market_status === 'closed' && index.market_status_reason === 'holiday' }"
+                :class="{
+                  'index-status-holiday':
+                    index.market_status === 'closed' &&
+                    index.market_status_reason === 'holiday',
+                }"
                 >{{ marketStatusText(index) }}</span
               >
             </div>

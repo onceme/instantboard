@@ -117,7 +117,11 @@ function stubApi(options: StubOptions = {}): CapturedRequest[] {
         data: {
           success: true,
           data,
-          meta: { total: Array.isArray(data) ? data.length : 1, page: 1, page_size: 20 },
+          meta: {
+            total: Array.isArray(data) ? data.length : 1,
+            page: 1,
+            page_size: 20,
+          },
         },
         headers: {},
         config,

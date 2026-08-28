@@ -1,10 +1,6 @@
 <script setup lang="ts">
 import { useDashboardStore } from "@/stores/dashboard";
-import {
-  formatLargeNumber,
-  formatPercent,
-  formatUptime,
-} from "@/utils/format";
+import { formatLargeNumber, formatPercent, formatUptime } from "@/utils/format";
 import { computed } from "vue";
 
 const dashboardStore = useDashboardStore();
@@ -65,9 +61,7 @@ const apiStats = computed(() => systemInfo.value?.api ?? null);
       <div class="network-item">
         <span class="network-label">磁盘读</span>
         <span class="network-value">{{
-          systemInfo.disk_read_mbps
-            ? `${systemInfo.disk_read_mbps} MB/s`
-            : "--"
+          systemInfo.disk_read_mbps ? `${systemInfo.disk_read_mbps} MB/s` : "--"
         }}</span>
       </div>
       <div class="network-item">

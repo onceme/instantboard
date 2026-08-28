@@ -19,6 +19,5 @@ export const dashboardApi = {
     ),
   scheduler: () => apiGet<SchedulerStatusResponse>("/dashboard/scheduler"),
   sseStats: () => apiGet<SSEStats>("/dashboard/sse-stats"),
-  businessMetrics: () =>
-    apiGet<BusinessMetrics>("/dashboard/business-metrics"),
+  businessMetrics: () => apiGet<BusinessMetrics>("/dashboard/business-metrics"),
 };

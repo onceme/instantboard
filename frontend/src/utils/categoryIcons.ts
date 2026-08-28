@@ -53,7 +53,9 @@ export const CATEGORY_ICON_OPTIONS: CategoryIconOption[] = [
 
 const CATEGORY_ICONS: Record<string, CategoryIconComponent> = {
   ...Object.fromEntries(
-    CATEGORY_ICON_OPTIONS.map(({ name, component }) => [name, component] as const),
+    CATEGORY_ICON_OPTIONS.map(
+      ({ name, component }) => [name, component] as const,
+    ),
   ),
   // Resolve-only entries kept out of the picker: the predefined tech category's
   // icon plus aliases for names older clients may have stored

@@ -98,4 +98,16 @@ server {
     add_header X-Content-Type-Options nosniff always;
     add_header X-XSS-Protection "1; mode=block" always;
     add_header Referrer-Policy strict-origin-when-cross-origin always;
+    # Content-Security-Policy — hard-coded constant, deliberately NOT an
+    # envsubst variable (keeps entrypoint.sh's whitelist unchanged; see
+    # docs/dev-guide/design/security.md §3.2). Deviations from the documented
+    # target policy, by design:
+    #   - img-src additionally allows `data:` (news thumbnails / inline images);
+    #   - base-uri / frame-ancestors / object-src are defense-in-depth on top of
+    #     the target policy (frame-ancestors 'none' supersedes X-Frame-Options
+    #     in modern browsers).
+    # Compatible with the app: SPA scripts/styles are self-hosted (build output
+    # contains no inline scripts), API and EventSource SSE are same-origin
+    # (covered by connect-src 'self'), no third-party scripts/fonts/styles.
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; connect-src 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'" always;
 }

@@ -1,7 +1,7 @@
 ---
-version: 1.1
+version: 1.2
 author: designer
-date: 2026-08-24
+date: 2026-08-28
 status: revised
 cross_refs: [architecture.md, api.md, database.md, infrastructure.md, admin-login.md]
 ---
@@ -16,10 +16,11 @@ cross_refs: [architecture.md, api.md, database.md, infrastructure.md, admin-logi
 
 采用 **多层防御 (Defense in Depth)** 策略：Nginx层限流/SSL → FastAPI中间件层认证/隔离 → 数据层RLS/参数化查询，5种SSO通过统一OAuth2流程集成。
 
-> 📌 **现状提示（2026-08-24 审计修订，2026-08-27 RLS 落地）**：本文档为"设计 + 现状"混合文档——尚未落地的防护层
-> （Nginx 限流、CSP、应用层限流、IP 黑名单、请求验证、Origin/Referer 校验等）
+> 📌 **现状提示（2026-08-24 审计修订，2026-08-27 RLS 落地，2026-08-28 CSP 落地）**：本文档为"设计 + 现状"混合文档——尚未落地的防护层
+> （Nginx 限流、应用层限流、IP 黑名单、请求验证、Origin/Referer 校验等）
 > 均已在对应小节加 `⚠️ 未实现` 标注，规划内容保留作为路线图；
-> 代码已实现但此前未记录的机制统一补充在 §3.9。数据层 RLS 已实现（见 §3.5）。
+> 代码已实现但此前未记录的机制统一补充在 §3.9。数据层 RLS 已实现（见 §3.5），
+> CSP 已实现（见 §3.2）。
 
 ## 3. 详细设计
 
@@ -49,7 +50,7 @@ cross_refs: [architecture.md, api.md, database.md, infrastructure.md, admin-logi
 |------|------|
 | 输出编码 | Vue 3 默认转义 HTML ({{ }})，不使用 v-html (除非 sanitized) |
 | 输入过滤 | 用户输入 (搜索、备注) 存入数据库前不做HTML过滤，输出时转义 |
-| CSP Header | ⚠️ **未实现**：nginx 模板未下发任何 `Content-Security-Policy`；实际下发的安全头为 `X-Frame-Options: DENY`、`X-Content-Type-Options`、`X-XSS-Protection`、`Referrer-Policy`（`docker/nginx/conf.d/*.template` 的 Security headers 段）。下列 CSP 策略保留为待做目标：`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https:; connect-src 'self'` |
+| CSP Header | ✅ **已实现**：两个服务器模板（`docker/nginx/conf.d/http-server.conf.template`、`https-server.conf.template`）的 Security headers 段硬编码下发（`always`，错误响应同样生效，模板内注释说明差异理由）：`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; connect-src 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'`。相对原目标策略的扩展：`img-src` 增加 `data:`（新闻缩略图/内联图场景）；`base-uri`/`frame-ancestors`/`object-src` 为纵深加固（`frame-ancestors 'none'` 在现代浏览器中取代 `X-Frame-Options DENY`）。兼容性依据：前端为同源 SPA（脚本/样式全自托管、构建产物无内联脚本），API 与 EventSource SSE 均同源（`connect-src 'self'` 覆盖），无第三方脚本/字体/样式引入。**调优方式**：策略为模板硬编码常量（非 envsubst 变量，无需环境变量），修改模板后 `docker compose ... up -d --force-recreate nginx` 重部署即生效。回归护栏：`backend/tests/unit/test_nginx_security_headers.py`（静态断言两个模板的 CSP 关键指令与既有四个安全头均在） |
 | DOMPurify | 当前**无需**：前端未安装 DOMPurify 依赖，且全前端无任何 `v-html` 使用，渲染全部走 Vue 默认转义 |
 | Token 存储 | JWT 不入 Cookie，后端**不设置任何 Cookie**（全代码库无 `set_cookie`/`Set-Cookie`）；access/refresh 两个 token 存前端 `localStorage`，纯 Bearer/JSON body 传递，风险评估见 §3.6 |
 
@@ -411,7 +412,7 @@ graph LR
 | 登出全量失效 | 登出时 access + refresh 均进黑名单（access TTL = 剩余有效期；refresh TTL = 配置有效期，默认 7d），前端清除 localStorage |
 | Admin 入口隔离 | `/ibadmin` 是独立会话入口（`session_entry=admin`），本地管理员与 SSO 用户按登录入口隔离、永不按 email 合并（见 [admin-login.md](admin-login.md) §2），SSO 侧被窃取的 token 无法接管管理员身份 |
 | /ibadmin 防爆破锁定 | 管理员登录有 email + IP 双维度失败锁定（5 次/15 分钟、20 次/1 小时）、dummy bcrypt 时序拉平与统一错误文案（见 [admin-login.md](admin-login.md) §7） |
-| XSS 预防基线 | Vue 默认转义（全前端无 v-html）+ nginx 基础安全头；DOMPurify/CSP 见 §3.2 未实现标注 |
+| XSS 预防基线 | Vue 默认转义（全前端无 v-html）+ nginx 基础安全头 + CSP（✅ 已实现，见 §3.2）；DOMPurify 当前仍无需（无 v-html） |
 
 > 残余风险：refresh token（7d）若被窃取，攻击者可在有效期内静默轮换续期；已泄露的 access token 在自然过期前无法即时作废（仅登出/黑名单可提前终止）。如需更强保护，可评估将 refresh token 改回 HttpOnly Cookie 存储（需另行设计，会重新引入 CSRF 考量），当前版本未实现。
 
@@ -491,7 +492,7 @@ app.add_middleware(
 | SSO架构 | 统一OAuth2 + Provider适配器 | 5种SSO统一接口，新增provider只需加handler |
 | JWT方案 | 双Token(Access+Refresh) | Access短效安全，Refresh长效方便 |
 | 多租户 | 行级隔离+RLS ✅ 已实现（应用层显式过滤为主防线，8 表 `ENABLE+FORCE` RLS + `tenant_isolation` 策略为纵深兜底，后台经 `app.is_service` 旁路，见 §3.5 与 database.md §3.5） | 性能好、成本低 |
-| CSP | 严格CSP策略（**未实现**，当前仅基础安全头，见 §3.2） | 防XSS，Vue默认转义减少风险 |
+| CSP | 严格CSP策略（✅ **已实现**，nginx 模板硬编码下发，见 §3.2） | 防XSS，Vue默认转义减少风险 |
 
 ## 5. 边界情况
 

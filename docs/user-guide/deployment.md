@@ -297,6 +297,9 @@ docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml \
   `https://ib.bithollow.org:65533/...`（公网口径，**不是** `:10443`）；
 - `curl -I https://ib.bithollow.org:65533/` 响应头包含
   `Strict-Transport-Security: max-age=...; includeSubDomains`（无 `preload`）；
+- 安全头已启用：同一 `curl -I` 响应头还应包含 `Content-Security-Policy: default-src 'self'; ...`
+  以及 `X-Frame-Options`、`X-Content-Type-Options`、`X-XSS-Protection`、`Referrer-Policy`
+  （CSP 为 nginx 模板硬编码常量，策略与调优见 `docs/dev-guide/design/security.md` §3.2）；
 - SSO 全流程：登录页 → 跳转提供商 → 回调 → 登录成功；
 - 仪表盘 SSE 指示器变绿（EventSource 走 **https 同源**；SSE 是 HTTP 长连接，无 `wss` 协议）
 - `docker compose ps` 中 nginx 持续 `healthy`（healthcheck 探测 `/healthz`，

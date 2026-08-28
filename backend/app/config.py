@@ -141,6 +141,10 @@ class Settings(BaseSettings):
     rate_limit_per_minute: int = Field(default=60, alias="RATE_LIMIT_PER_MINUTE")
     rate_limit_burst: int = Field(default=10, alias="RATE_LIMIT_BURST")
 
+    # Request Validation (security.md §3.3 layer 4)
+    require_user_agent: bool = Field(default=True, alias="REQUIRE_USER_AGENT")
+    max_request_body_bytes: int = Field(default=10 * 1024, alias="MAX_REQUEST_BODY_BYTES")
+
     # Tenant Defaults
     default_tenant_slug: str = Field(default="default", alias="DEFAULT_TENANT_SLUG")
     default_tenant_name: str = Field(default="Default Tenant", alias="DEFAULT_TENANT_NAME")

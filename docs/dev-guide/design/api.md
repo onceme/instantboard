@@ -60,6 +60,10 @@ cross_refs: [architecture.md, database.md, frontend.md, security.md, data-flow.m
 - `/dashboard/*` 全部端点需要 **admin 角色**（`require_admin` 依赖），非 admin 返回 403 `FORBIDDEN`
 - `/stream/status` 认证**可选**（携带则返回该用户连接状态，否则返回空）
 
+**请求验证**（中间件层，先于认证与路由生效，见 security.md §3.3 层级 4）:
+- `/api/v1/*` 请求必须携带非空白 `User-Agent` 头（缺失/纯空白 → 400 `VALIDATION_ERROR`；`/health` 前缀豁免，可经 `REQUIRE_USER_AGENT=false` 关闭）
+- `Content-Length` 超过 `MAX_REQUEST_BODY_BYTES`（默认 10240）的请求 → 413（信封码复用 `VALIDATION_ERROR`）
+
 **多租户**: 所有请求自动注入 `tenant_id` (从 JWT claims 中提取)。租户隔离以应用层
 显式 `tenant_id` 过滤为主防线，PostgreSQL RLS 作为数据库层纵深防御兜底——请求会话在
 数据库侧被限定为本租户行（及共享的系统租户只读行），后台任务经服务旁路运行
@@ -1200,7 +1204,7 @@ GET /api/v1/health/detail — 依赖深度检查 (不需要认证, health.py:22)
 
 | 错误码 | HTTP 状态码 | 含义 |
 |--------|-----------|------|
-| VALIDATION_ERROR | 400 | 请求参数验证失败（含 SSO provider 未启用/不受支持、Google 账号邮箱未验证 `email_verified=false` 拒绝登录——均无独立错误码） |
+| VALIDATION_ERROR | 400 | 请求参数验证失败（含 SSO provider 未启用/不受支持、Google 账号邮箱未验证 `email_verified=false` 拒绝登录——均无独立错误码）。请求验证中间件（见 security.md §3.3 层级 4）也复用此码：缺 `User-Agent` → 400；请求体超 `MAX_REQUEST_BODY_BYTES`（默认 10KB）→ **413**（唯一使用该码返回非 400 状态码的场景） |
 | INVALID_OAUTH_CODE | 400 | OAuth 授权码无效 |
 | NO_COLLECTOR_AVAILABLE | 400 | 激活数据源时无可用采集器（新增） |
 | AUTH_REQUIRED | 401 | 需要认证 |

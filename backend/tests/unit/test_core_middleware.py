@@ -8,6 +8,7 @@ from app.core.middleware import (
     OriginGuardMiddleware,
     RateLimitMiddleware,
     RequestLoggingMiddleware,
+    RequestValidationMiddleware,
     _record_request_stats,
     _status_bucket,
     _total_request_count,
@@ -275,10 +276,15 @@ class TestSetupMiddlewares:
         app = MagicMock()
         setup_middlewares(app)
         call_list = [call[0][0].__name__ for call in app.add_middleware.call_args_list]
-        # Registration order: CORS -> OriginGuard -> RequestLogging. add_middleware
-        # prepends, so the runtime stack order is
-        # RequestLogging -> OriginGuard -> CORS -> app.
-        assert call_list == ["CORSMiddleware", "OriginGuardMiddleware", "RequestLoggingMiddleware"]
+        # Registration order: CORS -> RequestValidation -> OriginGuard ->
+        # RequestLogging. add_middleware prepends, so the runtime stack order is
+        # RequestLogging -> OriginGuard -> RequestValidation -> CORS -> app.
+        assert call_list == [
+            "CORSMiddleware",
+            "RequestValidationMiddleware",
+            "OriginGuardMiddleware",
+            "RequestLoggingMiddleware",
+        ]
 
 
 class TestModuleConstants:
@@ -414,3 +420,148 @@ class TestOriginGuardMiddleware:
         ):
             await middleware.dispatch(_origin_guard_request(headers={"referer": "https://evil.example/"}), call_next)
         assert any("Origin guard check failed" in record.message for record in caplog.records)
+
+
+UA_HEADER = {"user-agent": "instantboard-test/1.0"}
+
+DEFAULT_BODY_LIMIT = 10 * 1024
+
+
+def _validation_request(path="/api/v1/categories", headers=None):
+    request = MagicMock()
+    request.method = "POST"
+    request.url.path = path
+    request.headers = headers if headers is not None else {}
+    return request
+
+
+async def _dispatch_validation(path="/api/v1/categories", headers=None, require_ua=True, max_bytes=DEFAULT_BODY_LIMIT):
+    middleware = RequestValidationMiddleware(app=MagicMock())
+    response = MagicMock()
+    call_next = AsyncMock(return_value=response)
+    with (
+        patch("app.core.middleware.settings.require_user_agent", require_ua),
+        patch("app.core.middleware.settings.max_request_body_bytes", max_bytes),
+    ):
+        result = await middleware.dispatch(_validation_request(path, headers), call_next)
+    return result, response, call_next
+
+
+def _assert_envelope(result, status_code, message):
+    assert result.status_code == status_code
+    import json
+
+    payload = json.loads(result.body)
+    assert payload == {
+        "success": False,
+        "error": {"code": "VALIDATION_ERROR", "message": message, "details": None},
+    }
+
+
+def _assert_ua_rejected(result):
+    _assert_envelope(result, 400, "User-Agent header is required")
+
+
+def _assert_body_rejected(result, limit=DEFAULT_BODY_LIMIT):
+    _assert_envelope(result, 413, f"Request body must not exceed {limit} bytes")
+
+
+class TestRequestValidationUserAgent:
+    async def test_missing_user_agent_is_rejected(self):
+        result, _response, call_next = await _dispatch_validation(headers={})
+        _assert_ua_rejected(result)
+        call_next.assert_not_called()
+
+    @pytest.mark.parametrize("user_agent", ["", "   ", "\t"])
+    async def test_blank_user_agent_is_rejected(self, user_agent):
+        result, _response, call_next = await _dispatch_validation(headers={"user-agent": user_agent})
+        _assert_ua_rejected(result)
+        call_next.assert_not_called()
+
+    async def test_valid_user_agent_passes(self):
+        result, response, call_next = await _dispatch_validation(headers=UA_HEADER)
+        assert result == response
+        call_next.assert_called_once()
+
+    async def test_disabled_switch_lets_missing_ua_pass(self):
+        result, response, call_next = await _dispatch_validation(headers={}, require_ua=False)
+        assert result == response
+        call_next.assert_called_once()
+
+    async def test_health_path_is_exempt(self):
+        result, response, call_next = await _dispatch_validation(path="/api/v1/health", headers={})
+        assert result == response
+        call_next.assert_called_once()
+
+    async def test_health_detail_path_is_exempt(self):
+        result, response, call_next = await _dispatch_validation(path="/api/v1/health/detail", headers={})
+        assert result == response
+        call_next.assert_called_once()
+
+    @pytest.mark.parametrize("path", ["/healthz", "/", "/api/docs"])
+    async def test_non_api_paths_are_untouched(self, path):
+        result, response, call_next = await _dispatch_validation(path=path, headers={})
+        assert result == response
+        call_next.assert_called_once()
+
+    async def test_ua_checked_for_get_without_body(self):
+        result, _response, call_next = await _dispatch_validation(path="/api/v1/categories", headers={})
+        _assert_ua_rejected(result)
+        call_next.assert_not_called()
+
+
+class TestRequestValidationBodySize:
+    async def test_oversized_content_length_is_rejected(self):
+        headers = {**UA_HEADER, "content-length": str(DEFAULT_BODY_LIMIT + 1)}
+        result, _response, call_next = await _dispatch_validation(headers=headers)
+        _assert_body_rejected(result)
+        call_next.assert_not_called()
+
+    async def test_content_length_at_the_limit_passes(self):
+        headers = {**UA_HEADER, "content-length": str(DEFAULT_BODY_LIMIT)}
+        result, response, call_next = await _dispatch_validation(headers=headers)
+        assert result == response
+        call_next.assert_called_once()
+
+    async def test_content_length_below_the_limit_passes(self):
+        headers = {**UA_HEADER, "content-length": "123"}
+        result, response, call_next = await _dispatch_validation(headers=headers)
+        assert result == response
+        call_next.assert_called_once()
+
+    async def test_no_content_length_is_not_limited(self):
+        # Chunked/streamed requests carry no Content-Length and are intentionally
+        # passed through (this layer is a cheap pre-filter, not a byte limit).
+        result, response, call_next = await _dispatch_validation(headers=UA_HEADER)
+        assert result == response
+        call_next.assert_called_once()
+
+    async def test_custom_limit_is_respected(self):
+        headers = {**UA_HEADER, "content-length": "2049"}
+        result, _response, call_next = await _dispatch_validation(headers=headers, max_bytes=2048)
+        _assert_body_rejected(result, limit=2048)
+        call_next.assert_not_called()
+
+    async def test_missing_ua_takes_precedence_over_body_size(self):
+        headers = {"content-length": str(DEFAULT_BODY_LIMIT + 1)}
+        result, _response, call_next = await _dispatch_validation(headers=headers)
+        _assert_ua_rejected(result)
+        call_next.assert_not_called()
+
+    async def test_invalid_content_length_fails_open(self):
+        headers = {**UA_HEADER, "content-length": "not-a-number"}
+        result, response, call_next = await _dispatch_validation(headers=headers)
+        assert result == response
+        call_next.assert_called_once()
+
+    async def test_invalid_content_length_fails_open_logs_warning(self, caplog):
+        headers = {**UA_HEADER, "content-length": "not-a-number"}
+        middleware = RequestValidationMiddleware(app=MagicMock())
+        call_next = AsyncMock(return_value=MagicMock())
+        with (
+            patch("app.core.middleware.settings.require_user_agent", True),
+            patch("app.core.middleware.settings.max_request_body_bytes", DEFAULT_BODY_LIMIT),
+            caplog.at_level("WARNING", logger="instantboard"),
+        ):
+            await middleware.dispatch(_validation_request(headers=headers), call_next)
+        assert any("Request validation check failed" in record.message for record in caplog.records)

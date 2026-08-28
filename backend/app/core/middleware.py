@@ -123,6 +123,70 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         return response
 
 
+# Path prefix covered by request validation; anything outside it (nginx /healthz
+# probe, frontend static files, the root info endpoint) is never checked.
+_API_PATH_PREFIX = "/api/v1/"
+
+# Diagnostic endpoint exempt from the User-Agent requirement: CD smoke tests and
+# manual curl-based troubleshooting must work without bespoke headers. Prefix match
+# mirrors RequestLoggingMiddleware.SKIP_PATHS semantics (covers /health/detail).
+_UA_EXEMPT_PATH_PREFIXES = ("/api/v1/health",)
+
+
+class RequestValidationMiddleware(BaseHTTPMiddleware):
+    """Layer-4 request validation (security.md §3.3): cheap shape checks that
+    reject trivially malformed API requests before authentication and routing.
+
+    - User-Agent: /api/v1/* requests must carry a non-blank User-Agent header
+      (switch: settings.require_user_agent, default on) — blocks the simplest
+      scripts. /api/v1/health is exempt (see _UA_EXEMPT_PATH_PREFIXES); the
+      nginx /healthz probe never reaches this middleware because it sits
+      outside /api/v1/ and is answered by nginx itself.
+    - Body size: requests whose Content-Length exceeds
+      settings.max_request_body_bytes (default 10KB) are rejected with 413 —
+      blocks oversized payloads. Chunked/streamed requests carry no
+      Content-Length header and are intentionally not limited here: stopping
+      them early would require buffering the body, and this layer is only a
+      cheap pre-filter (real limits belong to nginx / L2 rate limiting).
+
+    Any parsing/validation error inside this middleware fails open with a
+    warning log, matching OriginGuardMiddleware's availability-first stance.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        if not path.startswith(_API_PATH_PREFIX):
+            return await call_next(request)
+        try:
+            rejection = self._validate(request, path)
+        except Exception as e:
+            # Availability first: a parsing hiccup must never lock out
+            # legitimate requests (same stance as OriginGuardMiddleware).
+            logger.warning(f"Request validation check failed, allowing request: {e}")
+            return await call_next(request)
+        if rejection is not None:
+            return rejection
+        return await call_next(request)
+
+    def _validate(self, request: Request, path: str) -> JSONResponse | None:
+        if settings.require_user_agent:
+            exempt = any(path.startswith(prefix) for prefix in _UA_EXEMPT_PATH_PREFIXES)
+            if not exempt:
+                user_agent = request.headers.get("user-agent")
+                if user_agent is None or not user_agent.strip():
+                    return self._rejected(400, "User-Agent header is required")
+        content_length = request.headers.get("content-length")
+        if content_length is not None and int(content_length) > settings.max_request_body_bytes:
+            limit = settings.max_request_body_bytes
+            return self._rejected(413, f"Request body must not exceed {limit} bytes")
+        return None
+
+    @staticmethod
+    def _rejected(status_code: int, message: str) -> JSONResponse:
+        envelope = ErrorResponse(error=ErrorDetail(code=ErrorCode.VALIDATION_ERROR, message=message))
+        return JSONResponse(status_code=status_code, content=envelope.model_dump(mode="json"))
+
+
 # Methods that mutate state. Only these are origin-checked; GET/HEAD/OPTIONS are
 # exempt (SSE is a GET, and OPTIONS preflights are handled by CORSMiddleware).
 _STATE_CHANGING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
@@ -177,5 +241,12 @@ class OriginGuardMiddleware(BaseHTTPMiddleware):
 
 def setup_middlewares(app):
     setup_cors(app)
+    # add_middleware prepends, so the runtime stack order is RequestLogging ->
+    # OriginGuard -> RequestValidation -> CORS -> app. Request validation sits
+    # after OriginGuard and before CORS: cross-site mutations are rejected
+    # first, then malformed requests (missing User-Agent / oversized body),
+    # while every rejection still lands inside RequestLogging and is counted
+    # in the request statistics.
+    app.add_middleware(RequestValidationMiddleware)
     app.add_middleware(OriginGuardMiddleware)
     app.add_middleware(RequestLoggingMiddleware)

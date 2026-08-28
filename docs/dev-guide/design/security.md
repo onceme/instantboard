@@ -16,11 +16,11 @@ cross_refs: [architecture.md, api.md, database.md, infrastructure.md, admin-logi
 
 采用 **多层防御 (Defense in Depth)** 策略：Nginx层限流/SSL → FastAPI中间件层认证/隔离 → 数据层RLS/参数化查询，5种SSO通过统一OAuth2流程集成。
 
-> 📌 **现状提示（2026-08-24 审计修订，2026-08-27 RLS 落地，2026-08-28 CSP 与 Origin 校验落地）**：本文档为"设计 + 现状"混合文档——尚未落地的防护层
-> （Nginx 限流、应用层限流、IP 黑名单、请求验证等）
+> 📌 **现状提示（2026-08-24 审计修订，2026-08-27 RLS 落地，2026-08-28 CSP 与 Origin 校验落地，2026-08-28 L4 请求验证落地）**：本文档为"设计 + 现状"混合文档——尚未落地的防护层
+> （Nginx 限流、应用层限流、IP 黑名单等）
 > 均已在对应小节加 `⚠️ 未实现` 标注，规划内容保留作为路线图；
 > 代码已实现但此前未记录的机制统一补充在 §3.9。数据层 RLS 已实现（见 §3.5），
-> CSP 与 Origin/Referer 校验已实现（见 §3.2）。
+> CSP 与 Origin/Referer 校验已实现（见 §3.2），L4 请求验证（User-Agent + 请求体大小）已实现（见 §3.3 层级 4）。
 
 ## 3. 详细设计
 
@@ -127,10 +127,12 @@ IP_BLACKLIST_REDIS_KEY = "ip_blacklist"
 
 **层级 4: 请求验证**
 
-- ⚠️ **未实现**：验证 `User-Agent` 存在且非空 (阻止简单脚本)
-- ⚠️ **未实现**：验证请求大小 < 10KB (阻止超大请求)
-- ⚠️ **未实现**：API 端点 JWT 格式预检（实际是依赖注入中完整解析 + 黑名单校验）
+- ✅ **已实现**：验证 `User-Agent` 存在且非空（阻止简单脚本）——`RequestValidationMiddleware`（core/middleware.py）：`/api/v1/*` 请求 UA 缺失或纯空白 → 400 `VALIDATION_ERROR`（"User-Agent header is required"）。开关 `REQUIRE_USER_AGENT`（默认 true）。**豁免**：`/api/v1/health` 前缀（CD 冒烟/手工 curl 排查，前缀匹配覆盖 `/health/detail`，语义对齐 `RequestLoggingMiddleware.SKIP_PATHS`）；nginx 容器探活路径 `/healthz` 由 nginx 直接 `return 200 "ok"`、不代理到 FastAPI，不在 `/api/v1/` 前缀下**天然豁免**。浏览器 SSE（EventSource）请求自带 UA，不受影响
+- ✅ **已实现**：验证请求大小 < 10KB（阻止超大请求）——同一中间件：`Content-Length` 超过 `MAX_REQUEST_BODY_BYTES`（默认 10240）的请求 → 413（标准错误信封，code `VALIDATION_ERROR`，消息 "Request body must not exceed {limit} bytes"）。**无 Content-Length 的 chunked/流式请求不拦**——提前拦截需缓冲请求体，本层仅做廉价预过滤，真正的请求体上限职责归 nginx / L2 限流。解析异常（如非法 Content-Length 值）放行 + warning 日志（可用性优先，与 OriginGuard 口径一致）
+- ℹ️ **无独立实现**：API 端点 JWT 格式预检——不设独立中间件；格式/签名/有效期校验由依赖注入的 JWT 完整解析（`Depends(get_current_tenant)`）+ refresh token 黑名单校验承担（见 §3.6），畸形 token 统一 401 `INVALID_TOKEN`，语义等价于规划的"预检"
 - ✅ 已实现：SSE 端点强制 `token` query param（`Query(...)` 必填，缺失返回 422）
+
+**栈位置**：`setup_middlewares` 注册顺序使运行栈为 `RequestLogging → OriginGuard → RequestValidation → CORS → router`——先拒跨站（OriginGuard 403）再拒畸形（本层 400/413），且两类拒绝都发生在 `RequestLogging` 之内，被请求统计正常记录。回归护栏：`tests/unit/test_core_middleware.py::TestRequestValidation*`、`tests/integration/test_request_validation.py`。
 
 **DDoS 防护层级总结**:
 
@@ -141,9 +143,10 @@ IP_BLACKLIST_REDIS_KEY = "ip_blacklist"
 | L3: 黑名单 | Redis Set + 中间件 | 恶意IP | IP级 |
 | L4: 请求验证 | Header检查 | 异常请求 | 请求级 |
 
-> **现状总结**：L1 未启用、L2 未实现、L3 未实现、L4 大部分未实现。当前实际生效的防滥用机制是
-> 本地管理员登录的 email + IP 双维度防爆破锁定（见 [admin-login.md](admin-login.md) §7）。
-> 本节分层设计保留为实施路线图。
+> **现状总结**：L1 未启用、L2 未实现、L3 未实现、L4 已大部分落地（UA/请求体大小验证、SSE token 必填，
+> JWT 校验由依赖注入承担）。当前实际生效的防滥用机制是
+> 本地管理员登录的 email + IP 双维度防爆破锁定（见 [admin-login.md](admin-login.md) §7）与 L4 请求验证中间件。
+> L1–L3 的分层设计保留为实施路线图。
 
 ### 3.4 SSO 集成设计 (5种提供商，默认启用 Google + GitHub)
 

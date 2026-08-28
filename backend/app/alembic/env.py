@@ -15,7 +15,10 @@ from app.models.base import Base
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers=False: alembic may run in the same process as the
+    # app/tests; fileConfig's default would disable all pre-existing loggers and
+    # silently break their log output (e.g. caplog-based tests).
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 config.set_main_option("sqlalchemy.url", settings.database_url)
 

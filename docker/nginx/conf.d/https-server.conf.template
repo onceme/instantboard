@@ -24,7 +24,15 @@ server {
     ssl_session_tickets off;
 
     # --- API proxy ---
+    # L1 rate limit (zone defined in nginx.conf): 30 r/s per IP, burst of 60
+    # of which the first 20 pass immediately and the rest are queued (delay).
+    # Longer-prefix locations below override/exempt this: /api/v1/auth/ and
+    # /api/v1/stream/ carry their own limit_req, /api/v1/health is reached
+    # via this location in HTTPS mode and thus shares the generic budget.
+    # 429 responses inherit the server-level `always` security headers below
+    # (this location defines no add_header of its own).
     location /api/ {
+        limit_req zone=rl_api burst=60 delay=20;
         proxy_pass http://api;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -39,6 +47,12 @@ server {
     # backend are keyed on this header, so it must contain only nginx-observed data.
     # A client-supplied X-Forwarded-For chain is discarded here.
     location /api/v1/auth/ {
+        # Strictest zone (5 r/s per IP) — the credential entry point. Coarse
+        # edge defense against credential stuffing; the app layer additionally
+        # enforces a 10/min sliding-window limit and per email+IP lockout.
+        # burst=10 with delay=5: small legitimate bursts (login+refresh, SSO
+        # callback fan-out) pass, sustained floods queue then 429.
+        limit_req zone=rl_auth burst=10 delay=5;
         proxy_pass http://api;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -52,6 +66,14 @@ server {
     # SSE-tuned location must match that prefix; a bare /stream/ block is never hit and
     # requests fall through to the buffered /api/ location, breaking the event stream.
     location /api/v1/stream/ {
+        # Limits only the SSE CONNECTION-ESTABLISHMENT rate (2 r/s per IP).
+        # limit_req evaluates a request once, at entry — an established SSE
+        # long connection streams for hours (proxy_read_timeout 86400s) without
+        # consuming further budget, so steady-state streams are untouched.
+        # burst=8 nodelay: absorbs reconnect storms after network jitter /
+        # tab wakes without queueing (queued handshakes would stall the
+        # event stream anyway).
+        limit_req zone=rl_sse burst=8 nodelay;
         proxy_pass http://api;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;

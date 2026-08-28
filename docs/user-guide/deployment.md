@@ -300,6 +300,17 @@ docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml \
 - 安全头已启用：同一 `curl -I` 响应头还应包含 `Content-Security-Policy: default-src 'self'; ...`
   以及 `X-Frame-Options`、`X-Content-Type-Options`、`X-XSS-Protection`、`Referrer-Policy`
   （CSP 为 nginx 模板硬编码常量，策略与调优见 `docs/dev-guide/design/security.md` §3.2）；
+- Nginx 限流（L1）已生效：突发请求触发最严的认证档限流，
+
+  ```bash
+  for i in $(seq 1 20); do curl -s -o /dev/null -w '%{http_code} ' \
+    -X POST https://ib.bithollow.org:65533/api/v1/auth/login \
+    -H 'Content-Type: application/json' -d '{}'; done; echo
+  ```
+
+  预期前几个 `422`（空体参数校验）后连续出现 `429`（`rl_auth` 5r/s + burst=10 耗尽；
+  zone 参数、burst 口径与验证方法见 `docs/dev-guide/design/security.md` §3.3 层级 1）。
+  该探测只消耗匿名限流预算，约 1 分钟后自然恢复，不影响正常登录；
 - SSO 全流程：登录页 → 跳转提供商 → 回调 → 登录成功；
 - 仪表盘 SSE 指示器变绿（EventSource 走 **https 同源**；SSE 是 HTTP 长连接，无 `wss` 协议）
 - `docker compose ps` 中 nginx 持续 `healthy`（healthcheck 探测 `/healthz`，

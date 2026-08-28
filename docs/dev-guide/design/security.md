@@ -16,13 +16,14 @@ cross_refs: [architecture.md, api.md, database.md, infrastructure.md, admin-logi
 
 采用 **多层防御 (Defense in Depth)** 策略：Nginx层限流/SSL → FastAPI中间件层认证/隔离 → 数据层RLS/参数化查询，5种SSO通过统一OAuth2流程集成。
 
-> 📌 **现状提示（2026-08-24 审计修订，2026-08-27 RLS 落地，2026-08-28 CSP 与 Origin 校验落地，2026-08-28 L4 请求验证落地，2026-08-28 L3 IP 黑名单手工封禁落地，2026-08-28 L2 应用层限流落地）**：本文档为"设计 + 现状"混合文档——尚未落地的防护层
-> （Nginx 限流等）
+> 📌 **现状提示（2026-08-24 审计修订，2026-08-27 RLS 落地，2026-08-28 CSP 与 Origin 校验落地，2026-08-28 L4 请求验证落地，2026-08-28 L3 IP 黑名单手工封禁落地，2026-08-28 L2 应用层限流落地，2026-08-28 L1 Nginx 限流落地）**：本文档为"设计 + 现状"混合文档——尚未落地的防护层
+> （L3 自动封禁等）
 > 均已在对应小节加 `⚠️ 未实现` 标注，规划内容保留作为路线图；
 > 代码已实现但此前未记录的机制统一补充在 §3.9。数据层 RLS 已实现（见 §3.5），
 > CSP 与 Origin/Referer 校验已实现（见 §3.2），L4 请求验证（User-Agent + 请求体大小）已实现（见 §3.3 层级 4），
 > L3 IP 黑名单的手工管理（管理员端点 + 最外层中间件拦截）已实现（见 §3.3 层级 3）；自动封禁仍未实现。
 > L2 应用层限流（Redis ZSET 滑动窗口，租户+IP+路由分级）已实现（见 §3.3 层级 2）；
+> L1 Nginx 限流（limit_req 三 zone：auth/api/sse，按来源 IP 的粗粒度限频）已实现（见 §3.3 层级 1）；
 > 租户级阈值覆写与 SSE 每用户连接数上限仍是规划。
 
 ## 3. 详细设计
@@ -72,28 +73,35 @@ cross_refs: [architecture.md, api.md, database.md, infrastructure.md, admin-logi
 
 **层级 1: Nginx 限流 (粗粒度)**
 
-> ⚠️ **未启用**：`docker/nginx/nginx.conf:46-48` 中以下三条 `limit_req_zone` 全部处于注释状态，
-> 所有 location 均未配置 `limit_req`——Nginx 层限流目前仅是规划。
+- ✅ **已启用（2026-08-28）**：`docker/nginx/nginx.conf` 的 http 块定义三个 `limit_req_zone`
+  （键 `$binary_remote_addr`），两个服务器模板（`conf.d/http-server.conf.template`、
+  `https-server.conf.template`）的 API 相关 location 接入 `limit_req`。
+  **与 L2 应用层限流的分工**：本层是无外部状态的按来源 IP 粗限频——在边缘拒掉洪泛，
+  防止恶意/异常流量打穿代理与上游（Redis 故障时依然生效，见 §5）；
+  L2（下方层级 2）在其之上做租户级精细治理（分级阈值、租户预算、可观测信封）。
 
-```nginx
-# nginx.prod.conf
-limit_req_zone $binary_remote_addr zone=api_limit:10m rate=30r/s;
-limit_req_zone $binary_remote_addr zone=sse_limit:10m rate=5r/s;
-limit_req_zone $binary_remote_addr zone=auth_limit:10m rate=3r/s;
+  | zone | rate | 接入 location | burst 口径 |
+  |------|------|--------------|-----------|
+  | `rl_auth:10m` | 5r/s | `/api/v1/auth/` | `burst=10 delay=5`——登录/认证路径最严（防凭据爆破入口）；应用层另有 10/分滑动窗口与 email+IP 锁定叠加 |
+  | `rl_api:10m` | 30r/s | `/api/`（通用 API） | `burst=60 delay=20`——容忍页面加载扇出等短促合法尖峰，超出排队后 429 |
+  | `rl_sse:10m` | 2r/s | `/api/v1/stream/` | `burst=8 nodelay`——只限 **SSE 建连频率**：`limit_req` 仅在请求进入时刻判定一次，建连后的长连接（`proxy_read_timeout 86400s`）不再消耗配额；大 burst + nodelay 容忍网络抖动/页面唤醒的突发重连 |
 
-location /api/v1/auth/ {
-    limit_req zone=auth_limit burst=5 nodelay;
-    ...
-}
-location /api/v1/stream/ {
-    limit_req zone=sse_limit burst=3 nodelay;
-    ...
-}
-location /api/v1/ {
-    limit_req zone=api_limit burst=20 nodelay;
-    ...
-}
-```
+  - **超限响应**：http 块统一定义 `limit_req_status 429`（nginx 默认 503，改为 429 与
+    L2 语义对齐）；两个模板均不再局部覆写。`/api/` 与 auth location 的 429 响应继承
+    服务器级 `always` 安全头（CSP 等，见 §3.2）；stream location 因自带 CORS
+    `add_header` 声明，按 nginx `add_header` 继承规则不继承服务器级安全头——该现象对
+    一切 SSE 响应（不止 429）成立，nginx 默认 429 页无用户输入回显，风险可接受。
+  - **豁免**：`/`（SPA）、静态资源 regex location 与 `/healthz` 不配置 `limit_req`；
+    HTTP 模式下 `/api/v1/health` 有独立 location 不受限（CD 冒烟），HTTPS 模式下经
+    `/api/` location 共享 rl_api 配额（CD 探测频率远低于阈值）。
+  - **多级代理注意事项**：键取 `$binary_remote_addr`，单代理部署下即真实客户端来源；
+    若此 nginx 之前再叠加反向代理/CDN，必须先启用 `real_ip` 模块
+    （`set_real_ip_from` 可信网段 + `real_ip_header X-Forwarded-For` +
+    `real_ip_recursive on`），否则所有客户端会被归并到上游代理 IP 的单一限流桶。
+  - 回归护栏：`backend/tests/unit/test_nginx_security_headers.py` 之外新增
+    `backend/tests/unit/test_nginx_rate_limiting.py`（静态断言三 zone 已启用且参数正确、
+    两模板 location 接入正确 zone、429 状态统一、health/静态豁免）；全套配置经容器内
+    `nginx -t` 验证（HTTP 与 HTTPS 两模式）。
 
 **层级 2: FastAPI 限流 (细粒度，租户级)**
 
@@ -183,17 +191,17 @@ location /api/v1/ {
 
 | 层级 | 技术 | 保护对象 | 限制粒度 |
 |------|------|---------|---------|
-| L1: Nginx | limit_req | 全局 | IP级 |
+| L1: Nginx | ✅ limit_req（auth/api/sse 三 zone，429） | 全局 | IP级 |
 | L2: FastAPI | ✅ Redis ZSET 滑动窗口 | 租户级 | （租户+IP+路由档位）级 |
 | L3: 黑名单 | Redis Set + 中间件 | 恶意IP | IP级 |
 | L4: 请求验证 | Header检查 | 异常请求 | 请求级 |
 
-> **现状总结**：L1 未启用、L2 已实现（Redis ZSET 滑动窗口，分级阈值 + burst + 豁免 + fail-open，
+> **现状总结**：L1 已启用（auth/api/sse 三 zone limit_req，429，见层级 1）、L2 已实现（Redis ZSET 滑动窗口，分级阈值 + burst + 豁免 + fail-open，
 > 见层级 2）、L3 手工封禁已实现（管理员端点 + 最外层中间件拦截；自动封禁仍待"持续超限→升级封禁"
 > 的攻击计数器逻辑，见层级 3 标注）、L4 已大部分落地（UA/请求体大小验证、SSE token 必填，
 > JWT 校验由依赖注入承担）。当前实际生效的防滥用机制是
 > 本地管理员登录的 email + IP 双维度防爆破锁定（见 [admin-login.md](admin-login.md) §7）、
-> L2 应用层限流、L4 请求验证中间件与 L3 IP 黑名单（手工）。L1 与 L3 自动封禁的分层设计保留为实施路线图。
+> L1 Nginx 限流、L2 应用层限流、L4 请求验证中间件与 L3 IP 黑名单（手工）。L3 自动封禁的分层设计保留为实施路线图。
 
 ### 3.4 SSO 集成设计 (5种提供商，默认启用 Google + GitHub)
 
@@ -538,7 +546,7 @@ app.add_middleware(
 | 决策 | 选择 | 理由 |
 |------|------|------|
 | CSRF防护 | 无Cookie认证(JWT Bearer) | SPA+Bearer天然免疫CSRF |
-| 限流层级 | Nginx + FastAPI + 黑名单（✅ **L2 分级滑动窗口已实现**：Redis ZSET 60s 窗口、租户+IP+路由档位键、limit+burst 阈值、健康检查/SSE 豁免、fail-open，见 §3.3 层级 2；L1 未启用、L3 手工封禁已实现、自动封禁待攻击计数器逻辑） | 多层纵深防御 |
+| 限流层级 | Nginx + FastAPI + 黑名单（✅ **L1 三 zone limit_req 已启用**：auth 5r/s、api 30r/s、sse 建连 2r/s，超限 429，见 §3.3 层级 1；✅ **L2 分级滑动窗口已实现**：Redis ZSET 60s 窗口、租户+IP+路由档位键、limit+burst 阈值、健康检查/SSE 豁免、fail-open，见 §3.3 层级 2；L3 手工封禁已实现、自动封禁待攻击计数器逻辑） | 多层纵深防御 |
 | SSO架构 | 统一OAuth2 + Provider适配器 | 5种SSO统一接口，新增provider只需加handler |
 | JWT方案 | 双Token(Access+Refresh) | Access短效安全，Refresh长效方便 |
 | 多租户 | 行级隔离+RLS ✅ 已实现（应用层显式过滤为主防线，8 表 `ENABLE+FORCE` RLS + `tenant_isolation` 策略为纵深兜底，后台经 `app.is_service` 旁路，见 §3.5 与 database.md §3.5） | 性能好、成本低 |
@@ -549,7 +557,7 @@ app.add_middleware(
 - **未启用的SSO提供商**: 返回 `VALIDATION_ERROR (400)`（provider 未启用或不受支持均用此码），前端通过 `GET /api/v1/auth/sso/providers` 预检查避免此情况
 - **SSO提供商宕机**: 返回 `SSO_PROVIDER_ERROR (502)`，前端提示用户尝试其他SSO或稍后重试
 - **JWT密钥泄露**: 管理API支持立即更换 `JWT_SECRET`，所有旧token自动失效
-- **Redis限流不可用**: L2 中间件 **fail-open**（放行 + debug 日志，与栈内其他层口径一致）——可用性优先，限流在 Redis 恢复后自动重新生效；此时原规划的"降级 Nginx 层限流"**并不存在**（L1 未启用，见 §3.3 层级 1），Redis 故障期间的抗滥用依赖管理员手工封禁（L3，同样依赖 Redis 故同窗失效）与 auth 层防爆破锁定，属接受的风险窗口
+- **Redis限流不可用**: L2 中间件 **fail-open**（放行 + debug 日志，与栈内其他层口径一致）——可用性优先，限流在 Redis 恢复后自动重新生效；此窗口内 L1 Nginx 限流仍然生效（纯 nginx 自身计数，不依赖 Redis——按来源 IP 30/5/2 r/s 粗限频与 429，见 §3.3 层级 1）作为抗滥用兜底，仅租户级精细治理暂缺。L3 手工封禁同样依赖 Redis 故同窗失效，管理员登录的 email+IP 防爆破锁定（进程内计数）不受影响
 - **Redis黑名单不可用**: 中间件读不到黑名单时 **fail-open**（放行 + debug 日志）——可用性优先，封禁在 Redis 恢复后自动重新生效；手工封禁因此**不是**抗 DDoS 的硬保证，恶性流量仍需 L1 兜底（L2 与 Redis 同生死，见上一条）
 - **Redis不可用（OAuth state）**: authorize 存 state 与登录校验 state 均降级为 fail-open（warning 日志），SSO 登录保持可用；详见 §3.2 SSO OAuth State 行的决策说明
 - **Apple代理email**: 用户隐藏真实email时，使用代理email，不可变更

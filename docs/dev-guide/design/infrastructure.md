@@ -138,7 +138,7 @@ instantboard/
 │   ├── docker-compose.prod.yml   # 生产编排
 │   ├── docker-compose.test.yml
 │   ├── nginx/
-│   │   ├── nginx.conf            # 主配置（limit_req_zone 全被注释）
+│   │   ├── nginx.conf            # 主配置（limit_req 三 zone 已启用 + limit_req_status 429，见 security.md §3.3 层级 1）
 │   │   ├── conf.d/*.template     # http/https 模板
 │   │   └── entrypoint.sh         # envsubst 渲染
 │   ├── postgres/                 # init.sql（⚠️ 无 postgresql.conf）
@@ -323,7 +323,8 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./nginx/nginx.prod.conf:/etc/nginx/nginx.conf
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./nginx/conf.d:/etc/nginx/templates   # entrypoint.sh envsubst 渲染到 /etc/nginx/conf.d
       - ./nginx/ssl:/etc/nginx/ssl
       - frontend_static:/usr/share/nginx/html
     depends_on:
@@ -377,7 +378,7 @@ services:
 | 热重载 | volume mount + --reload | 无，构建后静态 |
 | Worker | 内嵌 API 进程（APScheduler，SCHEDULER_ENABLED=true） | 独立进程：复用 backend 镜像 + `command: python -m app.scheduler.worker`（api 侧 SCHEDULER_ENABLED=false） |
 | 数据库镜像 | postgres:17（开发） | postgres:15-alpine（生产，与既有数据目录锁定版本） |
-| Nginx | 不使用 | 必须使用 (SSL + rate-limit) |
+| Nginx | 不使用 | 必须使用 (SSL + L1 limit_req 限流) |
 | MongoDB | 按需 profile 启动 | 按需 profile 启动 |
 | Health check | 无 | 必须 |
 | Restart policy | 无 | always |

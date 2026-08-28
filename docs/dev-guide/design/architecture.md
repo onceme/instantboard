@@ -68,7 +68,7 @@ API Layer 的 9 个路由模块（接口定义详见 [api.md](api.md)）：
 - `/api/v1/stream/{category}`
 - `/api/v1/admin`
 
-> ⚠️ **未实现**：Nginx 限流与 CSP。`docker/nginx/nginx.conf:45-48` 的三个 `limit_req_zone`（api/sse/auth）全部被注释，文件中无任何 `limit_req` 指令，全仓库亦无 Content-Security-Policy 响应头。
+> ✅ **已实现**：Nginx 限流与 CSP。`docker/nginx/nginx.conf` 定义三个 `limit_req_zone`（rl_auth 5r/s、rl_api 30r/s、rl_sse 2r/s）+ `limit_req_status 429`，两个服务器模板的 auth/api/stream location 接入 `limit_req`（security.md §3.3 层级 1）；Content-Security-Policy 与四个安全头由模板硬编码 `always` 下发（security.md §3.2）。
 
 > ✅ **已实现**：应用层限流。`RateLimitMiddleware`（`app/core/middleware.py`）为 Redis ZSET 60s 滑动窗口，按（租户+IP+路由档位）分桶（键 `rate:{tenant_id|anon}:{ip}:{route_class}`，复用 `RedisKeys.rate_limit_key()`）：auth 10/分、search 20/分、默认 60/分（`RATE_LIMIT_AUTH_PER_MINUTE`/`RATE_LIMIT_SEARCH_PER_MINUTE`/`RATE_LIMIT_PER_MINUTE`），窗口容忍 阈值+`RATE_LIMIT_BURST`（默认 10）次，超限 429 + `Retry-After: 60`；`/api/v1/health*`、`/api/v1/stream/*` 豁免；`RATE_LIMIT_ENABLED` 开关、Redis 故障 fail-open（security.md §3.3 层级 2）。
 
@@ -241,7 +241,7 @@ services:
 | HTTP客户端 | httpx | async 支持、HTTP/2、比 aiohttp 更现代 |
 | HTML解析 | BeautifulSoup | 简单可靠、社区成熟 |
 | RSS解析 | feedparser | Python RSS 解析标准库 |
-| 反向代理 | Nginx | SSL termination、静态资源、反向代理（限流已预留注释，未启用） |
+| 反向代理 | Nginx | SSL termination、静态资源、反向代理（L1 limit_req 三 zone 限流已启用）、安全头与 CSP 硬编码下发 |
 | 容器编排 | Docker Compose | 开发+生产统一、服务隔离、一键启动 |
 | CI/CD | GitHub Actions | 与 GitHub 集成、免费额度充足 |
 | 数据迁移 | Alembic | SQLAlchemy/FastAPI 生态标准迁移工具 |

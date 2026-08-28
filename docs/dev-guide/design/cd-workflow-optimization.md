@@ -38,6 +38,8 @@ cross_refs: [infrastructure.md, architecture.md]
 - `cd-production.yml` **从未运行过**（仓库 0 个 release），其构建配置与 staging 同构，故一次全新发布构建同样约 31min；
 - `ci.yml` 总时长 ~4m12s，其中 `build-docker` job（amd64-only、`push: false`、仅验证）约 1m41s。
 
+> 2026-08-28 补充：staging 流水线最前端现已新增 `wait-for-ci` 门禁 job（`needs` 不能跨工作流，故显式轮询同一提交的 `ci.yml` 运行，成功后才进入 `build-and-push`）。本表的耗时口径不含门禁等待时间。
+
 ### 2.2 缓存零命中根因（已源码级定位）
 
 三个 workflow 共 6 处 `cache-from: type=gha` / `cache-to: type=gha,mode=max` **均未指定 scope**，全部落到同一个默认索引键

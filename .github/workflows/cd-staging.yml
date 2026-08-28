@@ -9,9 +9,53 @@ env:
   IMAGE_PREFIX: ${{ github.repository_owner }}/instantboard
 
 jobs:
+  # Cross-workflow CI gate: GitHub Actions `needs` can only reference jobs of
+  # the SAME workflow, so this job explicitly polls until the ci.yml run for this
+  # commit finishes. Key points:
+  #   - Both workflows are triggered by the same push and race to start, so
+  #     the polling tolerates "CI run not created yet" (empty API result).
+  #   - A cancelled/failed CI run counts as failure: any conclusion other
+  #     than "success" aborts the deploy.
+  #   - timeout-minutes: 30 (= 60 x 30s polls) is the safety net against
+  #     polling forever if the CI run never appears or gets stuck.
+  wait-for-ci:
+    name: Wait for CI
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: read
+    steps:
+      - name: Wait until the CI run for this commit succeeds
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Waiting for the CI workflow on commit $GITHUB_SHA ..."
+          for attempt in $(seq 1 60); do
+            JSON=$(gh api "/repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&per_page=1" \
+                   --jq '.workflow_runs[0] | {id, status, conclusion}' || true)
+            RUN_ID=$(echo "$JSON" | jq -r '.id // empty')
+            STATUS=$(echo "$JSON" | jq -r '.status // empty')
+            CONCLUSION=$(echo "$JSON" | jq -r '.conclusion // empty')
+            if [ "$STATUS" = "completed" ]; then
+              if [ "$CONCLUSION" = "success" ]; then
+                echo "CI run $RUN_ID succeeded — proceeding."
+                exit 0
+              fi
+              echo "::error::CI run $RUN_ID ended with conclusion '$CONCLUSION' — aborting staging deploy."
+              exit 1
+            fi
+            echo "CI run ${RUN_ID:-<not created yet>} status: ${STATUS:-unknown} ($attempt/60)"
+            sleep 30
+          done
+          echo "::error::Timed out waiting for CI on commit $GITHUB_SHA."
+          exit 1
+
   build-and-push:
     name: Build & Push Images
     runs-on: ubuntu-latest
+    # Deliberate full-chain gate: deploy needs build-and-push needs wait-for-ci,
+    # so a red CI means no images are built and nothing gets deployed either.
+    needs: wait-for-ci
     permissions:
       contents: read
       packages: write
@@ -72,9 +116,8 @@ jobs:
     needs: build-and-push
     if: github.ref == 'refs/heads/staging'
     environment: staging
-    # NOTE: this deploy does NOT wait for the CI workflow — GitHub Actions
-    # cannot express cross-workflow "needs". Enforce CI via branch protection
-    # instead: require the CI jobs as status checks before merging to staging.
+    # The cross-workflow CI gate is enforced by the wait-for-ci job above;
+    # this job inherits it transitively via `needs: build-and-push`.
     steps:
       - name: Checkout
         uses: actions/checkout@v7

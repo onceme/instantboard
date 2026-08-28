@@ -231,13 +231,17 @@ on:
   push:
     branches: [staging]
 jobs:
+  wait-for-ci:                        # 跨工作流门禁：needs 不能引用其他工作流的
+    # job，故每 30s 轮询同一提交的 ci.yml 运行；成功才放行，失败/取消/30min 超时中止
   build-and-push:
+    needs: wait-for-ci                # 全链门禁：CI 红则不构建、不部署
     steps:
       - checkout
       - docker buildx (backend, frontend, worker)
       - push to GitHub Container Registry (GHCR)
       - tag: staging-latest
   deploy:
+    needs: build-and-push             # 经传递获得 wait-for-ci 门禁
     steps:
       - SSH to staging server
       - docker compose -f docker-compose.prod.yml pull

@@ -16,12 +16,14 @@ cross_refs: [architecture.md, api.md, database.md, infrastructure.md, admin-logi
 
 采用 **多层防御 (Defense in Depth)** 策略：Nginx层限流/SSL → FastAPI中间件层认证/隔离 → 数据层RLS/参数化查询，5种SSO通过统一OAuth2流程集成。
 
-> 📌 **现状提示（2026-08-24 审计修订，2026-08-27 RLS 落地，2026-08-28 CSP 与 Origin 校验落地，2026-08-28 L4 请求验证落地，2026-08-28 L3 IP 黑名单手工封禁落地）**：本文档为"设计 + 现状"混合文档——尚未落地的防护层
-> （Nginx 限流、应用层限流等）
+> 📌 **现状提示（2026-08-24 审计修订，2026-08-27 RLS 落地，2026-08-28 CSP 与 Origin 校验落地，2026-08-28 L4 请求验证落地，2026-08-28 L3 IP 黑名单手工封禁落地，2026-08-28 L2 应用层限流落地）**：本文档为"设计 + 现状"混合文档——尚未落地的防护层
+> （Nginx 限流等）
 > 均已在对应小节加 `⚠️ 未实现` 标注，规划内容保留作为路线图；
 > 代码已实现但此前未记录的机制统一补充在 §3.9。数据层 RLS 已实现（见 §3.5），
 > CSP 与 Origin/Referer 校验已实现（见 §3.2），L4 请求验证（User-Agent + 请求体大小）已实现（见 §3.3 层级 4），
 > L3 IP 黑名单的手工管理（管理员端点 + 最外层中间件拦截）已实现（见 §3.3 层级 3）；自动封禁仍未实现。
+> L2 应用层限流（Redis ZSET 滑动窗口，租户+IP+路由分级）已实现（见 §3.3 层级 2）；
+> 租户级阈值覆写与 SSE 每用户连接数上限仍是规划。
 
 ## 3. 详细设计
 
@@ -95,23 +97,50 @@ location /api/v1/ {
 
 **层级 2: FastAPI 限流 (细粒度，租户级)**
 
-> ⚠️ **未实现**：`RateLimitMiddleware` 目前是空壳直通（core/middleware.py:129-132）；
-> `RATE_LIMIT_PER_MINUTE` / `RATE_LIMIT_BURST`（config.py:130-131）无任何消费者；
-> `RateLimitExceeded` 异常已定义但全代码库零抛出。以下内容均为规划。
-
-```python
-# auth/rate_limit.py
-class RateLimitMiddleware:
-    # 基于 Redis 的滑动窗口限流
-    # Key: rate:{tenant_id}:{ip}:{endpoint_prefix}
-    # 每个租户有独立的限流配置
-    
-    Default limits:
-    - 全局 API: 60 requests/min per IP per tenant
-    - 认证: 5 requests/min per IP
-    - SSE: 3 connections per user
-    - 搜索: 20 requests/min per user
-```
+- ✅ **已实现（Redis ZSET 滑动窗口）**：`RateLimitMiddleware`（core/middleware.py）替换原空壳直通：
+  - **算法**：每个限流桶是一个 Redis ZSET。每请求先记录本次时间戳（`ZADD key now "{now}:{uuid 后缀}"`，
+    uuid 后缀防止同毫秒并发请求塌缩成同一成员），再裁剪滑出窗口的成员
+    （`ZREMRANGEBYSCORE key 0 (now-60s)`，-exclusive 上界使恰好一个窗口老的成员多存活一轮），
+    以 `ZCARD` 判定：窗口内请求数（含本次）> 阈值 → 429；最后 `EXPIRE key 60+5s`
+    让空闲桶在成员全部滑出后随即回收。四条命令聚合为**单条非事务 pipeline = 单往返**
+    （`redis_sliding_window_count`，core/redis.py）——位于每请求热路径，往返数最小化。
+    窗口固定 60s（`RATE_LIMIT_WINDOW_SECONDS`，所有限流档位均以"每分钟"定义）。
+  - **键结构**：`rate:{tenant_id|anon}:{ip}:{route_class}`（复用既有 `RedisKeys.rate_limit_key()`）。
+    tenant 从 Authorization Bearer 或 SSE `token` query param **尽力不验签解码**（复用
+    `extract_tenant_from_token_unverified`，与 get_db 的 RLS 上下文同一信任模型）；
+    无 token / 解码失败 / 非 UUID 租户声明 → 共享 `anon` 桶（非法声明不得污染键布局）。
+    ip 用 `get_client_ip` 右起解析（与 L3 黑名单、管理员防爆破同口径）。
+    ⚠️ 已知残余：攻击者可伪造 UUID 租户声明把流量摊到多个桶——该取舍与 RLS 上下文一致，
+    剩余风险由 IP 维度、auth 层防爆破锁定与 L1/L3 兜底约束。
+  - **路由分级（`_route_class`）**：
+    | 档位 | 路径 | 阈值（每分钟） | 说明 |
+    |------|------|--------------|------|
+    | auth | `/api/v1/auth/*` | `RATE_LIMIT_AUTH_PER_MINUTE` 默认 **10** | 管理员登录另有 email+IP 双维度防爆破锁定叠加，此档仅需温和值即可压制凭据填充体量 |
+    | search | `/api/v1/finance/search`、`/api/v1/tech/search` | `RATE_LIMIT_SEARCH_PER_MINUTE` 默认 **20** | 交互式搜索，收紧 |
+    | default | 其余 `/api/v1/*` | `RATE_LIMIT_PER_MINUTE` 默认 **60** | 常规 API |
+  - **burst 语义**：窗口内实际容忍 `档位阈值 + RATE_LIMIT_BURST`（默认 10）次请求——
+    为页面加载扇出等短促合法尖峰留出余量，避免误伤。
+  - **豁免**：`/api/v1/health*`（CD 冒烟/手工排查）、`/api/v1/stream*`（SSE 长连接，
+    流式响应会长期占用"一次请求"而毒化计数；SSE 连接另行治理）、非 `/api/v1` 路径
+    （语义对齐 `RequestLoggingMiddleware.SKIP_PATHS`）。
+  - **超限响应**：429 + 标准错误信封（`RATE_LIMIT_EXCEEDED`，"Rate limit exceeded"）
+    + `Retry-After: 60`。信封由中间件**直接构造**（不走异常处理器——中间件位于
+    FastAPI exception handlers 之外，抛 `HTTPException` 会变成 500；与栈内其他中间件同模式）。
+    被拒请求同样计入窗口（攻击持续时窗口保持满载）。
+  - **开关与降级**：`RATE_LIMIT_ENABLED`（默认 true）关闭时整体直通；
+    **fail-open**——Redis 任何异常放行 + debug 日志（与 OriginGuard/RequestValidation/IP 黑名单
+    的可用性优先口径一致）。
+  - **栈位置**：`IPBlacklist → RequestLogging → RateLimit → OriginGuard → RequestValidation → CORS → router`。
+    位于 IPBlacklist 之内：被封禁 IP 先吃 403，不消耗限流预算、不产生 rate 键；
+    位于 RequestLogging 之内：被限流的 429 仍被日志与请求统计记录
+    （dashboard `error_rate_4xx` 即攻击可观测信号）；
+    位于 OriginGuard/RequestValidation 之外：畸形与跨站请求同样消耗预算
+    （吸收垃圾流量正是本层职责）。
+  - 回归护栏：`tests/unit/test_rate_limit.py`（分级/键构成/边界/豁免/开关/降级/滑窗恢复）、
+    `tests/integration/test_rate_limit.py`（全栈 429 信封、租户与 IP 桶隔离）。
+- ⚠️ **仍是规划**：原草图中"每个租户独立的限流配置"（按租户覆写阈值）与
+  "SSE 每用户 3 连接"上限均未实现——当前阈值为全局配置；`RateLimitExceeded` 异常
+  类保留但不由中间件抛出（429 信封由中间件直接构造，原因见上）。
 
 **层级 3: IP 黑名单**
 
@@ -137,8 +166,9 @@ class RateLimitMiddleware:
   - **fail-open**：缓存构造失败 / Redis 不可用 → 放行 + debug 日志（可用性优先，与 OriginGuard/
     RequestValidation 口径一致）；失败的拉取不污染缓存，下次请求重试。
   - 回归护栏：`tests/unit/test_ip_blacklist.py`、`tests/integration/test_ip_blacklist.py`。
-- ⚠️ **未实现（自动封禁，后续增强）**：原规划"连续触发限流 5 次 → 自动加黑 1h"依赖 L2 应用层限流的
-  攻击计数器，而 L2 尚未实现（见上方层级 2），故自动封禁暂不落地；当前仅管理员手工封禁。
+- ⚠️ **未实现（自动封禁，后续增强）**：原规划"连续触发限流 5 次 → 自动加黑 1h"依赖在 L2 应用层限流之上
+  叠加**攻击计数器**（持续超限的 (IP) 升级封禁）；L2 滑动窗口本身已实现（见上方层级 2），
+  但该升级逻辑尚未落地，当前仅管理员手工封禁。
 
 **层级 4: 请求验证**
 
@@ -147,22 +177,23 @@ class RateLimitMiddleware:
 - ℹ️ **无独立实现**：API 端点 JWT 格式预检——不设独立中间件；格式/签名/有效期校验由依赖注入的 JWT 完整解析（`Depends(get_current_tenant)`）+ refresh token 黑名单校验承担（见 §3.6），畸形 token 统一 401 `INVALID_TOKEN`，语义等价于规划的"预检"
 - ✅ 已实现：SSE 端点强制 `token` query param（`Query(...)` 必填，缺失返回 422）
 
-**栈位置**：`setup_middlewares` 注册顺序使运行栈为 `IPBlacklist → RequestLogging → OriginGuard → RequestValidation → CORS → router`——被封禁 IP 最先被拒（403 "Access denied"，不进日志与统计），其后先拒跨站（OriginGuard 403）再拒畸形（本层 400/413），且后两类拒绝都发生在 `RequestLogging` 之内，被请求统计正常记录。回归护栏：`tests/unit/test_core_middleware.py::TestRequestValidation*`、`tests/integration/test_request_validation.py`。
+**栈位置**：`setup_middlewares` 注册顺序使运行栈为 `IPBlacklist → RequestLogging → RateLimit → OriginGuard → RequestValidation → CORS → router`——被封禁 IP 最先被拒（403 "Access denied"，不进日志与统计，也不消耗限流预算）；其后是 L2 限流，位于 `RequestLogging` 之内，超限 429 仍被日志与请求统计记录（`error_rate_4xx` 即攻击可观测信号）；再其后先拒跨站（OriginGuard 403）再拒畸形（本层 400/413）——这两类拒绝也发生在限流之内，畸形与跨站流量同样消耗限流预算。回归护栏：`tests/unit/test_core_middleware.py::TestRequestValidation*`、`tests/integration/test_request_validation.py`、`tests/unit/test_rate_limit.py`、`tests/integration/test_rate_limit.py`。
 
 **DDoS 防护层级总结**:
 
 | 层级 | 技术 | 保护对象 | 限制粒度 |
 |------|------|---------|---------|
 | L1: Nginx | limit_req | 全局 | IP级 |
-| L2: FastAPI | Redis滑动窗口 | 租户级 | IP+租户级 |
+| L2: FastAPI | ✅ Redis ZSET 滑动窗口 | 租户级 | （租户+IP+路由档位）级 |
 | L3: 黑名单 | Redis Set + 中间件 | 恶意IP | IP级 |
 | L4: 请求验证 | Header检查 | 异常请求 | 请求级 |
 
-> **现状总结**：L1 未启用、L2 未实现、L3 手工封禁已实现（管理员端点 + 最外层中间件拦截；自动封禁待 L2 计数器，
-> 见层级 3 标注）、L4 已大部分落地（UA/请求体大小验证、SSE token 必填，
+> **现状总结**：L1 未启用、L2 已实现（Redis ZSET 滑动窗口，分级阈值 + burst + 豁免 + fail-open，
+> 见层级 2）、L3 手工封禁已实现（管理员端点 + 最外层中间件拦截；自动封禁仍待"持续超限→升级封禁"
+> 的攻击计数器逻辑，见层级 3 标注）、L4 已大部分落地（UA/请求体大小验证、SSE token 必填，
 > JWT 校验由依赖注入承担）。当前实际生效的防滥用机制是
-> 本地管理员登录的 email + IP 双维度防爆破锁定（见 [admin-login.md](admin-login.md) §7）、L4 请求验证中间件
-> 与 L3 IP 黑名单（手工）。L1–L2 与 L3 自动封禁的分层设计保留为实施路线图。
+> 本地管理员登录的 email + IP 双维度防爆破锁定（见 [admin-login.md](admin-login.md) §7）、
+> L2 应用层限流、L4 请求验证中间件与 L3 IP 黑名单（手工）。L1 与 L3 自动封禁的分层设计保留为实施路线图。
 
 ### 3.4 SSO 集成设计 (5种提供商，默认启用 Google + GitHub)
 
@@ -507,7 +538,7 @@ app.add_middleware(
 | 决策 | 选择 | 理由 |
 |------|------|------|
 | CSRF防护 | 无Cookie认证(JWT Bearer) | SPA+Bearer天然免疫CSRF |
-| 限流层级 | Nginx + FastAPI + 黑名单（L1/L2 未落地，L3 手工封禁已实现、自动封禁待 L2 计数器，见 §3.3 标注） | 多层纵深防御 |
+| 限流层级 | Nginx + FastAPI + 黑名单（✅ **L2 分级滑动窗口已实现**：Redis ZSET 60s 窗口、租户+IP+路由档位键、limit+burst 阈值、健康检查/SSE 豁免、fail-open，见 §3.3 层级 2；L1 未启用、L3 手工封禁已实现、自动封禁待攻击计数器逻辑） | 多层纵深防御 |
 | SSO架构 | 统一OAuth2 + Provider适配器 | 5种SSO统一接口，新增provider只需加handler |
 | JWT方案 | 双Token(Access+Refresh) | Access短效安全，Refresh长效方便 |
 | 多租户 | 行级隔离+RLS ✅ 已实现（应用层显式过滤为主防线，8 表 `ENABLE+FORCE` RLS + `tenant_isolation` 策略为纵深兜底，后台经 `app.is_service` 旁路，见 §3.5 与 database.md §3.5） | 性能好、成本低 |
@@ -518,8 +549,8 @@ app.add_middleware(
 - **未启用的SSO提供商**: 返回 `VALIDATION_ERROR (400)`（provider 未启用或不受支持均用此码），前端通过 `GET /api/v1/auth/sso/providers` 预检查避免此情况
 - **SSO提供商宕机**: 返回 `SSO_PROVIDER_ERROR (502)`，前端提示用户尝试其他SSO或稍后重试
 - **JWT密钥泄露**: 管理API支持立即更换 `JWT_SECRET`，所有旧token自动失效
-- **Redis限流不可用**: 降级为 Nginx 层限流 (粗粒度但有效)
-- **Redis黑名单不可用**: 中间件读不到黑名单时 **fail-open**（放行 + debug 日志）——可用性优先，封禁在 Redis 恢复后自动重新生效；手工封禁因此**不是**抗 DDoS 的硬保证，恶性流量仍需 L1/L2 兜底
+- **Redis限流不可用**: L2 中间件 **fail-open**（放行 + debug 日志，与栈内其他层口径一致）——可用性优先，限流在 Redis 恢复后自动重新生效；此时原规划的"降级 Nginx 层限流"**并不存在**（L1 未启用，见 §3.3 层级 1），Redis 故障期间的抗滥用依赖管理员手工封禁（L3，同样依赖 Redis 故同窗失效）与 auth 层防爆破锁定，属接受的风险窗口
+- **Redis黑名单不可用**: 中间件读不到黑名单时 **fail-open**（放行 + debug 日志）——可用性优先，封禁在 Redis 恢复后自动重新生效；手工封禁因此**不是**抗 DDoS 的硬保证，恶性流量仍需 L1 兜底（L2 与 Redis 同生死，见上一条）
 - **Redis不可用（OAuth state）**: authorize 存 state 与登录校验 state 均降级为 fail-open（warning 日志），SSO 登录保持可用；详见 §3.2 SSO OAuth State 行的决策说明
 - **Apple代理email**: 用户隐藏真实email时，使用代理email，不可变更
 - **多SSO同一email（身份隔离）**: 按登录入口隔离，**不做跨 email 合并**（见 [admin-login.md](admin-login.md) §2、`app/services/auth.py::_get_or_create_user`）：

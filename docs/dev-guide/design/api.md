@@ -1230,7 +1230,7 @@ GET /api/v1/health/detail — 依赖深度检查 (不需要认证, health.py:22)
 | ITEM_NOT_FOUND | 404 | 信息条目不存在 |
 | DUPLICATE_CATEGORY | 409 | 分类名称已存在 |
 | DUPLICATE_WATCHLIST_ITEM | 409 | 自选列表已有该条目 |
-| RATE_LIMIT_EXCEEDED | 429 | 请求频率超限（错误码已定义；限流机制本身未实现，见 security.md §3.3） |
+| RATE_LIMIT_EXCEEDED | 429 | 请求频率超限（✅ 限流器已启用，见 security.md §3.3 层级 2）：Redis ZSET 60s 滑动窗口、按（租户+IP+路由档位）分桶——`/api/v1/auth/*` 默认 10/分、`/api/v1/finance/search` 与 `/api/v1/tech/search` 默认 20/分、其余 `/api/v1/*` 默认 60/分；窗口内容忍 阈值+`RATE_LIMIT_BURST`（默认 10）次。响应为标准错误信封并附 `Retry-After: 60` 头；`/api/v1/health*`、`/api/v1/stream/*`（SSE）与非 `/api/v1` 路径豁免 |
 | INTERNAL_ERROR | 500 | 服务器内部错误 |
 | ADMIN_LOGIN_DISABLED | 503 | 本地管理员登录未启用（新增） |
 | SERVICE_UNAVAILABLE | 503 | 服务降级 |

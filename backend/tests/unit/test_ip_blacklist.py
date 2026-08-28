@@ -205,12 +205,14 @@ class TestSetupMiddlewaresBlacklistOutermost:
         setup_middlewares(app)
         call_list = [call[0][0].__name__ for call in app.add_middleware.call_args_list]
         # add_middleware prepends: the LAST registration runs FIRST at request
-        # time, so banned IPs are dropped before logging/validation/origin checks.
+        # time, so banned IPs are dropped before logging/validation/origin
+        # checks and never consume rate-limit budget.
         assert call_list[-1] == "IPBlacklistMiddleware"
         assert call_list == [
             "CORSMiddleware",
             "RequestValidationMiddleware",
             "OriginGuardMiddleware",
+            "RateLimitMiddleware",
             "RequestLoggingMiddleware",
             "IPBlacklistMiddleware",
         ]

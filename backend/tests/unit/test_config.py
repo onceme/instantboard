@@ -134,13 +134,40 @@ class TestSettings:
         settings = Settings()
         assert settings.sse_heartbeat_interval == 30
 
+    def test_default_rate_limit_enabled(self):
+        settings = Settings()
+        assert settings.rate_limit_enabled is True
+
     def test_default_rate_limit_per_minute(self):
         settings = Settings()
         assert settings.rate_limit_per_minute == 60
 
+    def test_default_rate_limit_auth_per_minute(self):
+        settings = Settings()
+        assert settings.rate_limit_auth_per_minute == 10
+
+    def test_default_rate_limit_search_per_minute(self):
+        settings = Settings()
+        assert settings.rate_limit_search_per_minute == 20
+
     def test_default_rate_limit_burst(self):
         settings = Settings()
         assert settings.rate_limit_burst == 10
+
+    def test_rate_limit_env_overrides(self):
+        s = Settings(
+            RATE_LIMIT_ENABLED="false",
+            RATE_LIMIT_PER_MINUTE="120",
+            RATE_LIMIT_AUTH_PER_MINUTE="5",
+            RATE_LIMIT_SEARCH_PER_MINUTE="15",
+            RATE_LIMIT_BURST="3",
+            _env_file=None,
+        )
+        assert s.rate_limit_enabled is False
+        assert s.rate_limit_per_minute == 120
+        assert s.rate_limit_auth_per_minute == 5
+        assert s.rate_limit_search_per_minute == 15
+        assert s.rate_limit_burst == 3
 
     def test_default_tenant_slug(self):
         settings = Settings()

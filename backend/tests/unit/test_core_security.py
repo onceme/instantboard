@@ -12,6 +12,7 @@ from app.core.security import (
     create_access_token,
     create_refresh_token,
     decode_token,
+    extract_tenant_from_token_unverified,
     extract_user_from_token,
     get_access_token_remaining_seconds,
     hash_password,
@@ -222,6 +223,25 @@ class TestExtractUserFromToken:
         token = create_refresh_token(data={"sub": "user123"})
         result = extract_user_from_token(token)
         assert result is None
+
+
+class TestExtractTenantFromTokenUnverified:
+    def test_valid_token_returns_tenant(self):
+        token = create_access_token(data={"sub": "user123", "tenant_id": "tenant-abc"})
+        assert extract_tenant_from_token_unverified(token) == "tenant-abc"
+
+    def test_invalid_token_returns_none(self):
+        assert extract_tenant_from_token_unverified("not.a.jwt") is None
+
+    def test_missing_tenant_claim_returns_none(self):
+        token = create_access_token(data={"sub": "user123"})
+        assert extract_tenant_from_token_unverified(token) is None
+
+    def test_expired_token_still_returns_tenant(self):
+        # Decode-only contract: signature/expiry are NOT verified (the caller
+        # decides trust), so an expired token still yields its tenant claim.
+        token = create_access_token(data={"sub": "user123", "tenant_id": "tenant-abc"}, expires_minutes=-1)
+        assert extract_tenant_from_token_unverified(token) == "tenant-abc"
 
 
 class TestGetAccessTokenRemainingSeconds:

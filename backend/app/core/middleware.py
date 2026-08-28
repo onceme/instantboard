@@ -1,5 +1,6 @@
 import logging
 import time
+import uuid
 from urllib.parse import urlparse
 
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,8 +9,9 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from app.config import settings
-from app.core.redis import RedisKeys, get_redis_client
-from app.dependencies import get_client_ip
+from app.core.redis import RedisKeys, get_redis_client, redis_sliding_window_count
+from app.core.security import extract_tenant_from_token_unverified
+from app.dependencies import _extract_raw_token, get_client_ip
 from app.schemas.base import ErrorCode, ErrorDetail, ErrorResponse
 
 logger = logging.getLogger("instantboard")
@@ -118,10 +120,128 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         return response
 
 
+# ---------------------------------------------------------------------------
+# Layer 2: application-level rate limiting (security.md §3.3)
+# ---------------------------------------------------------------------------
+
+# Fixed sliding-window length: every route tier is defined in requests/minute.
+RATE_LIMIT_WINDOW_SECONDS = 60
+
+# Window keys get TTL = window + this margin so an idle key is reclaimed right
+# after its members can no longer influence the window count.
+RATE_LIMIT_TTL_BUFFER_SECONDS = 5
+
+# Paths never rate-limited: health probes (CD smoke tests, manual curl) and SSE
+# long-lived connections (a streaming response occupies its "request" for its
+# whole lifetime, which would poison the counter; SSE connections are governed
+# separately). Prefix semantics mirror RequestLoggingMiddleware.SKIP_PATHS.
+_RATE_LIMIT_EXEMPT_PREFIXES = ("/api/v1/health", "/api/v1/stream")
+
+_AUTH_PREFIX = "/api/v1/auth"
+_SEARCH_PREFIXES = ("/api/v1/finance/search", "/api/v1/tech/search")
+
+# Tenant bucket for unauthenticated / undecidable requests.
+_ANON_TENANT = "anon"
+
+
+def _route_class(path: str) -> str | None:
+    """Classify a request path into a rate-limit tier; None means exempt."""
+    if not path.startswith(_API_PATH_PREFIX):
+        return None
+    if any(path.startswith(prefix) for prefix in _RATE_LIMIT_EXEMPT_PREFIXES):
+        return None
+    if path == _AUTH_PREFIX or path.startswith(_AUTH_PREFIX + "/"):
+        return "auth"
+    if any(path == prefix or path.startswith(prefix + "/") for prefix in _SEARCH_PREFIXES):
+        return "search"
+    return "default"
+
+
+def _tenant_for_rate(request: Request) -> str:
+    """Best-effort tenant extraction for the limit bucket.
+
+    The token is decoded WITHOUT verification (same helper get_db uses for the
+    RLS context) because this is not an authorization decision: the definitive
+    check still happens in get_current_user before any endpoint returns data.
+    A missing/unparseable token degrades to the shared anon bucket. Non-UUID
+    tenant claims are rejected before reaching the Redis key so a forged claim
+    cannot corrupt the key layout (same stance as dependencies.get_db). Note
+    the accepted caveat: an attacker can still forge UUID tenant claims to
+    split their traffic across buckets; the residual risk is bounded by IP
+    keying, the auth-tier brute-force lockout and L1/L3 layers.
+    """
+    raw_token = _extract_raw_token(request)
+    if raw_token:
+        tenant_id = extract_tenant_from_token_unverified(raw_token)
+        if tenant_id:
+            try:
+                uuid.UUID(tenant_id)
+            except ValueError:
+                return _ANON_TENANT
+            return tenant_id
+    return _ANON_TENANT
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
+    """Layer-2 application rate limiting (security.md §3.3).
+
+    Redis ZSET sliding window over one bucket per (tenant, IP, route tier):
+    each request records its timestamp (ZADD), members older than the 60s
+    window are trimmed (ZREMRANGEBYSCORE), and ZCARD decides — once the
+    population exceeds the tier limit PLUS settings.rate_limit_burst, the
+    request is rejected with 429 RATE_LIMIT_EXCEEDED and Retry-After: 60.
+    The burst headroom lets short legitimate spikes (page-load fan-out) pass.
+
+    Tier limits: auth = settings.rate_limit_auth_per_minute (login already has
+    the email+IP brute-force lockout stacked on top, so a moderate value
+    suffices), search = settings.rate_limit_search_per_minute, everything
+    else = settings.rate_limit_per_minute. Exempt: /api/v1/health*,
+    /api/v1/stream* (SSE) and non-/api/v1 paths (see _route_class).
+
+    Fail-open: any Redis error passes the request with a debug log, matching
+    the availability-first stance of the other layers in this stack. The
+    limiter is disabled entirely by settings.rate_limit_enabled.
+    """
+
     async def dispatch(self, request: Request, call_next):
-        response: Response = await call_next(request)
-        return response
+        if not settings.rate_limit_enabled:
+            return await call_next(request)
+        route_class = _route_class(request.url.path)
+        if route_class is None:
+            return await call_next(request)
+        match route_class:
+            case "auth":
+                limit = settings.rate_limit_auth_per_minute
+            case "search":
+                limit = settings.rate_limit_search_per_minute
+            case _:
+                limit = settings.rate_limit_per_minute
+        allowed = limit + settings.rate_limit_burst
+
+        key = RedisKeys.rate_limit_key(_tenant_for_rate(request), get_client_ip(request), route_class)
+        now_ms = int(time.time() * 1000)
+        try:
+            count = await redis_sliding_window_count(
+                key, now_ms, RATE_LIMIT_WINDOW_SECONDS, RATE_LIMIT_WINDOW_SECONDS + RATE_LIMIT_TTL_BUFFER_SECONDS
+            )
+        except Exception as e:
+            logger.debug(f"Rate limiter unavailable, failing open: {e}")
+            return await call_next(request)
+        if count > allowed:
+            return self._too_many_requests()
+        return await call_next(request)
+
+    @staticmethod
+    def _too_many_requests() -> JSONResponse:
+        # Built directly (not via the RateLimitExceeded exception): middleware
+        # sits outside FastAPI's exception handlers, so a raised HTTPException
+        # would surface as a 500. Same pattern as the other middlewares.
+        envelope = ErrorResponse(error=ErrorDetail(code=ErrorCode.RATE_LIMIT_EXCEEDED, message="Rate limit exceeded"))
+        return JSONResponse(
+            status_code=429,
+            content=envelope.model_dump(mode="json"),
+            headers={"Retry-After": str(RATE_LIMIT_WINDOW_SECONDS)},
+        )
 
 
 # Path prefix covered by request validation; anything outside it (nginx /healthz
@@ -316,14 +436,18 @@ class IPBlacklistMiddleware(BaseHTTPMiddleware):
 def setup_middlewares(app):
     setup_cors(app)
     # add_middleware prepends, so the runtime stack order is IPBlacklist ->
-    # RequestLogging -> OriginGuard -> RequestValidation -> CORS -> app.
-    # The blacklist sits outermost: banned IPs are dropped before anything
-    # else happens (not even request logging). Request validation sits after
-    # OriginGuard and before CORS: cross-site mutations are rejected first,
-    # then malformed requests (missing User-Agent / oversized body), while
-    # every rejection still lands inside RequestLogging and is counted in
-    # the request statistics.
+    # RequestLogging -> RateLimit -> OriginGuard -> RequestValidation -> CORS ->
+    # app. The blacklist sits outermost: banned IPs are dropped before anything
+    # else happens (not even request logging) and never consume rate-limit
+    # budget. Rate limiting sits right INSIDE RequestLogging so rate-limited
+    # 429s are still logged and counted in the request statistics —
+    # error_rate_4xx on the dashboard is the observable attack signal — and
+    # outside OriginGuard/RequestValidation so malformed and cross-site
+    # requests consume budget too (absorbing junk traffic is this layer's job).
+    # Rejections by OriginGuard/RequestValidation likewise land inside
+    # RequestLogging and stay visible in the statistics.
     app.add_middleware(RequestValidationMiddleware)
     app.add_middleware(OriginGuardMiddleware)
+    app.add_middleware(RateLimitMiddleware)
     app.add_middleware(RequestLoggingMiddleware)
     app.add_middleware(IPBlacklistMiddleware)

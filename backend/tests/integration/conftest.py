@@ -19,6 +19,25 @@ from tests.conftest import test_engine, test_session_factory
 _redis_mock_instance = None
 
 
+def _parse_score_bound(value):
+    """Parse a ZREMRANGEBYSCORE bound: number or '(number' (exclusive)."""
+    exclusive = False
+    if isinstance(value, str):
+        if value.startswith("("):
+            exclusive = True
+            value = value[1:]
+        value = float(value)
+    return float(value), exclusive
+
+
+def _zset_score_in_bounds(score, min_bound, max_bound):
+    lo, lo_exclusive = _parse_score_bound(min_bound)
+    hi, hi_exclusive = _parse_score_bound(max_bound)
+    below_low = score < lo or (score == lo and lo_exclusive)
+    above_high = score > hi or (score == hi and hi_exclusive)
+    return not below_low and not above_high
+
+
 class MockPipeline:
     def __init__(self, redis):
         self._redis = redis
@@ -36,6 +55,18 @@ class MockPipeline:
         self._commands.append(("expire", key, seconds))
         return self
 
+    def zadd(self, key, mapping):
+        self._commands.append(("zadd", key, mapping))
+        return self
+
+    def zremrangebyscore(self, key, min_score, max_score):
+        self._commands.append(("zremrangebyscore", key, min_score, max_score))
+        return self
+
+    def zcard(self, key):
+        self._commands.append(("zcard", key))
+        return self
+
     async def execute(self):
         results = []
         for command in self._commands:
@@ -46,6 +77,12 @@ class MockPipeline:
                 results.append(await self._redis.ltrim(command[1], command[2], command[3]))
             elif name == "expire":
                 results.append(await self._redis.expire(command[1], command[2]))
+            elif name == "zadd":
+                results.append(await self._redis.zadd(command[1], command[2]))
+            elif name == "zremrangebyscore":
+                results.append(await self._redis.zremrangebyscore(command[1], command[2], command[3]))
+            elif name == "zcard":
+                results.append(await self._redis.zcard(command[1]))
         self._commands = []
         return results
 
@@ -152,6 +189,36 @@ class MockRedis:
         lst = self._data.get(key, [])
         return lst[start : end + 1] if end >= 0 else lst[start:]
 
+    async def zadd(self, key, mapping):
+        self._purge_expired(key)
+        existing = self._data.get(key)
+        if not isinstance(existing, dict):
+            existing = {}
+            self._data[key] = existing
+        added = 0
+        for member, score in mapping.items():
+            if member not in existing:
+                added += 1
+            existing[member] = float(score)
+        return added
+
+    async def zremrangebyscore(self, key, min_score, max_score):
+        self._purge_expired(key)
+        existing = self._data.get(key)
+        if not isinstance(existing, dict):
+            return 0
+        removed = 0
+        for member, score in list(existing.items()):
+            if _zset_score_in_bounds(score, min_score, max_score):
+                del existing[member]
+                removed += 1
+        return removed
+
+    async def zcard(self, key):
+        self._purge_expired(key)
+        existing = self._data.get(key)
+        return len(existing) if isinstance(existing, dict) else 0
+
     def pipeline(self, transaction=True):
         return MockPipeline(self)
 
@@ -176,10 +243,17 @@ async def _mock_lifespan(app):
 def app_with_overrides():
     """Create an app instance with overridden lifespan and dependencies."""
     global _redis_mock_instance
+    from app.config import settings
     from app.main import app
 
     original_lifespan = app.router.lifespan_context
     app.router.lifespan_context = _mock_lifespan
+
+    # The layer-2 rate limiter is ON in shipping defaults, but the test suite
+    # fires far more requests per IP than any tier allows — so it is disabled
+    # for the whole suite and re-enabled per test by test_rate_limit.py.
+    original_rate_limit_enabled = settings.rate_limit_enabled
+    settings.rate_limit_enabled = False
 
     mock_redis = MockRedis()
     _redis_mock_instance = mock_redis
@@ -310,6 +384,7 @@ def app_with_overrides():
 
     app.dependency_overrides.clear()
     app.router.lifespan_context = original_lifespan
+    settings.rate_limit_enabled = original_rate_limit_enabled
     _redis_mock_instance = None
 
 

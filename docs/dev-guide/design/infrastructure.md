@@ -90,7 +90,7 @@ instantboard/
 │   │   │   ├── constants.py / exceptions.py
 │   │   │   ├── security.py       # JWT 签发/校验（原"auth/jwt.py"）
 │   │   │   ├── sso_handlers.py   # 5 种 SSO（原"auth/sso.py"）
-│   │   │   ├── middleware.py     # CORS / 请求日志 / 限流中间件（空壳）
+│   │   │   ├── middleware.py     # CORS / 请求日志 / IP 黑名单 / L2 滑动窗口限流 / 请求验证
 │   │   │   ├── redis.py          # Redis 客户端 + RedisKeys（不在 db/ 下）
 │   │   │   └── sse_router.py     # SSE EventRouter（原"sse/event_router.py"）
 │   │   ├── db/
@@ -532,8 +532,11 @@ ADMIN_PASSWORD（仅非生产环境的明文便捷项）
 YAHOO_FINANCE_API_KEY / ALPHA_VANTAGE_API_KEY / FINNHUB_API_KEY / FINNHUB_API_KEYS
 
 # --- CORS / SSE / 限流 ---
-CORS_ORIGINS / SSE_HEARTBEAT_INTERVAL=30 / RATE_LIMIT_PER_MINUTE / RATE_LIMIT_BURST
-  # ⚠️ 限流配置项目前无消费者（见 architecture.md）
+CORS_ORIGINS / SSE_HEARTBEAT_INTERVAL=30
+RATE_LIMIT_ENABLED=true / RATE_LIMIT_PER_MINUTE=60 / RATE_LIMIT_AUTH_PER_MINUTE=10
+  / RATE_LIMIT_SEARCH_PER_MINUTE=20 / RATE_LIMIT_BURST=10
+  # ✅ L2 应用层限流消费（RateLimitMiddleware，Redis ZSET 60s 滑动窗口，
+  #   分级阈值 + burst，见 security.md §3.3 层级 2）
 
 # --- 租户默认 ---
 DEFAULT_TENANT_SLUG / DEFAULT_TENANT_NAME

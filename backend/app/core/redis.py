@@ -1,6 +1,7 @@
 import json
 import logging
 from typing import Any
+from uuid import uuid4
 
 from redis.asyncio import ConnectionPool, Redis
 
@@ -319,3 +320,39 @@ async def redis_lrange(key: str, start: int = 0, end: int = -1) -> list[str]:
     except Exception as e:
         logger.warning(f"Redis lrange failed for {key}: {e}")
         return []
+
+
+async def redis_sliding_window_count(key: str, now_ms: int, window_seconds: int, ttl_seconds: int) -> int:
+    """Record one event in a sliding-window rate-limit counter (Redis ZSET) and
+    return the number of events inside the window, INCLUDING the new one.
+
+    Aggregated into a single non-transactional pipeline = one round trip per
+    request instead of four, because this runs on the hot path of every API
+    request (RateLimitMiddleware, security.md §3.3 layer 2). The command order
+    matters only in that ZADD lands before ZCARD; trimming may run before or
+    after the insert with identical results (the new member's score is always
+    inside the window):
+
+      ZADD key now member       record this request's timestamp
+      ZREMRANGEBYSCORE key 0 (now-window)   drop members that slid out of the
+                                window (exclusive upper bound keeps a member
+                                exactly `window` old counting for one more pass)
+      ZCARD key                 window population used for the limit decision
+      EXPIRE key ttl            let idle keys die shortly after their last
+                                member leaves the window
+
+    The member is f"{now_ms}:{uuid4().hex}" — score AND member being the bare
+    timestamp would let two requests in the same millisecond collide on one
+    member (ZADD updates the score instead of adding), silently skipping a
+    count precisely under heavy load. Raises on Redis errors; the middleware
+    treats any exception as fail-open.
+    """
+    client = await get_redis_client()
+    member = f"{now_ms}:{uuid4().hex}"
+    pipe = client.pipeline(transaction=False)
+    pipe.zadd(key, {member: now_ms})
+    pipe.zremrangebyscore(key, 0, f"({now_ms - window_seconds * 1000}")
+    pipe.zcard(key)
+    pipe.expire(key, ttl_seconds)
+    results = await pipe.execute()
+    return int(results[2])

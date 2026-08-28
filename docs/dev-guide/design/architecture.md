@@ -70,7 +70,7 @@ API Layer 的 9 个路由模块（接口定义详见 [api.md](api.md)）：
 
 > ⚠️ **未实现**：Nginx 限流与 CSP。`docker/nginx/nginx.conf:45-48` 的三个 `limit_req_zone`（api/sse/auth）全部被注释，文件中无任何 `limit_req` 指令，全仓库亦无 Content-Security-Policy 响应头。
 
-> ⚠️ **未实现**：限流中间件。`RedisKeys.RATE_LIMIT` 有定义但 `RateLimitMiddleware`（`app/core/middleware.py:129-132`）是空壳直通，`RATE_LIMIT_PER_MINUTE`/`RATE_LIMIT_BURST` 配置项无任何消费者。
+> ✅ **已实现**：应用层限流。`RateLimitMiddleware`（`app/core/middleware.py`）为 Redis ZSET 60s 滑动窗口，按（租户+IP+路由档位）分桶（键 `rate:{tenant_id|anon}:{ip}:{route_class}`，复用 `RedisKeys.rate_limit_key()`）：auth 10/分、search 20/分、默认 60/分（`RATE_LIMIT_AUTH_PER_MINUTE`/`RATE_LIMIT_SEARCH_PER_MINUTE`/`RATE_LIMIT_PER_MINUTE`），窗口容忍 阈值+`RATE_LIMIT_BURST`（默认 10）次，超限 429 + `Retry-After: 60`；`/api/v1/health*`、`/api/v1/stream/*` 豁免；`RATE_LIMIT_ENABLED` 开关、Redis 故障 fail-open（security.md §3.3 层级 2）。
 
 > ⚠️ **未实现**：外部源 NewsAPI / Twitter(X) / 通用 Web Scraping。`COLLECTOR_REGISTRY`（`app/collectors/__init__.py`）当前注册 9 个采集器（`yfinance` / `alpha_vantage` / `eastmoney` / `finnhub` / `iex_cloud` / `rss` / `hackernews` / `arxiv` / `reddit`）。
 

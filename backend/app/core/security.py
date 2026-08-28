@@ -107,7 +107,9 @@ def extract_tenant_from_token_unverified(token: str) -> str | None:
     RLS hides all tenant rows for it.
     """
     try:
-        payload = jwt.decode(token, options={"verify_signature": False})
+        # python-jose requires the positional key argument even when signature
+        # verification is disabled; the empty key is never used for checking.
+        payload = jwt.decode(token, "", options={"verify_signature": False, "verify_exp": False})
     except JWTError:
         return None
     if not isinstance(payload, dict):

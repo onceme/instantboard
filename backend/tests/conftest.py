@@ -115,6 +115,25 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
         await session.rollback()
 
 
+def _parse_score_bound(value):
+    """Parse a ZREMRANGEBYSCORE bound: number or '(number' (exclusive)."""
+    exclusive = False
+    if isinstance(value, str):
+        if value.startswith("("):
+            exclusive = True
+            value = value[1:]
+        value = float(value)
+    return float(value), exclusive
+
+
+def _zset_score_in_bounds(score, min_bound, max_bound):
+    lo, lo_exclusive = _parse_score_bound(min_bound)
+    hi, hi_exclusive = _parse_score_bound(max_bound)
+    below_low = score < lo or (score == lo and lo_exclusive)
+    above_high = score > hi or (score == hi and hi_exclusive)
+    return not below_low and not above_high
+
+
 @pytest.fixture
 def redis_mock():
     """Mock Redis client for tests."""
@@ -136,6 +155,18 @@ def redis_mock():
             self._commands.append(("expire", key, seconds))
             return self
 
+        def zadd(self, key, mapping):
+            self._commands.append(("zadd", key, mapping))
+            return self
+
+        def zremrangebyscore(self, key, min_score, max_score):
+            self._commands.append(("zremrangebyscore", key, min_score, max_score))
+            return self
+
+        def zcard(self, key):
+            self._commands.append(("zcard", key))
+            return self
+
         async def execute(self):
             results = []
             for command in self._commands:
@@ -146,6 +177,12 @@ def redis_mock():
                     results.append(await self._redis.ltrim(command[1], command[2], command[3]))
                 elif name == "expire":
                     results.append(await self._redis.expire(command[1], command[2]))
+                elif name == "zadd":
+                    results.append(await self._redis.zadd(command[1], command[2]))
+                elif name == "zremrangebyscore":
+                    results.append(await self._redis.zremrangebyscore(command[1], command[2], command[3]))
+                elif name == "zcard":
+                    results.append(await self._redis.zcard(command[1]))
             self._commands = []
             return results
 
@@ -245,6 +282,36 @@ def redis_mock():
         async def lrange(self, key, start, end):
             lst = self._data.get(key, [])
             return lst[start : end + 1] if end >= 0 else lst[start:]
+
+        async def zadd(self, key, mapping):
+            self._purge_expired(key)
+            existing = self._data.get(key)
+            if not isinstance(existing, dict):
+                existing = {}
+                self._data[key] = existing
+            added = 0
+            for member, score in mapping.items():
+                if member not in existing:
+                    added += 1
+                existing[member] = float(score)
+            return added
+
+        async def zremrangebyscore(self, key, min_score, max_score):
+            self._purge_expired(key)
+            existing = self._data.get(key)
+            if not isinstance(existing, dict):
+                return 0
+            removed = 0
+            for member, score in list(existing.items()):
+                if _zset_score_in_bounds(score, min_score, max_score):
+                    del existing[member]
+                    removed += 1
+            return removed
+
+        async def zcard(self, key):
+            self._purge_expired(key)
+            existing = self._data.get(key)
+            return len(existing) if isinstance(existing, dict) else 0
 
         def pipeline(self, transaction=True):
             return MockPipeline(self)

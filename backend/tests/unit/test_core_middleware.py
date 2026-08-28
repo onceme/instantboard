@@ -6,7 +6,6 @@ from app.core.middleware import (
     MILESTONE_LOG_EVERY,
     SLOW_REQUEST_THRESHOLD_MS,
     OriginGuardMiddleware,
-    RateLimitMiddleware,
     RequestLoggingMiddleware,
     RequestValidationMiddleware,
     _record_request_stats,
@@ -258,33 +257,24 @@ class TestRequestLoggingMiddleware:
             mw._total_request_count = old_count
 
 
-class TestRateLimitMiddleware:
-    async def test_dispatch_pass_through(self):
-        middleware = RateLimitMiddleware(app=MagicMock())
-
-        request = MagicMock()
-        response = MagicMock()
-        call_next = AsyncMock(return_value=response)
-
-        result = await middleware.dispatch(request, call_next)
-        assert result == response
-        call_next.assert_called_once()
-
-
 class TestSetupMiddlewares:
     def test_calls_setup_cors_and_adds_logging_middleware(self):
         app = MagicMock()
         setup_middlewares(app)
         call_list = [call[0][0].__name__ for call in app.add_middleware.call_args_list]
         # Registration order: CORS -> RequestValidation -> OriginGuard ->
-        # RequestLogging -> IPBlacklist. add_middleware prepends, so the runtime
-        # stack order is IPBlacklist -> RequestLogging -> OriginGuard ->
-        # RequestValidation -> CORS -> app: banned IPs are dropped outermost,
-        # before even request logging.
+        # RateLimit -> RequestLogging -> IPBlacklist. add_middleware prepends,
+        # so the runtime stack order is IPBlacklist -> RequestLogging ->
+        # RateLimit -> OriginGuard -> RequestValidation -> CORS -> app: banned
+        # IPs are dropped outermost (before rate limiting and request logging),
+        # while rate-limited 429s still land inside RequestLogging and are
+        # counted in the request statistics. Rate limit behavior is covered by
+        # tests/unit/test_rate_limit.py.
         assert call_list == [
             "CORSMiddleware",
             "RequestValidationMiddleware",
             "OriginGuardMiddleware",
+            "RateLimitMiddleware",
             "RequestLoggingMiddleware",
             "IPBlacklistMiddleware",
         ]

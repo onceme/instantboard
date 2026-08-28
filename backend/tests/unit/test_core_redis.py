@@ -16,9 +16,13 @@ from app.core.redis import (
     redis_sadd,
     redis_set,
     redis_sismember,
+    redis_sliding_window_count,
     redis_smembers,
     redis_srem,
 )
+
+NOW_MS = 1_700_000_000_000
+RATE_KEY = "rate:anon:203.0.113.7:default"
 
 
 class TestRedisKeys:
@@ -219,3 +223,94 @@ class TestRedisOperations:
             result = await redis_srem("key1", "member1", "member2")
             assert result == 1
             mock_client.srem.assert_called_once_with("key1", "member1", "member2")
+
+
+def _mock_zset_pipeline():
+    pipe = MagicMock()
+    pipe.zadd = MagicMock()
+    pipe.zcard = MagicMock()
+    pipe.zremrangebyscore = MagicMock()
+    pipe.expire = MagicMock()
+    # [zadd_added, zremrangebyscore_removed, zcard, expire_ok]
+    pipe.execute = AsyncMock(return_value=[1, 0, 3, True])
+    client = MagicMock()
+    client.pipeline = MagicMock(return_value=pipe)
+    return client, pipe
+
+
+class TestRedisSlidingWindowCount:
+    async def test_single_pipeline_one_round_trip(self):
+        client, pipe = _mock_zset_pipeline()
+        with patch("app.core.redis.get_redis_client", new=AsyncMock(return_value=client)):
+            result = await redis_sliding_window_count(RATE_KEY, NOW_MS, 60, 65)
+        # The count is the ZCARD result (third command in the pipeline).
+        assert result == 3
+        client.pipeline.assert_called_once_with(transaction=False)
+        pipe.execute.assert_awaited_once()
+
+    async def test_pipeline_command_shape(self):
+        client, pipe = _mock_zset_pipeline()
+        with patch("app.core.redis.get_redis_client", new=AsyncMock(return_value=client)):
+            await redis_sliding_window_count(RATE_KEY, NOW_MS, 60, 65)
+        # ZADD before the trim so the current request is always counted; the
+        # member carries a uuid suffix so same-millisecond requests never
+        # collide on one member.
+        zadd_args = pipe.zadd.call_args.args
+        assert zadd_args[0] == RATE_KEY
+        ((member, score),) = zadd_args[1].items()
+        assert member.startswith(f"{NOW_MS}:")
+        assert len(member) > len(f"{NOW_MS}:")
+        assert score == NOW_MS
+        pipe.zremrangebyscore.assert_called_once_with(RATE_KEY, 0, f"({NOW_MS - 60_000}")
+        pipe.zcard.assert_called_once_with(RATE_KEY)
+        pipe.expire.assert_called_once_with(RATE_KEY, 65)
+
+    async def test_consecutive_calls_count_up(self, redis_mock):
+        with patch("app.core.redis.get_redis_client", new=AsyncMock(return_value=redis_mock)):
+            first = await redis_sliding_window_count(RATE_KEY, NOW_MS, 60, 65)
+            second = await redis_sliding_window_count(RATE_KEY, NOW_MS + 1, 60, 65)
+            third = await redis_sliding_window_count(RATE_KEY, NOW_MS + 2, 60, 65)
+        assert (first, second, third) == (1, 2, 3)
+
+    async def test_same_millisecond_events_both_counted(self, redis_mock):
+        # Member = "{ts}:{uuid}": two requests in the same millisecond must not
+        # collapse into a single ZSET member.
+        with patch("app.core.redis.get_redis_client", new=AsyncMock(return_value=redis_mock)):
+            first = await redis_sliding_window_count(RATE_KEY, NOW_MS, 60, 65)
+            second = await redis_sliding_window_count(RATE_KEY, NOW_MS, 60, 65)
+        assert (first, second) == (1, 2)
+
+    async def test_members_outside_window_are_trimmed(self, redis_mock):
+        with patch("app.core.redis.get_redis_client", new=AsyncMock(return_value=redis_mock)):
+            await redis_sliding_window_count(RATE_KEY, NOW_MS, 60, 65)
+            await redis_sliding_window_count(RATE_KEY, NOW_MS + 30_000, 60, 65)
+            # 61s after the first event it has slid out of the window.
+            count = await redis_sliding_window_count(RATE_KEY, NOW_MS + 61_000, 60, 65)
+        assert count == 2
+
+    async def test_member_exactly_window_old_survives_exclusive_bound(self, redis_mock):
+        # ZREMRANGEBYSCORE uses an exclusive upper bound "(now-window", so a
+        # member exactly `window` old survives one more pass and is trimmed
+        # only once the cutoff moves past it.
+        with patch("app.core.redis.get_redis_client", new=AsyncMock(return_value=redis_mock)):
+            await redis_sliding_window_count(RATE_KEY, NOW_MS, 60, 65)
+            # Exactly one window later: the first member sits right on the
+            # exclusive cutoff and survives.
+            count_at_boundary = await redis_sliding_window_count(RATE_KEY, NOW_MS + 60_000, 60, 65)
+            # Now the cutoff (NOW_MS + 60_001) is past BOTH earlier members.
+            count_past_boundary = await redis_sliding_window_count(RATE_KEY, NOW_MS + 120_001, 60, 65)
+        assert count_at_boundary == 2
+        assert count_past_boundary == 1
+
+    async def test_key_gets_window_plus_buffer_ttl(self, redis_mock):
+        with patch("app.core.redis.get_redis_client", new=AsyncMock(return_value=redis_mock)):
+            await redis_sliding_window_count(RATE_KEY, NOW_MS, 60, 65)
+        # MockRedis virtual clock starts at 0: expiry lands exactly at the TTL.
+        assert redis_mock._expiry[RATE_KEY] == 65
+
+    async def test_idle_key_is_purged_after_ttl(self, redis_mock):
+        with patch("app.core.redis.get_redis_client", new=AsyncMock(return_value=redis_mock)):
+            await redis_sliding_window_count(RATE_KEY, NOW_MS, 60, 65)
+            redis_mock.advance(66)
+            count = await redis_sliding_window_count(RATE_KEY, NOW_MS + 66_000, 60, 65)
+        assert count == 1

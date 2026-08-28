@@ -137,8 +137,19 @@ class Settings(BaseSettings):
     # SSE
     sse_heartbeat_interval: int = Field(default=30, alias="SSE_HEARTBEAT_INTERVAL")
 
-    # Rate Limiting
+    # Rate Limiting (security.md §3.3 layer 2): Redis sliding-window limiter.
+    # Master switch; when off the RateLimitMiddleware passes everything through.
+    rate_limit_enabled: bool = Field(default=True, alias="RATE_LIMIT_ENABLED")
+    # Default per-minute limit for regular /api/v1/* routes.
     rate_limit_per_minute: int = Field(default=60, alias="RATE_LIMIT_PER_MINUTE")
+    # auth routes already stack the admin-login email+IP brute-force lockout on top,
+    # so this tier only needs a moderate value to contain credential-stuffing
+    # volume against the SSO/refresh endpoints.
+    rate_limit_auth_per_minute: int = Field(default=10, alias="RATE_LIMIT_AUTH_PER_MINUTE")
+    # finance/tech search routes: interactive searches only, keep them tight.
+    rate_limit_search_per_minute: int = Field(default=20, alias="RATE_LIMIT_SEARCH_PER_MINUTE")
+    # Extra requests tolerated on top of the tier limit within the sliding
+    # window, so short legitimate spikes (page-load fan-out) don't trip 429.
     rate_limit_burst: int = Field(default=10, alias="RATE_LIMIT_BURST")
 
     # IP blacklist (security.md §3.3 layer 3): how many seconds the middleware's

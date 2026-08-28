@@ -1,3 +1,4 @@
+import ipaddress
 import logging
 import uuid
 
@@ -6,7 +7,9 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import Forbidden, ValidationError
+from app.core.middleware import invalidate_ipblacklist_cache
 from app.core.pagination import apply_sort
+from app.core.redis import RedisKeys, redis_sadd, redis_smembers, redis_srem
 from app.dependencies import get_current_user, get_db
 from app.models.category import Category
 from app.models.item import Item
@@ -14,6 +17,9 @@ from app.models.source import Source
 from app.models.tenant import Tenant
 from app.models.user import User
 from app.schemas.admin import (
+    IPBlacklistAddRequest,
+    IPBlacklistEntry,
+    IPBlacklistResponse,
     TenantCreate,
     TenantResponse,
     TenantStatsResponse,
@@ -290,3 +296,56 @@ async def get_tenant_stats(
     )
 
     return SuccessResponse(success=True, data=stats)
+
+
+# ---------------------------------------------------------------------------
+# IP blacklist management (security.md §3.3 layer 3)
+# ---------------------------------------------------------------------------
+
+
+def _parse_blacklist_ip(value: str) -> str:
+    """Validate an IP literal and return its canonical (compressed) form.
+
+    Canonicalization collapses equivalent spellings into one set member, e.g.
+    "0:0:0:0:0:0:0:1" and "::1" are the same ban.
+    """
+    try:
+        return str(ipaddress.ip_address(value.strip()))
+    except ValueError:
+        raise ValidationError(
+            message=f"Invalid IP address: {value}",
+            details=[{"field": "ip", "message": "Must be a valid IPv4 or IPv6 address"}],
+        ) from None
+
+
+@router.get("/security/ip-blacklist", response_model=SuccessResponse[IPBlacklistResponse])
+async def list_ip_blacklist(user: dict = Depends(get_current_user)):
+    require_admin(user)
+
+    ips = sorted(await redis_smembers(RedisKeys.IP_BLACKLIST))
+    return SuccessResponse(success=True, data=IPBlacklistResponse(ips=ips))
+
+
+@router.post("/security/ip-blacklist", response_model=SuccessResponse[IPBlacklistEntry])
+async def add_to_ip_blacklist(request: IPBlacklistAddRequest, user: dict = Depends(get_current_user)):
+    require_admin(user)
+
+    ip = _parse_blacklist_ip(request.ip)
+    # SADD is idempotent: banning an already-banned IP is a no-op that still
+    # succeeds, so admins can retry without checking current state first.
+    await redis_sadd(RedisKeys.IP_BLACKLIST, ip)
+    invalidate_ipblacklist_cache()
+    return SuccessResponse(success=True, data=IPBlacklistEntry(ip=ip))
+
+
+@router.delete("/security/ip-blacklist/{ip}", response_model=SuccessResponse[IPBlacklistEntry])
+async def remove_from_ip_blacklist(ip: str, user: dict = Depends(get_current_user)):
+    require_admin(user)
+
+    normalized = _parse_blacklist_ip(ip)
+    # Idempotent delete (not 404): the admin intent is "ensure this IP is not
+    # banned", so removing a missing entry succeeds too — retries and racing
+    # deletes stay safe.
+    await redis_srem(RedisKeys.IP_BLACKLIST, normalized)
+    invalidate_ipblacklist_cache()
+    return SuccessResponse(success=True, data=IPBlacklistEntry(ip=normalized))

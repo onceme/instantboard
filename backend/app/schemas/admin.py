@@ -45,3 +45,17 @@ class TenantStatsResponse(BaseModel):
     source_count: int
     item_count: int
     active_sse_connections: int
+
+
+class IPBlacklistAddRequest(BaseModel):
+    # No max_length: invalid literals of any shape must map to the handler's
+    # 400 VALIDATION_ERROR instead of a 422 schema error (security.md §3.3).
+    ip: str = Field(description="IPv4 or IPv6 address to ban")
+
+
+class IPBlacklistEntry(BaseModel):
+    ip: str
+
+
+class IPBlacklistResponse(BaseModel):
+    ips: list[str]

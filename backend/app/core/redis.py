@@ -69,6 +69,10 @@ class RedisKeys:
     # presence + provider match and deletes the key right after (single-use). Both
     # sides fail open on Redis outages so logins stay available.
     SSO_STATE = "sso_state:{state_key}"
+    # Layer-3 IP blacklist (security.md §3.3): client IPs banned manually via
+    # /api/v1/admin/security/ip-blacklist. Enforced at the request edge by
+    # IPBlacklistMiddleware, which reads the whole set (SMEMBERS) into an
+    # in-process cache for at most settings.ip_blacklist_cache_ttl seconds.
     IP_BLACKLIST = "ip_blacklist"
     SEARCH = "t:{tenant_id}:search:{query_hash}"
     ADMIN_LOGIN_FAIL = "admin_login:fail:{email}"
@@ -277,6 +281,16 @@ async def redis_sadd(key: str, *members: str, ttl: int | None = None) -> int:
 async def redis_sismember(key: str, member: str) -> bool:
     client = await get_redis_client()
     return await client.sismember(key, member)
+
+
+async def redis_smembers(key: str) -> set[str]:
+    client = await get_redis_client()
+    return await client.smembers(key)
+
+
+async def redis_srem(key: str, *members: str) -> int:
+    client = await get_redis_client()
+    return await client.srem(key, *members)
 
 
 async def redis_push_history(key: str, value: Any, max_len: int, ttl: int | None = None) -> None:

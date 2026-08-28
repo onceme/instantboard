@@ -141,6 +141,12 @@ class Settings(BaseSettings):
     rate_limit_per_minute: int = Field(default=60, alias="RATE_LIMIT_PER_MINUTE")
     rate_limit_burst: int = Field(default=10, alias="RATE_LIMIT_BURST")
 
+    # IP blacklist (security.md §3.3 layer 3): how many seconds the middleware's
+    # in-process copy of the banned-IP set may be served before re-reading Redis.
+    # Admin add/remove endpoints invalidate the local cache explicitly, so this
+    # only bounds how long OTHER api worker processes may stay stale.
+    ip_blacklist_cache_ttl: int = Field(default=30, alias="IP_BLACKLIST_CACHE_TTL")
+
     # Request Validation (security.md §3.3 layer 4)
     require_user_agent: bool = Field(default=True, alias="REQUIRE_USER_AGENT")
     max_request_body_bytes: int = Field(default=10 * 1024, alias="MAX_REQUEST_BODY_BYTES")

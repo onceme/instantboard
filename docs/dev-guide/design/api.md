@@ -1175,7 +1175,18 @@ GET    /api/v1/admin/tenants/{id}     — 租户详情
 PUT    /api/v1/admin/tenants/{id}     — 更新租户
 DELETE /api/v1/admin/tenants/{id}     — 删除租户
 GET    /api/v1/admin/tenants/{id}/stats — 租户统计 (用户数、数据量等)
+
+GET    /api/v1/admin/security/ip-blacklist      — 列出已封禁 IP (按字典序; data.ips: list[str])
+POST   /api/v1/admin/security/ip-blacklist      — 添加封禁 IP (body {ip}; IPv4/IPv6 校验,
+                                                    非法 → 400 VALIDATION_ERROR; 幂等, 重复添加成功;
+                                                    IPv6 规范化存储, 如 0:0:0:0:0:0:0:1 → ::1)
+DELETE /api/v1/admin/security/ip-blacklist/{ip} — 移除封禁 IP (幂等成功: 删不存在的 IP 也返回 200)
 ```
+
+> **IP 黑名单说明**（安全背景见 security.md §3.3 层级 3）：三个端点均需 **admin 角色**（`require_admin`，
+> 非 admin → 403 `FORBIDDEN`），成员写入 Redis Set `ip_blacklist`；每次增删后失效中间件进程内缓存，
+> 封禁/解封对**本进程**即时生效（多 worker 时其他进程在 `IP_BLACKLIST_CACHE_TTL` 窗口内收敛）。
+> 被封禁 IP 的请求由最外层 `IPBlacklistMiddleware` 拒绝：403 `FORBIDDEN`，消息固定 "Access denied"。
 
 ### 3.10 健康检查 API
 

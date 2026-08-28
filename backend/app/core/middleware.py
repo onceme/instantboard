@@ -9,6 +9,7 @@ from starlette.responses import JSONResponse, Response
 
 from app.config import settings
 from app.core.redis import RedisKeys, get_redis_client
+from app.dependencies import get_client_ip
 from app.schemas.base import ErrorCode, ErrorDetail, ErrorResponse
 
 logger = logging.getLogger("instantboard")
@@ -239,14 +240,90 @@ class OriginGuardMiddleware(BaseHTTPMiddleware):
         return JSONResponse(status_code=403, content=envelope.model_dump(mode="json"))
 
 
+# ---------------------------------------------------------------------------
+# Layer 3: IP blacklist (security.md §3.3)
+# ---------------------------------------------------------------------------
+
+# In-process snapshot of the banned-IP set. Checking Redis (SISMEMBER) on every
+# request would add a round trip to every request, so the whole set is pulled
+# once per settings.ip_blacklist_cache_ttl window (SMEMBERS) and membership is
+# then answered from memory. Admin add/remove endpoints call
+# invalidate_ipblacklist_cache() so a change applies to this process
+# immediately; with multiple api workers the other processes converge within
+# the TTL window.
+_ip_blacklist_cache: frozenset[str] | None = None
+_ip_blacklist_cache_fetched_at: float = 0.0
+
+
+def invalidate_ipblacklist_cache() -> None:
+    """Drop the in-memory blacklist snapshot; the next request re-reads Redis."""
+    global _ip_blacklist_cache, _ip_blacklist_cache_fetched_at
+    _ip_blacklist_cache = None
+    _ip_blacklist_cache_fetched_at = 0.0
+
+
+async def _load_ip_blacklist() -> frozenset[str]:
+    """Return the banned-IP set, refreshing the snapshot from Redis when stale."""
+    global _ip_blacklist_cache, _ip_blacklist_cache_fetched_at
+    now = time.monotonic()
+    if _ip_blacklist_cache is not None and now - _ip_blacklist_cache_fetched_at < settings.ip_blacklist_cache_ttl:
+        return _ip_blacklist_cache
+    client = await get_redis_client()
+    members = await client.smembers(RedisKeys.IP_BLACKLIST)
+    _ip_blacklist_cache = frozenset(members)
+    _ip_blacklist_cache_fetched_at = now
+    return _ip_blacklist_cache
+
+
+class IPBlacklistMiddleware(BaseHTTPMiddleware):
+    """Layer-3 IP blacklist enforcement (security.md §3.3).
+
+    Registered as the OUTERMOST middleware: banned IPs are rejected before
+    RequestLogging, so their requests are neither logged nor counted in the
+    request statistics, and they never reach origin validation or routing.
+
+    The client IP is determined with dependencies.get_client_ip — the same
+    rightmost-well-formed-hop X-Forwarded-For rule used by the admin-login
+    lockout — so a ban cannot be bypassed by forging the left (client
+    controlled) side of X-Forwarded-For.
+
+    Fail-open: if the blacklist cannot be read (Redis down, malformed cache
+    rebuild) the request passes with a debug log, matching the
+    availability-first stance of OriginGuard/RequestValidation. Only manual
+    admin bans exist today; automatic banning needs the L2 rate-limit attack
+    counters and is deferred until that layer is implemented.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        try:
+            blocked = await _load_ip_blacklist()
+        except Exception as e:
+            logger.debug(f"IP blacklist unavailable, failing open: {e}")
+            blocked = frozenset()
+        # Skip IP extraction entirely while the blacklist is empty.
+        if blocked and get_client_ip(request) in blocked:
+            return self._forbidden()
+        return await call_next(request)
+
+    @staticmethod
+    def _forbidden() -> JSONResponse:
+        # Deliberately terse: the response must not reveal that an IP
+        # blacklist exists or that this address is on it.
+        envelope = ErrorResponse(error=ErrorDetail(code=ErrorCode.FORBIDDEN, message="Access denied"))
+        return JSONResponse(status_code=403, content=envelope.model_dump(mode="json"))
+
+
 def setup_middlewares(app):
     setup_cors(app)
-    # add_middleware prepends, so the runtime stack order is RequestLogging ->
-    # OriginGuard -> RequestValidation -> CORS -> app. Request validation sits
-    # after OriginGuard and before CORS: cross-site mutations are rejected
-    # first, then malformed requests (missing User-Agent / oversized body),
-    # while every rejection still lands inside RequestLogging and is counted
-    # in the request statistics.
+    # add_middleware prepends, so the runtime stack order is IPBlacklist ->
+    # RequestLogging -> OriginGuard -> RequestValidation -> CORS -> app.
+    # The blacklist sits outermost: banned IPs are dropped before anything
+    # else happens (not even request logging). Request validation sits after
+    # OriginGuard and before CORS: cross-site mutations are rejected first,
+    # then malformed requests (missing User-Agent / oversized body), while
+    # every rejection still lands inside RequestLogging and is counted in
+    # the request statistics.
     app.add_middleware(RequestValidationMiddleware)
     app.add_middleware(OriginGuardMiddleware)
     app.add_middleware(RequestLoggingMiddleware)
+    app.add_middleware(IPBlacklistMiddleware)

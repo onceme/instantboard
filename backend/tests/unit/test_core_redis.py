@@ -16,6 +16,8 @@ from app.core.redis import (
     redis_sadd,
     redis_set,
     redis_sismember,
+    redis_smembers,
+    redis_srem,
 )
 
 
@@ -201,3 +203,19 @@ class TestRedisOperations:
             result = await redis_sismember("key1", "member1")
             assert result is True
             mock_client.sismember.assert_called_once_with("key1", "member1")
+
+    async def test_redis_smembers(self):
+        mock_client = AsyncMock()
+        mock_client.smembers.return_value = {"member1", "member2"}
+        with patch("app.core.redis.get_redis_client", return_value=mock_client):
+            result = await redis_smembers("key1")
+            assert result == {"member1", "member2"}
+            mock_client.smembers.assert_called_once_with("key1")
+
+    async def test_redis_srem(self):
+        mock_client = AsyncMock()
+        mock_client.srem.return_value = 1
+        with patch("app.core.redis.get_redis_client", return_value=mock_client):
+            result = await redis_srem("key1", "member1", "member2")
+            assert result == 1
+            mock_client.srem.assert_called_once_with("key1", "member1", "member2")

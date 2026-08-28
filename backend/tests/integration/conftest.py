@@ -109,7 +109,25 @@ class MockRedis:
         pass
 
     async def sadd(self, key, *members):
-        return len(members)
+        existing = self._data.get(key)
+        if not isinstance(existing, set):
+            existing = set(existing) if existing else set()
+            self._data[key] = existing
+        before = len(existing)
+        existing.update(members)
+        return len(existing) - before
+
+    async def srem(self, key, *members):
+        existing = self._data.get(key)
+        if not isinstance(existing, set):
+            return 0
+        before = len(existing)
+        existing.difference_update(members)
+        return before - len(existing)
+
+    async def smembers(self, key):
+        existing = self._data.get(key)
+        return set(existing) if isinstance(existing, set) else set()
 
     async def sismember(self, key, member):
         return key in self._data and member in self._data.get(key, set())

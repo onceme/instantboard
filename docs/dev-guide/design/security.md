@@ -16,11 +16,12 @@ cross_refs: [architecture.md, api.md, database.md, infrastructure.md, admin-logi
 
 采用 **多层防御 (Defense in Depth)** 策略：Nginx层限流/SSL → FastAPI中间件层认证/隔离 → 数据层RLS/参数化查询，5种SSO通过统一OAuth2流程集成。
 
-> 📌 **现状提示（2026-08-24 审计修订，2026-08-27 RLS 落地，2026-08-28 CSP 与 Origin 校验落地，2026-08-28 L4 请求验证落地）**：本文档为"设计 + 现状"混合文档——尚未落地的防护层
-> （Nginx 限流、应用层限流、IP 黑名单等）
+> 📌 **现状提示（2026-08-24 审计修订，2026-08-27 RLS 落地，2026-08-28 CSP 与 Origin 校验落地，2026-08-28 L4 请求验证落地，2026-08-28 L3 IP 黑名单手工封禁落地）**：本文档为"设计 + 现状"混合文档——尚未落地的防护层
+> （Nginx 限流、应用层限流等）
 > 均已在对应小节加 `⚠️ 未实现` 标注，规划内容保留作为路线图；
 > 代码已实现但此前未记录的机制统一补充在 §3.9。数据层 RLS 已实现（见 §3.5），
-> CSP 与 Origin/Referer 校验已实现（见 §3.2），L4 请求验证（User-Agent + 请求体大小）已实现（见 §3.3 层级 4）。
+> CSP 与 Origin/Referer 校验已实现（见 §3.2），L4 请求验证（User-Agent + 请求体大小）已实现（见 §3.3 层级 4），
+> L3 IP 黑名单的手工管理（管理员端点 + 最外层中间件拦截）已实现（见 §3.3 层级 3）；自动封禁仍未实现。
 
 ## 3. 详细设计
 
@@ -114,16 +115,30 @@ class RateLimitMiddleware:
 
 **层级 3: IP 黑名单**
 
-> ⚠️ **未实现**：仅存在 `RedisKeys.IP_BLACKLIST = "ip_blacklist"` 键定义，全代码库零使用点，
-> 无任何封禁/检查逻辑。以下内容均为规划。
-
-```python
-# auth/rate_limit.py
-IP_BLACKLIST_REDIS_KEY = "ip_blacklist"
-# 自动封禁: 连续触发限流5次 → 自动加入黑名单 TTL 1h
-# 管理员手动封禁: Dashboard API 添加永久黑名单
-# 检查: FastAPI 中间件最先执行黑名单检查
-```
+- ✅ **已实现（手工封禁 + 请求层拦截）**：
+  - **存储**：`RedisKeys.IP_BLACKLIST = "ip_blacklist"`（Redis Set，永久成员、无 TTL），成员为规范化后的
+    IPv4/IPv6 字符串（`ipaddress` 压缩形式，`0:0:0:0:0:0:0:1` 与 `::1` 视为同一封禁）。
+  - **管理端点**（`api/v1/admin.py`，均需 `require_admin`，响应 `SuccessResponse` 包装）：
+    `GET /admin/security/ip-blacklist`（按字典序列出）、
+    `POST /admin/security/ip-blacklist` body `{ip}`（`ipaddress.ip_address` 校验，非法 → 400 `VALIDATION_ERROR`；
+    SADD 幂等，重复添加成功且只留一条）、
+    `DELETE /admin/security/ip-blacklist/{ip}`（SREM **幂等成功**语义——删除不存在的 IP 也返回成功，
+    管理员意图是"确保该 IP 未被封禁"，重试/并发删除保持安全；未选 404）。
+  - **拦截**：`IPBlacklistMiddleware`（core/middleware.py）注册为**最外层**中间件——运行栈
+    `IPBlacklist → RequestLogging → OriginGuard → RequestValidation → CORS → router`，
+    被封禁 IP 的请求在日志/请求统计/源校验/路由之前即被丢弃，连统计都不进。
+    命中 → 403 `FORBIDDEN`，固定简洁信封 "Access denied"（不泄露黑名单存在性细节）。
+  - **IP 判定防伪**：复用 `dependencies.get_client_ip` 的右起解析——取 `X-Forwarded-For` 自右向左第一个
+    合法 IP（可信代理追加的真实对端），与管理员登录防爆破同口径；攻击者伪造左段无法绕过封禁，
+    也无法用被禁 IP 栽赃右段的真实对端。
+  - **进程内缓存**：每请求查 Redis 有一次 RTT 开销，改为 `SMEMBERS` 整集拉取后内存判存——
+    快照缓存 + 短 TTL（`IP_BLACKLIST_CACHE_TTL`，默认 30s，可配）；管理端点每次增删后调用
+    `invalidate_ipblacklist_cache()` 使**本进程**即时生效（多 api worker 时其他进程在 TTL 窗口内收敛）。
+  - **fail-open**：缓存构造失败 / Redis 不可用 → 放行 + debug 日志（可用性优先，与 OriginGuard/
+    RequestValidation 口径一致）；失败的拉取不污染缓存，下次请求重试。
+  - 回归护栏：`tests/unit/test_ip_blacklist.py`、`tests/integration/test_ip_blacklist.py`。
+- ⚠️ **未实现（自动封禁，后续增强）**：原规划"连续触发限流 5 次 → 自动加黑 1h"依赖 L2 应用层限流的
+  攻击计数器，而 L2 尚未实现（见上方层级 2），故自动封禁暂不落地；当前仅管理员手工封禁。
 
 **层级 4: 请求验证**
 
@@ -132,7 +147,7 @@ IP_BLACKLIST_REDIS_KEY = "ip_blacklist"
 - ℹ️ **无独立实现**：API 端点 JWT 格式预检——不设独立中间件；格式/签名/有效期校验由依赖注入的 JWT 完整解析（`Depends(get_current_tenant)`）+ refresh token 黑名单校验承担（见 §3.6），畸形 token 统一 401 `INVALID_TOKEN`，语义等价于规划的"预检"
 - ✅ 已实现：SSE 端点强制 `token` query param（`Query(...)` 必填，缺失返回 422）
 
-**栈位置**：`setup_middlewares` 注册顺序使运行栈为 `RequestLogging → OriginGuard → RequestValidation → CORS → router`——先拒跨站（OriginGuard 403）再拒畸形（本层 400/413），且两类拒绝都发生在 `RequestLogging` 之内，被请求统计正常记录。回归护栏：`tests/unit/test_core_middleware.py::TestRequestValidation*`、`tests/integration/test_request_validation.py`。
+**栈位置**：`setup_middlewares` 注册顺序使运行栈为 `IPBlacklist → RequestLogging → OriginGuard → RequestValidation → CORS → router`——被封禁 IP 最先被拒（403 "Access denied"，不进日志与统计），其后先拒跨站（OriginGuard 403）再拒畸形（本层 400/413），且后两类拒绝都发生在 `RequestLogging` 之内，被请求统计正常记录。回归护栏：`tests/unit/test_core_middleware.py::TestRequestValidation*`、`tests/integration/test_request_validation.py`。
 
 **DDoS 防护层级总结**:
 
@@ -143,10 +158,11 @@ IP_BLACKLIST_REDIS_KEY = "ip_blacklist"
 | L3: 黑名单 | Redis Set + 中间件 | 恶意IP | IP级 |
 | L4: 请求验证 | Header检查 | 异常请求 | 请求级 |
 
-> **现状总结**：L1 未启用、L2 未实现、L3 未实现、L4 已大部分落地（UA/请求体大小验证、SSE token 必填，
+> **现状总结**：L1 未启用、L2 未实现、L3 手工封禁已实现（管理员端点 + 最外层中间件拦截；自动封禁待 L2 计数器，
+> 见层级 3 标注）、L4 已大部分落地（UA/请求体大小验证、SSE token 必填，
 > JWT 校验由依赖注入承担）。当前实际生效的防滥用机制是
-> 本地管理员登录的 email + IP 双维度防爆破锁定（见 [admin-login.md](admin-login.md) §7）与 L4 请求验证中间件。
-> L1–L3 的分层设计保留为实施路线图。
+> 本地管理员登录的 email + IP 双维度防爆破锁定（见 [admin-login.md](admin-login.md) §7）、L4 请求验证中间件
+> 与 L3 IP 黑名单（手工）。L1–L2 与 L3 自动封禁的分层设计保留为实施路线图。
 
 ### 3.4 SSO 集成设计 (5种提供商，默认启用 Google + GitHub)
 
@@ -491,7 +507,7 @@ app.add_middleware(
 | 决策 | 选择 | 理由 |
 |------|------|------|
 | CSRF防护 | 无Cookie认证(JWT Bearer) | SPA+Bearer天然免疫CSRF |
-| 限流层级 | Nginx + FastAPI + 黑名单（**三层均未落地**，见 §3.3 标注） | 多层纵深防御 |
+| 限流层级 | Nginx + FastAPI + 黑名单（L1/L2 未落地，L3 手工封禁已实现、自动封禁待 L2 计数器，见 §3.3 标注） | 多层纵深防御 |
 | SSO架构 | 统一OAuth2 + Provider适配器 | 5种SSO统一接口，新增provider只需加handler |
 | JWT方案 | 双Token(Access+Refresh) | Access短效安全，Refresh长效方便 |
 | 多租户 | 行级隔离+RLS ✅ 已实现（应用层显式过滤为主防线，8 表 `ENABLE+FORCE` RLS + `tenant_isolation` 策略为纵深兜底，后台经 `app.is_service` 旁路，见 §3.5 与 database.md §3.5） | 性能好、成本低 |
@@ -503,6 +519,7 @@ app.add_middleware(
 - **SSO提供商宕机**: 返回 `SSO_PROVIDER_ERROR (502)`，前端提示用户尝试其他SSO或稍后重试
 - **JWT密钥泄露**: 管理API支持立即更换 `JWT_SECRET`，所有旧token自动失效
 - **Redis限流不可用**: 降级为 Nginx 层限流 (粗粒度但有效)
+- **Redis黑名单不可用**: 中间件读不到黑名单时 **fail-open**（放行 + debug 日志）——可用性优先，封禁在 Redis 恢复后自动重新生效；手工封禁因此**不是**抗 DDoS 的硬保证，恶性流量仍需 L1/L2 兜底
 - **Redis不可用（OAuth state）**: authorize 存 state 与登录校验 state 均降级为 fail-open（warning 日志），SSO 登录保持可用；详见 §3.2 SSO OAuth State 行的决策说明
 - **Apple代理email**: 用户隐藏真实email时，使用代理email，不可变更
 - **多SSO同一email（身份隔离）**: 按登录入口隔离，**不做跨 email 合并**（见 [admin-login.md](admin-login.md) §2、`app/services/auth.py::_get_or_create_user`）：

@@ -383,14 +383,11 @@ CREATE INDEX idx_dashboard_snapshots_time ON dashboard_snapshots(tenant_id, time
 | **管理员防爆破** | `admin_login:fail:{email}` / `lock:{email}` | String（计数/锁） | 15min | email 维度：5 次失败触发锁定（详见 admin-login.md §7） |
 | **管理员防爆破 (IP)** | `admin_login:fail_ip:{ip}` / `lock_ip:{ip}` | String（计数/锁） | 1h | IP 维度：20 次失败触发锁定 |
 | **限流计数** | `rate:{tenant_id}:{ip}:{endpoint}` | — | — | 见下方未实现标注 |
-| **IP 黑名单** | `ip_blacklist` | — | — | 见下方未实现标注 |
+| **IP 黑名单** | `ip_blacklist` | Set（规范化 IPv4/IPv6 字符串） | ⚠️ 无 TTL（封禁永久有效，手工解除） | **读写**：`/api/v1/admin/security/ip-blacklist` 管理端点经 `redis_sadd`/`redis_srem` 增删（幂等）、`redis_smembers` 列表；`IPBlacklistMiddleware` 以 `SMEMBERS` 拉取整集做进程内快照缓存（≤ `IP_BLACKLIST_CACHE_TTL` 秒，默认 30），命中封禁 → 403；管理端点每次增删即失效缓存（security.md §3.3 层级 3） |
 | **SSO State** | `sso_state:{state_key}` | String（provider 名） | 600s | OAuth CSRF 防护（security.md §3.2）：authorize 端点将签发的 state 写入，value 为 provider 名；`POST /auth/sso/{provider}` 登录时校验键存在且 provider 匹配，通过后**立即删键（一次性）**；缺失/过期/已用/不匹配统一 400 `VALIDATION_ERROR`。Redis 不可用时读写两侧均降级 fail-open（warning 日志），登录不阻断 |
 
 > ⚠️ **未实现（限流）**：`rate:{tenant_id}:{ip}:{endpoint}` 键与 `rate_limit_key()` helper
 > 存在定义，但全代码库零调用，**应用层限流完全未落地**（见 security.md §3.3）。
->
-> ⚠️ **未实现（IP 黑名单）**：`ip_blacklist` 仅有 `RedisKeys.IP_BLACKLIST` 定义，零使用点，
-> 无封禁与检查逻辑。
 >
 > ⚠️ **说明（key 前缀）**：并非所有 key 都有租户前缀——仅租户级数据键（quote、market_indices、
 > commodities、nav、search、dedup、watchlist）带 `t:{tenant_id}:` 前缀；session、source_health、

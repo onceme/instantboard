@@ -277,13 +277,16 @@ class TestSetupMiddlewares:
         setup_middlewares(app)
         call_list = [call[0][0].__name__ for call in app.add_middleware.call_args_list]
         # Registration order: CORS -> RequestValidation -> OriginGuard ->
-        # RequestLogging. add_middleware prepends, so the runtime stack order is
-        # RequestLogging -> OriginGuard -> RequestValidation -> CORS -> app.
+        # RequestLogging -> IPBlacklist. add_middleware prepends, so the runtime
+        # stack order is IPBlacklist -> RequestLogging -> OriginGuard ->
+        # RequestValidation -> CORS -> app: banned IPs are dropped outermost,
+        # before even request logging.
         assert call_list == [
             "CORSMiddleware",
             "RequestValidationMiddleware",
             "OriginGuardMiddleware",
             "RequestLoggingMiddleware",
+            "IPBlacklistMiddleware",
         ]
 
 

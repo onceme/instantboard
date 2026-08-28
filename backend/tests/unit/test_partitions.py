@@ -160,6 +160,16 @@ class TestEnsurePartitionsGating:
 
 # ── ensure_quote_partitions creation paths ───────────────────────
 class TestEnsurePartitionsCreation:
+    @pytest.fixture(autouse=True)
+    def _stub_rls_apply(self):
+        # These tests pin down the partition creation / race logic. The RLS
+        # policy application adds 4 DDL statements per partition and is covered
+        # separately (TestEnsurePartitionsRLS below + the real-PostgreSQL suite
+        # test_pg_rls.py), so it is stubbed here to keep the CREATE TABLE call
+        # sequence assertions exact.
+        with patch.object(partitions_mod, "_apply_rls_to_partition", new_callable=AsyncMock):
+            yield
+
     async def test_creates_three_surrounding_month_partitions(self):
         # relkind check + one EXISTS check per month (all missing).
         engine, conn = _make_pg_engine(scalar_results=["p", False, False, False])
@@ -230,6 +240,71 @@ class TestEnsurePartitionsCreation:
         with caplog.at_level("INFO"):
             await ensure_quote_partitions(engine)
         assert any("concurrently" in record.message for record in caplog.records)
+
+
+# ── RLS wiring on partitions (database.md §3.5) ──────────────────
+class TestEnsurePartitionsRLS:
+    """``finance_quotes`` partitions carry their own tenant_isolation policy.
+
+    Partitions do not inherit the parent table's ENABLE/FORCE flags, so
+    every partition touched by ensure_quote_partitions gets the idempotent
+    DDL — newly created ones (same transaction as the CREATE) and
+    already-existing ones (self-heal). End-to-end behaviour against real
+    PostgreSQL is covered by tests/integration/test_pg_rls.py.
+    """
+
+    @staticmethod
+    def _executed_sql(conn) -> list[str]:
+        return [str(call.args[0].text) for call in conn.execute.await_args_list]
+
+    async def test_new_partition_gets_rls_in_create_transaction(self):
+        # Only the current month is missing.
+        engine, conn = _make_pg_engine(scalar_results=["p", True, False, True])
+
+        created = await ensure_quote_partitions(engine)
+
+        assert len(created) == 1
+        sqls = self._executed_sql(conn)
+        current = surrounding_month_partitions()[1][0]
+        create_index = next(i for i, sql in enumerate(sqls) if sql.startswith(f"CREATE TABLE {current}"))
+        # The four RLS statements follow the CREATE immediately (one
+        # transaction per partition, so a partition never exists unguarded).
+        rls_block = sqls[create_index + 1 : create_index + 5]
+        assert rls_block[0] == f"ALTER TABLE {current} ENABLE ROW LEVEL SECURITY"
+        assert rls_block[1] == f"ALTER TABLE {current} FORCE ROW LEVEL SECURITY"
+        assert rls_block[2] == f"DROP POLICY IF EXISTS tenant_isolation ON {current}"
+        assert rls_block[3].startswith(f"CREATE POLICY tenant_isolation ON {current} USING")
+
+    async def test_existing_partitions_are_self_healed(self):
+        engine, conn = _make_pg_engine(scalar_results=["p", True, True, True])
+
+        assert await ensure_quote_partitions(engine) == []
+
+        sqls = self._executed_sql(conn)
+        assert not any(sql.startswith("CREATE TABLE") for sql in sqls)
+        for name, _, _ in surrounding_month_partitions():
+            assert f"ALTER TABLE {name} ENABLE ROW LEVEL SECURITY" in sqls
+            assert f"ALTER TABLE {name} FORCE ROW LEVEL SECURITY" in sqls
+            assert any(sql.startswith(f"CREATE POLICY tenant_isolation ON {name}") for sql in sqls)
+
+    async def test_concurrent_duplicate_still_gets_rls(self):
+        # We lost the CREATE race; the winner may not have applied the policy
+        # yet, so the self-heal statements still run for that partition.
+        def _create_only_error(stmt, *args, **kwargs):
+            if str(stmt.text).startswith("CREATE TABLE"):
+                raise _dbapi_error("42P07")
+            return MagicMock()
+
+        engine, conn = _make_pg_engine(
+            scalar_results=["p", False, True, True],
+            execute_side_effect=_create_only_error,
+        )
+
+        assert await ensure_quote_partitions(engine) == []
+
+        sqls = self._executed_sql(conn)
+        loser = surrounding_month_partitions()[0][0]
+        assert any(sql.startswith(f"CREATE POLICY tenant_isolation ON {loser}") for sql in sqls)
 
 
 # ── create_tables wiring ─────────────────────────────────────────

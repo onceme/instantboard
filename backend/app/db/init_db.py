@@ -7,7 +7,7 @@ from sqlalchemy.pool import NullPool
 from app.config import settings
 from app.core.constants import SYSTEM_TENANT_ID
 from app.db.partitions import ensure_quote_partitions
-from app.db.session import async_session_factory
+from app.db.session import apply_service_context, async_session_factory
 from app.models.base import Base
 from app.models.category import Category
 from app.models.source import Source, SourceHealth
@@ -431,7 +431,12 @@ TECH_CROSS_DOMAIN_SOURCES = [
 
 
 async def seed_default_data():
+    # Seeding runs cross-tenant (creates the tenants themselves plus the
+    # system-tenant categories/sources), so it needs the RLS service bypass:
+    # INSERT ... WITH CHECK would reject system-tenant rows for any
+    # request-style tenant context.
     async with async_session_factory() as session:
+        await apply_service_context(session)
         # Fix: the old logic skipped the whole seed as soon as the tenants table had any
         # row, so an interrupted seed could never be completed. Seeding is now idempotent:
         # there is no global skip; each entity below is "skip if it exists, create if not".

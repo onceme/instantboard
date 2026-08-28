@@ -520,41 +520,107 @@ app/alembic/alembic.ini revision --autogenerate -m "..."`）→ **人工审查**
 
 ### 3.5 多租户数据隔离方案
 
-**方案**: **共享数据库 + 行级隔离 (Shared DB, Shared Schema, Row-level Isolation)**
+**方案**: **共享数据库 + 行级隔离 (Shared DB, Shared Schema, Row-level Isolation)**，
+两道防线：**应用层显式 `tenant_id` 过滤（第一道、主防线）** + **PostgreSQL RLS（第二道、纵深兜底）** ✅ 均已实现
 
-**实现（现状）**:
+**第一道防线——应用层过滤（现状不变）**:
 - 所有业务表包含 `tenant_id` 列 (NOT NULL, FK → tenants)
-- 隔离在**端点依赖注入层**完成：`get_current_tenant`（`app/dependencies.py:57-63`）从
+- 隔离在**端点依赖注入层**完成：`get_current_tenant`（`app/dependencies.py`）从
   JWT claims 解析 tenant_id，每个端点显式接收 `tenant_id: str = Depends(get_current_tenant)`，
   并将其显式传给 service 层，由各查询语句携带 `tenant_id ==` 条件过滤
 - **不存在**统一的"自动注入 `WHERE tenant_id`"机制——每条查询需手工携带租户条件，
-  靠代码评审与测试防止遗漏
+  靠代码评审与测试防止遗漏；RLS 只为这条防线的遗漏兜底，不改变任何既有查询语义
 
 > ⚠️ **未实现（TenantMiddleware）**：早期设计为 FastAPI 中间件 `TenantMiddleware` 提取
 > tenant_id 并注入 SQLAlchemy session context；代码中不存在此中间件（`setup_middlewares`
 > 仅注册 CORS + `RequestLoggingMiddleware`），实际采用上述依赖注入方案。
 
-> ⚠️ **未实现（RLS）**：PostgreSQL Row Level Security **完全未启用**——全代码库无
-> `ENABLE ROW LEVEL SECURITY` / `CREATE POLICY` / `current_setting('app.current_tenant_id')`；
-> `docker/postgres/init.sql:26-27` 注释称 "RLS 将由后续 Alembic 迁移创建"，该迁移并不存在
-> （见 §3.4）。**当前租户隔离纯靠应用层代码。** 以下 RLS 设计保留为规划。
+**第二道防线——PostgreSQL RLS** ✅ 已实现（迁移 `7d9a46a0d5c9_tenancy_row_level_security`；
+SQL 常量与运行时接线集中在 `app/db/rls.py`）：
 
-<details><summary>规划中的 RLS 设计（未实现）</summary>
+*覆盖的 8 张表*（按模型逐一核对，凡含 `tenant_id` 的业务表全覆盖）：
+`categories`、`sources`、`items`、`finance_symbols`、`finance_quotes`、
+`fund_nav_estimates`、`watchlist_items`、`sse_connections`
+
+*明确排除*：
+- `users`：登录/SSO/refresh 的用户查找发生在租户上下文建立**之前**（无 JWT 可解析），
+  若强制 RLS 会阻断全部认证流；身份表由凭据校验 + 应用层 `tenant_id` 过滤保护。
+- `dashboard_snapshots`：全局运维数据，仅系统租户写入、仅 admin 端点读取，已有应用层过滤。
+- `tenants` / `source_health` 无 `tenant_id` 列，不适用。
+
+*策略语义*（每表同名策略 `tenant_isolation`，permissive）：
 
 ```sql
--- 启用 RLS (PostgreSQL 特性)
-ALTER TABLE categories ENABLE ROW LEVEL SECURITY;
-ALTER TABLE sources ENABLE ROW LEVEL SECURITY;
-ALTER TABLE items ENABLE ROW LEVEL SECURITY;
-ALTER TABLE finance_symbols ENABLE ROW LEVEL SECURITY;
-ALTER TABLE finance_quotes ENABLE ROW LEVEL SECURITY;
-
--- 创建策略: 仅允许访问自己租户的数据
-CREATE POLICY tenant_isolation ON categories
-    USING (tenant_id = current_setting('app.current_tenant_id')::UUID);
+ALTER TABLE <table> ENABLE ROW LEVEL SECURITY;
+ALTER TABLE <table> FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON <table>
+    USING (
+        current_setting('app.is_service', true) = 'on'                      -- 服务旁路
+        OR tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid  -- 本租户
+        OR (NULLIF(current_setting('app.current_tenant_id', true), '') IS NOT NULL
+            AND tenant_id = '00000000-0000-0000-0000-000000000000'::uuid)   -- SYSTEM 租户只读
+    )
+    WITH CHECK (
+        current_setting('app.is_service', true) = 'on'
+        OR tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid
+    );
 ```
 
-</details>
+- **FORCE 必须开**：应用只有一个数据库角色且就是表 owner——不开 FORCE 时 owner
+  默认绕过策略，RLS 形同虚设；开了 FORCE，owner（=应用）在请求会话里也受策略约束。
+- **USING 三段式**：`is_service=on`（后台旁路）∨ 本租户 ∨ SYSTEM 租户只读。
+  SYSTEM 子句存在的原因：种子分类/源/条目属于固定系统租户且**按设计对全体租户共享**
+  （service 层大量 `or_(tenant_id == 租户, tenant_id == SYSTEM)` 查询）；仅当会话
+  已携带租户 GUC 时才可读，防止无上下文会话窥见共享数据。
+- **WITH CHECK 不含 SYSTEM**：读共享、写隔离——租户会话不得写入系统租户行，
+  写路径只有本租户（请求）或 `is_service`（后台/种子）。
+- **`NULLIF(..., '')`**：连接归还连接池时 GUC 被 scrub 为空串（见下），
+  空串直接 `::uuid` 会报错，`NULLIF` 使其退化为 NULL → 行不可见而非查询失败。
+- **无 GUC = 零可见**：既无租户 GUC 又非服务会话时，所有租户行不可见（默认拒绝）。
+
+*GUC 的两条注入路径*：
+- **请求会话**（`dependencies.get_db`）：从 Authorization 头 / SSE `token` query 参数
+  **仅解码不校验**地取 `tenant_id` claim（校验仍由 `get_current_user` 负责），
+  校验其为合法 UUID 后绑定到会话。请求路径**绝不**设置 `app.is_service`。
+- **后台会话**（调度器、采集器、仪表盘循环等）：`apply_service_context(session)`
+  （`app/db/session.py`）绑定 `app.is_service=on`。**信任边界**：该开关只有服务端
+  代码能设，任何请求路径都不得调用。
+
+*事务级 GUC 与防泄漏*：
+- GUC 一律 `set_config(..., true)`（**事务本地**）+ 会话 `after_begin` 事件每事务重绑。
+  原因：SQLAlchemy 每次 `commit()` 都会把连接归还池，session 级 GUC 会在首个
+  commit 后丢失，甚至残留给复用该连接的下一个请求。
+- **池 checkin scrub**（`app/db/session.py`，PG 方言）：连接每次归还池时重置两个
+  GUC 为空，双保险防止租户/服务上下文跨请求泄漏。
+
+*后台接入点清单*（均调用 `apply_service_context`，逐一排查 `async_session_factory()`
+直用处而来）：
+- `main.py` lifespan：启动载入活跃源、租户设置（2 处）
+- `scheduler/manager.py`：市场刷新、官方 NAV 刷新（`update_official_nav`）、
+  分类回查 `_lookup`、**`_run_collection` 采集主流程**、采集后健康回写（5 处）
+- `scheduler/worker.py`：源事件回源、租户设置、启动全量源/设置快照（4 处）
+- `services/dashboard.py`：指标采集/归档/清理循环 `_periodic_loop`
+- `services/sse.py`：`publish_topic_stats_update` 的 `_load_topic_stats`
+- `db/init_db.py`：`seed_default_data`（跨租户写系统租户行，WITH CHECK 只认服务旁路）
+- `api/v1/dashboard.py`：`scheduler_status` / `sse_stats` / `business_metrics`
+  三个 admin 端点——系统级指标刻意不带租户过滤，若走请求租户上下文会被 RLS
+  静默收窄，故改用服务上下文自建会话
+
+*分区表特殊性*（`finance_quotes`）：
+- 子分区**不继承**父表的 `relrowsecurity`/`relforcerowsecurity`——实测直连分区
+  会绕过只在父表上的策略。因此每个分区都要单独 `ENABLE + FORCE + CREATE POLICY`：
+  - 迁移时对既有分区遍历 `pg_inherits` 逐一补策略；
+  - `ensure_quote_partitions` 对**新建**分区在同事务内建策略（分区不可能无策略存在），
+    对**已存在**分区幂等自愈，对**并发重复创建**的分区也补策略（赢家可能还没建）。
+
+*部署要求*：**生产数据库角色不得是 superuser、不得带 BYPASSRLS**——superuser
+无条件绕过 RLS（FORCE 也拦不住）。本仓库 docker dev/test 容器沿用 `POSTGRES_USER`
+superuser 仅为便利，正式环境的应用角色必须是普通角色（表 owner）。
+
+*实证*：`tests/integration/test_pg_rls.py`（非 PG 自动跳过）用自建临时库 + 非
+superuser 的 owner 角色覆盖：默认拒绝、租户可见性、跨租户 UPDATE/DELETE 无效、
+WITH CHECK 写规则、服务旁路、分区直连强制、GUC 不跨会话泄漏、`_run_collection`
+在 RLS 库上照常写入、downgrade 还原。
 
 **Redis 隔离**: 仅租户级数据键带 `t:{tenant_id}:` 前缀（见 §3.2 说明）
 **MongoDB 隔离** (后续版本启用时): 所有查询包含 `tenant_id` 条件
@@ -563,7 +629,7 @@ CREATE POLICY tenant_isolation ON categories
 
 | 决策 | 选择 | 理由 |
 |------|------|------|
-| 多租户隔离 | 行级隔离 + RLS（**RLS 未实现**，当前纯应用层隔离，见 §3.5） | 共享数据库成本最低、运维简单 |
+| 多租户隔离 | 行级隔离 + RLS ✅ 已实现（应用层显式过滤为主防线，PG RLS 8 表 ENABLE+FORCE + `tenant_isolation` 策略为纵深兜底，服务旁路 `app.is_service`，见 §3.5） | 共享数据库成本最低、运维简单 |
 | 历史行情存储 | PostgreSQL 近期 (初始版本) | 初始版本仅用PostgreSQL分区存储近期行情，历史数据归档策略后续优化；MongoDB时序存储为后续版本可选增强 |
 | 去重策略 | PostgreSQL UNIQUE + Redis Set | 双重保障：PG持久化去重、Redis快速去重 |
 | 是否分区 | finance_quotes 按月 RANGE(timestamp) 分区 ✅ 已实现（新库经 baseline 迁移或 `create_tables` 建分区父表，`ensure_quote_partitions` 供给上月/当月/下月分区；调度每日 00:30 UTC 滚动补下月；存量普通表需手工重建，见 §3.1） | 行情数据量大，分区查询性能好 |

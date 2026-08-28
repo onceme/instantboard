@@ -95,6 +95,27 @@ async def is_refresh_token_blacklisted(refresh_version: str) -> bool:
     return result is not None
 
 
+def extract_tenant_from_token_unverified(token: str) -> str | None:
+    """Decode the JWT WITHOUT signature/expiry verification and return tenant_id.
+
+    Used exclusively to set the RLS tenant context (``dependencies.get_db`` →
+    ``app.current_tenant_id`` GUC) before request processing starts. This is
+    not an authorization decision: the authoritative verification still happens
+    in ``get_current_user`` (``extract_user_from_token``) before any endpoint
+    returns data, and RLS only ever narrows what a session can see. Any decode
+    failure returns None — the session then simply gets no tenant context and
+    RLS hides all tenant rows for it.
+    """
+    try:
+        payload = jwt.decode(token, options={"verify_signature": False})
+    except JWTError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    tenant_id = payload.get("tenant_id")
+    return str(tenant_id) if tenant_id else None
+
+
 def extract_user_from_token(token: str) -> dict[str, Any] | None:
     payload = decode_token(token)
     if payload is None:

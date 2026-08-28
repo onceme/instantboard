@@ -1445,6 +1445,12 @@ async def start_metrics_collection(start_time: datetime, tenant_id: str = str(SY
                 await asyncio.sleep(get_collect_interval())
 
                 async with db_session_factory() as session:
+                    # Background (metrics/archive/cleanup loop) session: RLS
+                    # service bypass — reads sources/source_health across all
+                    # tenants and writes snapshots under the system tenant.
+                    from app.db.session import apply_service_context
+
+                    await apply_service_context(session)
                     redis_client = None
                     try:
                         from app.core.redis import get_redis_client

@@ -341,10 +341,12 @@ class AsyncSchedulerManager:
         """
         self._last_run_times[job_id] = datetime.now(UTC)
         try:
-            from app.db.session import async_session_factory
+            from app.db.session import apply_service_context, async_session_factory
             from app.services.finance import FinanceService
 
+            # Background session: RLS service bypass (no request context).
             async with async_session_factory() as session:
+                await apply_service_context(session)
                 service = FinanceService(db=session, redis=None)
                 if not service.is_any_market_open():
                     logger.debug(f"{job_id}: all major markets closed, skipping refresh")
@@ -408,10 +410,13 @@ class AsyncSchedulerManager:
         job_id = FUND_NAV_OFFICIAL_REFRESH_JOB_ID
         self._last_run_times[job_id] = datetime.now(UTC)
         try:
-            from app.db.session import async_session_factory
+            from app.db.session import apply_service_context, async_session_factory
             from app.services.finance import FinanceService
 
+            # Background session: RLS service bypass (no request context) so
+            # the official-NAV upsert can reach system-tenant fund rows.
             async with async_session_factory() as session:
+                await apply_service_context(session)
                 service = FinanceService(db=session, redis=None)
                 updated = await service.update_official_nav(str(SYSTEM_TENANT_ID))
 
@@ -689,12 +694,14 @@ class AsyncSchedulerManager:
         try:
             from sqlalchemy import select
 
-            from app.db.session import async_session_factory
+            from app.db.session import apply_service_context, async_session_factory
             from app.models.category import Category
             from app.models.source import Source
 
             async def _lookup():
+                # Background session: RLS service bypass (no request context).
                 async with async_session_factory() as session:
+                    await apply_service_context(session)
                     stmt = (
                         select(Source, Category)
                         .join(Category, Source.category_id == Category.id)
@@ -734,11 +741,15 @@ class AsyncSchedulerManager:
             from sqlalchemy import select
 
             from app.collectors import resolve_collector
-            from app.db.session import async_session_factory
+            from app.db.session import apply_service_context, async_session_factory
             from app.processors import create_default_processor_chain
             from app.services.sse import SSEService
 
+            # Background collection session: no request context exists, so the
+            # RLS service bypass is mandatory — the source lookup, the item
+            # inserts and the commit all run cross-tenant under the policy.
             async with async_session_factory() as session:
+                await apply_service_context(session)
                 result = await session.execute(
                     select(Source)
                     .where(Source.id == source_id)
@@ -895,9 +906,14 @@ class AsyncSchedulerManager:
         try:
             from sqlalchemy import select
 
-            from app.db.session import async_session_factory
+            from app.db.session import apply_service_context, async_session_factory
 
+            # Background session: RLS service bypass (no request context).
+            # source_health itself has no tenant_id, but this session also
+            # triggers adaptive_reschedule's Source/Category lookup, which is
+            # tenant-policy-protected.
             async with async_session_factory() as session:
+                await apply_service_context(session)
                 health_result = await session.execute(select(SourceHealth).where(SourceHealth.source_id == source.id))
                 health = health_result.scalar_one_or_none()
 

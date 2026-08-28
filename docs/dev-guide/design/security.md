@@ -16,10 +16,10 @@ cross_refs: [architecture.md, api.md, database.md, infrastructure.md, admin-logi
 
 采用 **多层防御 (Defense in Depth)** 策略：Nginx层限流/SSL → FastAPI中间件层认证/隔离 → 数据层RLS/参数化查询，5种SSO通过统一OAuth2流程集成。
 
-> 📌 **现状提示（2026-08-24 审计修订）**：本文档为"设计 + 现状"混合文档——尚未落地的防护层
-> （Nginx 限流、CSP、应用层限流、IP 黑名单、请求验证、Origin/Referer 校验、OAuth state 校验、
-> RLS 等）均已在对应小节加 `⚠️ 未实现` 标注，规划内容保留作为路线图；
-> 代码已实现但此前未记录的机制统一补充在 §3.9。
+> 📌 **现状提示（2026-08-24 审计修订，2026-08-27 RLS 落地）**：本文档为"设计 + 现状"混合文档——尚未落地的防护层
+> （Nginx 限流、CSP、应用层限流、IP 黑名单、请求验证、Origin/Referer 校验、OAuth state 校验等）
+> 均已在对应小节加 `⚠️ 未实现` 标注，规划内容保留作为路线图；
+> 代码已实现但此前未记录的机制统一补充在 §3.9。数据层 RLS 已实现（见 §3.5）。
 
 ## 3. 详细设计
 
@@ -345,12 +345,12 @@ class SSOUserInfo:
 | 层级 | 策略 | 实现 |
 |------|------|------|
 | 网络 | SSE/API 隔离 | 每个请求携带 tenant_id（JWT claims），依赖注入提取 |
-| 数据库 | PostgreSQL RLS | ⚠️ **未实现**：全库无 `ENABLE ROW LEVEL SECURITY` / `CREATE POLICY` / `current_setting`；`docker/postgres/init.sql:26-27` 注释引用的 Alembic 迁移不存在（同 database.md §3.5）——当前租户隔离**纯靠应用层** |
+| 数据库 | PostgreSQL RLS | ✅ **已实现**（迁移 `7d9a46a0d5c9`）：8 张含 `tenant_id` 的业务表（categories、sources、items、finance_symbols、finance_quotes、fund_nav_estimates、watchlist_items、sse_connections）`ENABLE + FORCE ROW LEVEL SECURITY` + `tenant_isolation` 策略：请求会话只读/写本租户行（+系统租户只读），后台会话经 `app.is_service=on` 旁路；`users`（登录先于租户上下文）与 `dashboard_snapshots`（全局运维数据）经评估排除。作为纵深防御兜底，应用层显式过滤仍是第一道防线（详见 database.md §3.5） |
 | Redis | Key 前缀隔离 | 仅租户级数据键带 `t:{tenant_id}:` 前缀（见 database.md §3.2） |
 | MongoDB | 查询条件隔离 | 所有查询 `{tenant_id: xxx}`（MongoDB 未启用，规划） |
 | API | 依赖注入 | ⚠️ `TenantMiddleware` 不存在；实际为每端点 `Depends(get_current_tenant)`（dependencies.py:57-63）从 JWT 提取 tenant_id，service 层显式传参过滤 |
 | 管理 | 租户配置限制 | max_users, max_categories, max_sources 约束 |
-| 越权检测 | 每次查询验证 | 各查询人工携带 `tenant_id ==` 条件（无自动注入、无 RLS 兜底），依赖代码评审与测试 |
+| 越权检测 | 每次查询验证 | 各查询人工携带 `tenant_id ==` 条件（无自动注入），依赖代码评审与测试；RLS 作为数据库层兜底——即便某条查询漏带租户条件，跨租户行仍会被 `tenant_isolation` 策略拦截（见数据库行） |
 
 **租户管理员权限**:
 - `admin` 角色: 可管理租户内用户、分类、数据源
@@ -489,7 +489,7 @@ app.add_middleware(
 | 限流层级 | Nginx + FastAPI + 黑名单（**三层均未落地**，见 §3.3 标注） | 多层纵深防御 |
 | SSO架构 | 统一OAuth2 + Provider适配器 | 5种SSO统一接口，新增provider只需加handler |
 | JWT方案 | 双Token(Access+Refresh) | Access短效安全，Refresh长效方便 |
-| 多租户 | 行级隔离+RLS（**RLS 未实现**，当前纯应用层隔离，见 §3.5） | 性能好、成本低 |
+| 多租户 | 行级隔离+RLS ✅ 已实现（应用层显式过滤为主防线，8 表 `ENABLE+FORCE` RLS + `tenant_isolation` 策略为纵深兜底，后台经 `app.is_service` 旁路，见 §3.5 与 database.md §3.5） | 性能好、成本低 |
 | CSP | 严格CSP策略（**未实现**，当前仅基础安全头，见 §3.2） | 防XSS，Vue默认转义减少风险 |
 
 ## 5. 边界情况

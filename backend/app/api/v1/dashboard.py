@@ -84,10 +84,14 @@ async def get_scheduler_status(
     user: dict = Depends(require_admin),
 ):
     from app.core.redis import get_redis_client
-    from app.db.session import async_session_factory
+    from app.db.session import apply_service_context, async_session_factory
     from app.services.dashboard import DashboardService
 
+    # Opens its own session (not get_db): the scheduler status is an
+    # admin-only, system-wide view over every tenant's jobs/sources, so it
+    # runs with the RLS service bypass instead of the caller's tenant context.
     async with async_session_factory() as session:
+        await apply_service_context(session)
         redis_client = await get_redis_client()
         service = DashboardService(session, redis_client)
         data = await service.get_scheduler_status()
@@ -97,22 +101,36 @@ async def get_scheduler_status(
 @router.get("/sse-stats", response_model=SuccessResponse[SSEStatsResponse])
 async def get_sse_stats(
     user: dict = Depends(require_admin),
-    db: AsyncSession = Depends(get_db),
     redis_client: Redis = Depends(get_redis),
 ):
-    service = DashboardService(db, redis_client)
-    data = await service.get_sse_stats()
+    from app.db.session import apply_service_context, async_session_factory
+    from app.services.dashboard import DashboardService
+
+    # SSE connection counters are system-wide (all tenants) by design
+    # (dashboard-tab.md §3.5); a request-tenant RLS context would silently
+    # undercount them, so this admin-only view runs with the service bypass.
+    async with async_session_factory() as session:
+        await apply_service_context(session)
+        service = DashboardService(session, redis_client)
+        data = await service.get_sse_stats()
     return SuccessResponse(success=True, data=data)
 
 
 @router.get("/business-metrics", response_model=SuccessResponse[BusinessMetricsResponse])
 async def get_business_metrics(
     user: dict = Depends(require_admin),
-    db: AsyncSession = Depends(get_db),
     redis_client: Redis = Depends(get_redis),
 ):
+    from app.db.session import apply_service_context, async_session_factory
+    from app.services.dashboard import DashboardService
+
     # Admin-only system-wide business metrics (dashboard-tab.md §3.5); the
-    # service degrades each sub-metric independently and never raises.
-    service = DashboardService(db, redis_client)
-    data = await service.get_business_metrics()
+    # service degrades each sub-metric independently and never raises. The
+    # deliberately tenant-less queries (items_today, watchlist_total,
+    # active_users_24h) need the RLS service bypass — a request-tenant context
+    # would make them report only the admin's own tenant.
+    async with async_session_factory() as session:
+        await apply_service_context(session)
+        service = DashboardService(session, redis_client)
+        data = await service.get_business_metrics()
     return SuccessResponse(success=True, data=data)

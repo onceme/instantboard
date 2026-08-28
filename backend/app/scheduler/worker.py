@@ -21,7 +21,7 @@ from sqlalchemy.orm import selectinload
 from app.config import settings
 from app.core.redis import RedisKeys, close_redis, get_redis_client
 from app.db.init_db import create_tables
-from app.db.session import async_session_factory
+from app.db.session import apply_service_context, async_session_factory
 from app.models.source import Source
 from app.scheduler.manager import scheduler_manager
 from app.services.tenant import load_all_tenant_settings, load_tenant_settings
@@ -64,7 +64,9 @@ LISTENER_STATE_SUBSCRIBED = "subscribed"
 async def _load_source_payload(source_id: str) -> dict | None:
     # DB fallback for enable events whose payload is missing source fields
     # (defensive only — the publisher always sends the full source dict).
+    # Background session: RLS service bypass (no request context).
     async with async_session_factory() as session:
+        await apply_service_context(session)
         result = await session.execute(
             select(Source).where(Source.id == source_id).options(selectinload(Source.category))
         )
@@ -89,7 +91,11 @@ async def _load_tenant_settings_for(tenant_id: str) -> dict:
     if not tenant_id:
         return {}
     try:
+        # Background session: RLS service bypass (no request context). The
+        # tenants table is not RLS-protected, but the same session shape is
+        # used everywhere a background task opens the database.
         async with async_session_factory() as session:
+            await apply_service_context(session)
             return await load_tenant_settings(session, tenant_id)
     except Exception as exc:
         logger.warning(f"Failed to load tenant settings for {tenant_id}, scheduling with defaults: {exc}")
@@ -314,7 +320,10 @@ async def main() -> None:
     # prod) can report worker health. Write one immediately, then every interval.
     heartbeat_task = asyncio.create_task(heartbeat_loop(listener_state))
 
+    # Background (startup) session: RLS service bypass so the cross-tenant
+    # active-source snapshot is not fenced off by the tenant policies.
     async with async_session_factory() as session:
+        await apply_service_context(session)
         result = await session.execute(select(Source).where(Source.is_active).options(selectinload(Source.category)))
         active_sources = result.scalars().all()
         logger.info(f"Found {len(active_sources)} active data sources")
@@ -322,7 +331,9 @@ async def main() -> None:
     # One settings query for the whole rebuild; feed to interval resolution so
     # tenant refresh_overrides apply from the first scheduled run. Degrades to
     # {} inside load_all_tenant_settings on any error (defaults then apply).
+    # Background session: RLS service bypass (no request context).
     async with async_session_factory() as session:
+        await apply_service_context(session)
         tenant_settings_map = await load_all_tenant_settings(session)
 
     await scheduler_manager.schedule_all_active_sources(active_sources, tenant_settings_map)

@@ -63,9 +63,14 @@ async def lifespan(app: FastAPI):
         await scheduler_manager.start()
         logger.info("Scheduler started")
 
+        from app.db.session import apply_service_context
         from app.services.tenant import load_all_tenant_settings
 
+        # Background (startup) session: no request context, so mark it for the
+        # RLS service bypass — otherwise the tenant policies would hide every
+        # source row from this cross-tenant snapshot load.
         async with async_session_factory() as session:
+            await apply_service_context(session)
             result = await session.execute(
                 select(Source).where(Source.is_active).options(selectinload(Source.category))
             )
@@ -74,6 +79,7 @@ async def lifespan(app: FastAPI):
         # One settings query for the whole rebuild so tenant refresh_overrides
         # apply from the first scheduled run (degrades to {} on read error).
         async with async_session_factory() as session:
+            await apply_service_context(session)
             tenant_settings_map = await load_all_tenant_settings(session)
 
         await scheduler_manager.schedule_all_active_sources(active_sources, tenant_settings_map)

@@ -60,7 +60,10 @@ cross_refs: [architecture.md, database.md, frontend.md, security.md, data-flow.m
 - `/dashboard/*` 全部端点需要 **admin 角色**（`require_admin` 依赖），非 admin 返回 403 `FORBIDDEN`
 - `/stream/status` 认证**可选**（携带则返回该用户连接状态，否则返回空）
 
-**多租户**: 所有请求自动注入 `tenant_id` (从 JWT claims 中提取)
+**多租户**: 所有请求自动注入 `tenant_id` (从 JWT claims 中提取)。租户隔离以应用层
+显式 `tenant_id` 过滤为主防线，PostgreSQL RLS 作为数据库层纵深防御兜底——请求会话在
+数据库侧被限定为本租户行（及共享的系统租户只读行），后台任务经服务旁路运行
+（详见 database.md §3.5 与 security.md §3.5）。
 
 ### 3.2 认证与授权 API
 

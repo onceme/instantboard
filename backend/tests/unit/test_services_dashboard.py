@@ -2512,15 +2512,23 @@ class TestBusinessMetricsEndpoint:
 
     @patch("app.services.dashboard.redis_set", new_callable=AsyncMock)
     @patch("app.services.dashboard.redis_get", new_callable=AsyncMock, return_value=None)
-    async def test_admin_success_returns_envelope(self, _mock_get, _mock_set):
+    @patch("app.db.session.async_session_factory")
+    async def test_admin_success_returns_envelope(self, mock_factory, _mock_get, _mock_set):
         from app.api.v1.dashboard import get_business_metrics
 
         db, _ = _mock_db()
         db.execute = AsyncMock(side_effect=Exception("degraded"))
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=db)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        mock_factory.return_value = ctx
         redis = AsyncMock()
         redis.mget = AsyncMock(return_value=[])
 
-        resp = await get_business_metrics(user={"role": "admin"}, db=db, redis_client=redis)
+        # Post-RLS this endpoint opens its own service-context session (the
+        # system-wide metrics must not be narrowed by the admin's tenant GUC),
+        # so the session comes from async_session_factory, not get_db.
+        resp = await get_business_metrics(user={"role": "admin"}, redis_client=redis)
 
         assert resp.success is True
         assert resp.data["active_users_24h"] == 0

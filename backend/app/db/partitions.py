@@ -85,6 +85,21 @@ def _is_duplicate_table(exc: DBAPIError) -> bool:
     return code == DUPLICATE_TABLE_SQLSTATE
 
 
+async def _apply_rls_to_partition(conn, partition_name: str) -> None:
+    """ENABLE + FORCE RLS and the tenant_isolation policy on one partition.
+
+    The policy SQL comes verbatim from ``app/db/rls.py`` (the same constants
+    the migration uses) so parent and partitions can never drift. The DDL is
+    idempotent (DROP POLICY IF EXISTS + CREATE); ENABLE/FORCE are idempotent
+    by themselves — safe to re-run on every startup and daily partition roll
+    (database.md §3.5).
+    """
+    from app.db.rls import rls_ddl_statements
+
+    for statement in rls_ddl_statements(partition_name):
+        await conn.execute(text(statement))
+
+
 async def ensure_quote_partitions(engine: AsyncEngine | None = None) -> list[str]:
     """Idempotently create the prev/current/next month partitions of finance_quotes.
 
@@ -135,6 +150,9 @@ async def ensure_quote_partitions(engine: AsyncEngine | None = None) -> list[str
                     {"name": partition_name},
                 )
                 if exists:
+                    # Idempotent self-heal: partitions created before the RLS
+                    # rollout (or by an older process) may lack the policy.
+                    await _apply_rls_to_partition(conn, partition_name)
                     continue
                 try:
                     # asyncpg rejects bind parameters in DDL ("parameters are
@@ -148,12 +166,19 @@ async def ensure_quote_partitions(engine: AsyncEngine | None = None) -> list[str
                             f"FOR VALUES FROM ('{start.isoformat()}') TO ('{end.isoformat()}')"
                         )
                     )
+                    created.append(partition_name)
                 except DBAPIError as exc:
                     if not _is_duplicate_table(exc):
                         raise
                     logger.info(f"Partition {partition_name} was created concurrently, treating as existing")
-                    continue
-                created.append(partition_name)
+                # RLS must be applied to every partition individually:
+                # partitions do NOT inherit the parent's ENABLE/FORCE flags
+                # (verified against PostgreSQL: direct partition access
+                # bypassed the parent policy). Same transaction as the CREATE,
+                # so a partition never exists without its tenant_isolation
+                # policy. Also covers the concurrent-duplicate case, where the
+                # winning process may not have applied its copy yet.
+                await _apply_rls_to_partition(conn, partition_name)
 
         if created:
             logger.info(f"finance_quotes partitions created: {', '.join(created)}")

@@ -218,8 +218,16 @@ class TestSchedulerStatus:
 
 
 class TestSSEStats:
-    @patch("app.api.v1.dashboard.DashboardService")
-    def test_sse_stats(self, mock_svc_cls, client):
+    @patch("app.db.session.async_session_factory")
+    # Post-RLS the endpoint imports DashboardService inside the function (it
+    # opens its own service-context session), so patch the source module.
+    @patch("app.services.dashboard.DashboardService")
+    def test_sse_stats(self, mock_svc_cls, mock_factory, client):
+        session = AsyncMock()
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=session)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        mock_factory.return_value = ctx
         mock_svc = AsyncMock()
         mock_svc.get_sse_stats.return_value = {
             "total_connections": 15,

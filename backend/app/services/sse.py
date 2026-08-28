@@ -231,10 +231,13 @@ class SSEService:
 
         The scheduler has no request session, so a dedicated one is opened here.
         """
-        from app.db.session import async_session_factory
+        from app.db.session import apply_service_context, async_session_factory
         from app.services.tech import TechService
 
+        # Background session (triggered from the collection pipeline): RLS
+        # service bypass so the topic stats query can read items across tenants.
         async with async_session_factory() as session:
+            await apply_service_context(session)
             redis_client = await redis_mod.get_redis_client()
             service = TechService(session, redis_client)
             return await service.get_topics(tenant_id)

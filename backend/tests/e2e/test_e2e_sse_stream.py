@@ -38,7 +38,11 @@ def _build_scope(path: str, token: str) -> dict:
         "raw_path": path.encode("ascii"),
         "query_string": f"token={token}".encode("ascii"),
         "root_path": "",
-        "headers": [(b"host", b"testserver"), (b"accept", b"text/event-stream")],
+        "headers": [
+            (b"host", b"testserver"),
+            (b"accept", b"text/event-stream"),
+            (b"user-agent", b"e2e-sse-handshake/1.0"),
+        ],
         "client": ("testclient", 50000),
         "server": ("testserver", 80),
     }

@@ -162,12 +162,20 @@ export const useAuthStore = defineStore("auth", () => {
     applyUserPreferences(data.user);
   }
 
-  async function login(provider: string, code: string, redirectUri: string) {
+  async function login(
+    provider: string,
+    code: string,
+    redirectUri: string,
+    state: string,
+  ) {
     const response = await apiPost<AuthTokens & { user: User }>(
       "/auth/sso/" + provider,
       {
         code,
         redirect_uri: redirectUri,
+        // OAuth CSRF token issued by the authorize endpoint; the backend verifies
+        // and consumes it (security.md §3.2)
+        state,
       },
     );
     storeLoginResponse(response.data);

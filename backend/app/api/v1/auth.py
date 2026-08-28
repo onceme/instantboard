@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core.exceptions import ValidationError
+from app.core.redis import RedisKeys
 from app.core.sso_handlers import SUPPORTED_PROVIDERS, SSOHandlerFactory
 from app.dependencies import get_client_ip, get_current_user, get_db, get_raw_token, get_redis
 from app.schemas.auth import (
@@ -46,6 +47,7 @@ async def get_enabled_providers():
 async def sso_authorize(
     provider: str,
     redirect_uri: str = Query(..., description="OAuth redirect URI after authorization"),
+    redis: Redis = Depends(get_redis),
 ):
     if provider not in SUPPORTED_PROVIDERS:
         raise ValidationError(
@@ -60,6 +62,15 @@ async def sso_authorize(
             details=[{"field": "provider", "message": str(e)}],
         ) from e
     state = secrets.token_urlsafe(32)
+    # OAuth CSRF protection (security.md §3.2): remember the issued state (value =
+    # provider) so the login endpoint can prove the callback round-trips to the flow
+    # this client started. Fails open when Redis is down: login availability wins —
+    # exploiting the gap still requires luring a victim through a full OAuth flow on
+    # a deployment whose Redis is simultaneously unavailable, an acceptable window.
+    try:
+        await redis.set(RedisKeys.sso_state_key(state), provider, ex=RedisKeys.SSO_STATE_TTL)
+    except Exception as e:
+        logger.warning("Redis unavailable; OAuth state not stored (fail-open): %s", e)
     authorize_url = handler.get_authorize_url(state=state, redirect_uri=redirect_uri)
     return SuccessResponse(data=SSOAuthorizeResponse(authorize_url=authorize_url, state=state))
 
@@ -77,7 +88,7 @@ async def sso_login(
             details=[{"field": "provider", "message": f"Must be one of: {', '.join(SUPPORTED_PROVIDERS)}"}],
         )
     service = AuthService(db, redis)
-    result = await service.sso_login(provider, request.code, request.redirect_uri)
+    result = await service.sso_login(provider, request.code, request.redirect_uri, request.state)
     return SuccessResponse(data=TokenResponse(**result))
 
 

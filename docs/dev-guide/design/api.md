@@ -101,7 +101,7 @@ ENABLED_SSO_PROVIDERS=google,github,azure_ad             # 额外启用 Azure AD
 ENABLED_SSO_PROVIDERS=google,github,azure_ad,apple,facebook  # 全部启用
 ```
 
-#### GET `/api/v1/auth/sso/{provider}/authorize` — 获取 OAuth 授权 URL（auth.py:45）
+#### GET `/api/v1/auth/sso/{provider}/authorize` — 获取 OAuth 授权 URL（auth.py:46）
 
 **认证:** 不需要（公开端点）
 
@@ -118,7 +118,11 @@ Response 200:
     }
   }
 
-Note: state 生成后直接返回前端，后端**不存储、不校验**（防 CSRF 校验层缺失，见 security.md §3.2）
+Note: state 语义（OAuth CSRF 防护，security.md §3.2）：
+  - 后端将签发的 state 写入 Redis `sso_state:{state}`（value=provider 名，TTL 600s），
+    供 SSO 登录端点校验并**一次性消费**（校验通过后立即删键）
+  - Redis 不可用时 authorize 降级为 fail-open（仅 warning 日志），照常返回 state
+  - 前端必须保存 state 并在登录请求中原样回传（前端另存 sessionStorage 做客户端比对）
 ```
 
 #### POST `/api/v1/auth/sso/{provider}` — SSO 登录
@@ -132,7 +136,9 @@ Request:
   POST /api/v1/auth/sso/github
   Body: {
     "code": "oauth_authorization_code",
-    "redirect_uri": "https://app.instantboard.dev/auth/callback"
+    "redirect_uri": "https://app.instantboard.dev/auth/callback",
+    "state": "<authorize 端点返回的 state>"   // 必填（语义上）：缺失同样返回 400
+                                              // VALIDATION_ERROR；schema 层 max_length=256
   }
 
 Response 200:
@@ -157,6 +163,12 @@ Response 200:
 Response 400:
   { "success": false, "error": { "code": "INVALID_OAUTH_CODE", ... } }    // 授权码无效
   { "success": false, "error": { "code": "VALIDATION_ERROR", ... } }      // provider 不受支持 / 未启用
+  { "success": false, "error": { "code": "VALIDATION_ERROR", ... } }      // OAuth state 缺失 / 未知 / 过期 /
+                                                                           // 已使用 / provider 不匹配，消息统一为
+                                                                           //  "Invalid or expired OAuth state"
+                                                                           // (不泄露具体原因；state 一次性：校验通过
+                                                                           //  即删键；Redis 自身不可用时校验端
+                                                                           //  fail-open，与 authorize 端一致)
   { "success": false, "error": { "code": "VALIDATION_ERROR", ... } }      // Google 账号邮箱未验证
                                                                            // (email_verified=false 显式拒绝，消息
                                                                            //  "Google account email is not verified"，
@@ -167,7 +179,7 @@ Response 502:
   // 注: 状态码为 502 (上游/网关错误) 而非 401——避免前端拦截器误判为会话过期而跳转登录页
 ```
 
-#### POST `/api/v1/auth/admin/login` — 本地管理员登录（auth.py:84）
+#### POST `/api/v1/auth/admin/login` — 本地管理员登录（auth.py:95）
 
 **认证:** 不需要（公开端点）。完整设计（身份隔离、防爆破、kill-switch）见 [admin-login.md](admin-login.md)。
 

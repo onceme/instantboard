@@ -7,6 +7,18 @@ from app.core.security import create_access_token, create_refresh_token
 from app.core.sso_handlers import SSOUserInfo
 from tests.integration.conftest import make_admin_headers, make_auth_header
 
+CALLBACK_URI = "http://localhost:3000/callback"
+
+
+def _authorize(client, provider="github"):
+    """Hit the real authorize endpoint so the issued state lands in the mock Redis."""
+    resp = client.get(
+        f"/api/v1/auth/sso/{provider}/authorize",
+        params={"redirect_uri": CALLBACK_URI},
+    )
+    assert resp.status_code == 200
+    return resp.json()["data"]["state"]
+
 
 class TestSSOProviders:
     """Tests for the GET /api/v1/auth/sso/providers endpoint."""
@@ -117,6 +129,36 @@ class TestSSOAuthorize:
         data = resp.json()
         assert "not enabled" in data["detail"]["error"]["message"]
 
+    def test_authorize_stores_state_in_redis(self, client, app_with_overrides):
+        """OAuth CSRF protection (security.md §3.2): the issued state is stored in Redis
+        under sso_state:{state} with the provider as value and a 10-minute TTL."""
+        from app.core.redis import RedisKeys
+
+        _, mock_redis = app_with_overrides
+        state = _authorize(client, "github")
+        key = RedisKeys.sso_state_key(state)
+        assert mock_redis._data.get(key) == "github"
+        assert key in mock_redis._expiry
+        assert mock_redis._expiry[key] - mock_redis._clock == RedisKeys.SSO_STATE_TTL == 600
+
+    def test_authorize_redis_failure_fails_open(self, client, app_with_overrides, monkeypatch):
+        """Redis down at authorize time degrades to fail-open (warning log): the
+        authorize request still succeeds and issues a state (security.md §3.2)."""
+        _, mock_redis = app_with_overrides
+
+        async def broken_set(*args, **kwargs):
+            raise ConnectionError("redis down")
+
+        monkeypatch.setattr(mock_redis, "set", broken_set)
+        resp = client.get(
+            "/api/v1/auth/sso/github/authorize",
+            params={"redirect_uri": CALLBACK_URI},
+        )
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["state"]
+        assert data["authorize_url"]
+
 
 class TestSSOLogin:
     def test_invalid_provider_login(self, client):
@@ -196,11 +238,12 @@ class TestSSOLogin:
         )
         handler.close = AsyncMock()
 
+        state = _authorize(client, "google")
         with patch("app.services.auth.SSOHandlerFactory") as mock_factory:
             mock_factory.create.return_value = handler
             resp = client.post(
                 "/api/v1/auth/sso/google",
-                json={"code": "code123", "redirect_uri": "http://localhost:3000/callback"},
+                json={"code": "code123", "redirect_uri": CALLBACK_URI, "state": state},
             )
 
         assert resp.status_code == 400
@@ -225,11 +268,12 @@ class TestSSOLogin:
         )
         handler.close = AsyncMock()
 
+        state = _authorize(client, "google")
         with patch("app.services.auth.SSOHandlerFactory") as mock_factory:
             mock_factory.create.return_value = handler
             resp = client.post(
                 "/api/v1/auth/sso/google",
-                json={"code": "code123", "redirect_uri": "http://localhost:3000/callback"},
+                json={"code": "code123", "redirect_uri": CALLBACK_URI, "state": state},
             )
 
         assert resp.status_code == 200
@@ -238,6 +282,100 @@ class TestSSOLogin:
         assert data["data"]["access_token"]
         assert data["data"]["user"]["sso_provider"] == "google"
         assert data["data"]["user"]["role"] == "member"
+
+
+class TestSSOLoginState:
+    """OAuth state verification on SSO login (security.md §3.2): the state issued by
+    the authorize endpoint is mandatory, provider-bound, single-use, and TTL-limited."""
+
+    def _mock_github_handler(self):
+        handler = AsyncMock()
+        handler.authenticate = AsyncMock(
+            return_value=SSOUserInfo(
+                provider="github",
+                provider_id=f"gh-{uuid.uuid4().hex[:10]}",
+                email=f"state-user-{uuid.uuid4().hex[:8]}@example.com",
+                name="State User",
+            )
+        )
+        handler.close = AsyncMock()
+        return handler
+
+    def test_valid_state_consumed_and_reuse_rejected(self, client, app_with_overrides):
+        """A full authorize→login round-trip succeeds and consumes the state; a second
+        login with the same state is rejected (single-use)."""
+        from app.core.redis import RedisKeys
+
+        _, mock_redis = app_with_overrides
+        state = _authorize(client, "github")
+        body = {"code": "valid-code", "redirect_uri": CALLBACK_URI, "state": state}
+
+        with patch("app.services.auth.SSOHandlerFactory") as mock_factory:
+            mock_factory.create.return_value = self._mock_github_handler()
+            resp = client.post("/api/v1/auth/sso/github", json=body)
+
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+        # Single-use: the key is gone immediately after the successful login.
+        assert RedisKeys.sso_state_key(state) not in mock_redis._data
+
+        resp2 = client.post("/api/v1/auth/sso/github", json=body)
+        assert resp2.status_code == 400
+        assert resp2.json()["detail"]["error"]["code"] == "VALIDATION_ERROR"
+        assert resp2.json()["detail"]["error"]["message"] == "Invalid or expired OAuth state"
+
+    def test_missing_state_returns_400(self, client):
+        resp = client.post(
+            "/api/v1/auth/sso/github",
+            json={"code": "valid-code", "redirect_uri": CALLBACK_URI},
+        )
+        assert resp.status_code == 400
+        error = resp.json()["detail"]["error"]
+        assert error["code"] == "VALIDATION_ERROR"
+        assert error["message"] == "Invalid or expired OAuth state"
+
+    def test_unknown_state_returns_400(self, client):
+        resp = client.post(
+            "/api/v1/auth/sso/github",
+            json={"code": "valid-code", "redirect_uri": CALLBACK_URI, "state": "never-issued-state"},
+        )
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["error"]["message"] == "Invalid or expired OAuth state"
+
+    def test_expired_state_returns_400(self, client, app_with_overrides):
+        """States expire after SSO_STATE_TTL (600s); login is rejected afterwards."""
+        _, mock_redis = app_with_overrides
+        state = _authorize(client, "github")
+        mock_redis.advance(601)
+
+        resp = client.post(
+            "/api/v1/auth/sso/github",
+            json={"code": "valid-code", "redirect_uri": CALLBACK_URI, "state": state},
+        )
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["error"]["message"] == "Invalid or expired OAuth state"
+
+    def test_state_provider_mismatch_returns_400(self, client):
+        """A state issued for github cannot be used on the google login endpoint."""
+        state = _authorize(client, "github")
+        resp = client.post(
+            "/api/v1/auth/sso/google",
+            json={"code": "valid-code", "redirect_uri": CALLBACK_URI, "state": state},
+        )
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["error"]["message"] == "Invalid or expired OAuth state"
+
+    def test_disabled_provider_still_rejected_with_valid_state(self, client):
+        """The provider enabled-check runs before state validation, so the disabled
+        provider contract (400 'not enabled') is unaffected by the state checks."""
+        # authorize for azure_ad already fails (disabled), so no state can be issued;
+        # posting any state still surfaces the provider error first.
+        resp = client.post(
+            "/api/v1/auth/sso/azure_ad",
+            json={"code": "valid-code", "redirect_uri": CALLBACK_URI, "state": "whatever-state"},
+        )
+        assert resp.status_code == 400
+        assert "not enabled" in resp.json()["detail"]["error"]["message"]
 
 
 class TestRefreshToken:

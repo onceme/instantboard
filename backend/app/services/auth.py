@@ -54,7 +54,7 @@ class AuthService:
         self.db = db
         self.redis = redis
 
-    async def sso_login(self, provider: str, code: str, redirect_uri: str) -> dict:
+    async def sso_login(self, provider: str, code: str, redirect_uri: str, state: str | None = None) -> dict:
         if provider not in SUPPORTED_PROVIDERS:
             raise ValidationError(
                 message=f"Unsupported SSO provider: {provider}",
@@ -68,6 +68,7 @@ class AuthService:
                 message=str(e),
                 details=[{"field": "provider", "message": str(e)}],
             ) from e
+        await self._verify_sso_state(provider, state)
         try:
             user_info = await handler.authenticate(code, redirect_uri)
         except ValueError as e:
@@ -140,6 +141,37 @@ class AuthService:
                 "sso_provider": user.sso_provider,
             },
         }
+
+    async def _verify_sso_state(self, provider: str, state: str | None) -> None:
+        """OAuth CSRF check (security.md §3.2) for the state issued by GET
+        /auth/sso/{provider}/authorize: it must be present, known (not expired or
+        already consumed) and bound to this provider. A valid state is consumed
+        immediately (single-use). All rejections share one generic message so a
+        failure never reveals which check tripped.
+
+        When Redis itself is unreachable the check fails open with a warning, mirroring
+        the authorize endpoint: login availability wins — the authorize side could not
+        have stored the state either during the same outage, and exploiting the gap
+        still requires luring a victim through a full OAuth flow.
+        """
+        if not state:
+            raise ValidationError(message="Invalid or expired OAuth state")
+        key = RedisKeys.sso_state_key(state)
+        try:
+            stored_provider = await self.redis.get(key)
+        except Exception as e:
+            logger.warning("Redis unavailable during OAuth state check; failing open: %s", e)
+            return
+        if stored_provider != provider:
+            # Covers unknown/expired/consumed states (None) and provider mismatches.
+            logger.warning("Rejected SSO login: OAuth state invalid (provider=%s)", provider)
+            raise ValidationError(message="Invalid or expired OAuth state")
+        try:
+            await self.redis.delete(key)
+        except Exception as e:
+            # A failed delete only leaves a short replay window until the TTL expires;
+            # never block a verified login on it.
+            logger.warning("Failed to consume OAuth state key: %s", e)
 
     async def admin_login(self, email: str, password: str, client_ip: str) -> dict:
         """Local admin login (isolated identity model, see docs/dev-guide/design/admin-login.md).

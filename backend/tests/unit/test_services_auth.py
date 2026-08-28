@@ -13,6 +13,7 @@ from app.core.exceptions import (
     SSOProviderError,
     ValidationError,
 )
+from app.core.redis import RedisKeys
 from app.schemas.base import ErrorCode
 from app.services.auth import AuthService
 
@@ -86,6 +87,15 @@ def _mock_redis():
     return redis
 
 
+def _mock_redis_with_state(provider: str):
+    """Redis mock holding one valid OAuth state bound to the given provider."""
+    redis = AsyncMock()
+    redis.scan_iter = AsyncMock(return_value=iter([]))
+    redis.get = AsyncMock(return_value=provider)
+    redis.delete = AsyncMock()
+    return redis
+
+
 class TestSSOLogin:
     @patch("app.services.auth.redis_set")
     @patch("app.services.auth.create_refresh_token", return_value="refresh_tok")
@@ -93,7 +103,7 @@ class TestSSOLogin:
     @patch("app.services.auth.SSOHandlerFactory")
     async def test_sso_login_success(self, mock_factory, mock_create_access, mock_create_refresh, mock_redis_set):
         db, mock_result = _mock_db_session()
-        redis = _mock_redis()
+        redis = _mock_redis_with_state("google")
         user = _make_user()
 
         with patch("app.services.auth.AuthService._get_or_create_user", new_callable=AsyncMock, return_value=user):
@@ -104,7 +114,7 @@ class TestSSOLogin:
             mock_factory.create.return_value = handler
 
             service = AuthService(db, redis)
-            result = await service.sso_login("google", "code123", "https://redirect.example.com")
+            result = await service.sso_login("google", "code123", "https://redirect.example.com", state="state-ok")
 
             assert result["access_token"] == "access_tok"
             assert result["refresh_token"] == "refresh_tok"
@@ -113,6 +123,9 @@ class TestSSOLogin:
             assert result["user"]["email"] == user.email
             handler.authenticate.assert_called_once_with("code123", "https://redirect.example.com")
             handler.close.assert_called_once()
+            # The verified state is consumed (single-use) immediately.
+            redis.get.assert_awaited_once_with(RedisKeys.sso_state_key("state-ok"))
+            redis.delete.assert_awaited_once_with(RedisKeys.sso_state_key("state-ok"))
 
     async def test_sso_login_unsupported_provider(self):
         db, _ = _mock_db_session()
@@ -149,7 +162,7 @@ class TestSSOLogin:
     @patch("app.services.auth.SSOHandlerFactory")
     async def test_sso_login_auth_failure_value_error(self, mock_factory):
         db, _ = _mock_db_session()
-        redis = _mock_redis()
+        redis = _mock_redis_with_state("google")
         handler = AsyncMock()
         handler.authenticate = AsyncMock(side_effect=ValueError("bad code"))
         handler.close = AsyncMock()
@@ -157,13 +170,13 @@ class TestSSOLogin:
 
         service = AuthService(db, redis)
         with pytest.raises(SSOProviderError, match="authentication failed"):
-            await service.sso_login("google", "bad_code", "https://redirect.example.com")
+            await service.sso_login("google", "bad_code", "https://redirect.example.com", state="state-ok")
         handler.close.assert_called_once()
 
     @patch("app.services.auth.SSOHandlerFactory")
     async def test_sso_login_auth_failure_general_exception(self, mock_factory):
         db, _ = _mock_db_session()
-        redis = _mock_redis()
+        redis = _mock_redis_with_state("google")
         handler = AsyncMock()
         handler.authenticate = AsyncMock(side_effect=RuntimeError("provider down"))
         handler.close = AsyncMock()
@@ -171,13 +184,13 @@ class TestSSOLogin:
 
         service = AuthService(db, redis)
         with pytest.raises(SSOProviderError, match="returned an error"):
-            await service.sso_login("google", "bad_code", "https://redirect.example.com")
+            await service.sso_login("google", "bad_code", "https://redirect.example.com", state="state-ok")
         handler.close.assert_called_once()
 
     @patch("app.services.auth.SSOHandlerFactory")
     async def test_sso_login_no_provider_id(self, mock_factory):
         db, _ = _mock_db_session()
-        redis = _mock_redis()
+        redis = _mock_redis_with_state("google")
         handler = AsyncMock()
         sso_info = _make_sso_user_info(provider_id=None)
         handler.authenticate = AsyncMock(return_value=sso_info)
@@ -186,14 +199,14 @@ class TestSSOLogin:
 
         service = AuthService(db, redis)
         with pytest.raises(InvalidOAuthCode, match="no user ID"):
-            await service.sso_login("google", "code", "https://redirect.example.com")
+            await service.sso_login("google", "code", "https://redirect.example.com", state="state-ok")
 
     @patch("app.services.auth.SSOHandlerFactory")
     async def test_sso_login_google_email_unverified_rejected(self, mock_factory):
         """Google login with email_verified=False must be rejected with 400
         VALIDATION_ERROR before any user lookup/provisioning happens (security.md §3.4)."""
         db, _ = _mock_db_session()
-        redis = _mock_redis()
+        redis = _mock_redis_with_state("google")
         handler = AsyncMock()
         sso_info = _make_sso_user_info(email_verified=False)
         handler.authenticate = AsyncMock(return_value=sso_info)
@@ -205,7 +218,7 @@ class TestSSOLogin:
             patch("app.services.auth.AuthService._get_or_create_user", new_callable=AsyncMock) as mock_get_or_create,
             pytest.raises(ValidationError) as exc_info,
         ):
-            await service.sso_login("google", "code", "https://redirect.example.com")
+            await service.sso_login("google", "code", "https://redirect.example.com", state="state-ok")
 
         assert exc_info.value.status_code == 400
         assert exc_info.value.error_code == ErrorCode.VALIDATION_ERROR
@@ -222,7 +235,7 @@ class TestSSOLogin:
     ):
         """Google login with email_verified=True proceeds normally."""
         db, _ = _mock_db_session()
-        redis = _mock_redis()
+        redis = _mock_redis_with_state("google")
         user = _make_user()
 
         with patch("app.services.auth.AuthService._get_or_create_user", new_callable=AsyncMock, return_value=user):
@@ -233,7 +246,7 @@ class TestSSOLogin:
             mock_factory.create.return_value = handler
 
             service = AuthService(db, redis)
-            result = await service.sso_login("google", "code123", "https://redirect.example.com")
+            result = await service.sso_login("google", "code123", "https://redirect.example.com", state="state-ok")
 
             assert result["access_token"] == "access_tok"
             assert result["user"]["email"] == user.email
@@ -248,7 +261,7 @@ class TestSSOLogin:
         """email_verified=None (field absent from the provider payload) passes for
         backward compatibility."""
         db, _ = _mock_db_session()
-        redis = _mock_redis()
+        redis = _mock_redis_with_state("google")
         user = _make_user()
 
         with patch("app.services.auth.AuthService._get_or_create_user", new_callable=AsyncMock, return_value=user):
@@ -259,7 +272,7 @@ class TestSSOLogin:
             mock_factory.create.return_value = handler
 
             service = AuthService(db, redis)
-            result = await service.sso_login("google", "code123", "https://redirect.example.com")
+            result = await service.sso_login("google", "code123", "https://redirect.example.com", state="state-ok")
 
             assert result["access_token"] == "access_tok"
 
@@ -273,7 +286,7 @@ class TestSSOLogin:
         """The email_verified enforcement applies to Google only; other providers are
         unaffected even when their handler reports email_verified=False."""
         db, _ = _mock_db_session()
-        redis = _mock_redis()
+        redis = _mock_redis_with_state("github")
         user = _make_user(sso_provider="github")
 
         with patch("app.services.auth.AuthService._get_or_create_user", new_callable=AsyncMock, return_value=user):
@@ -284,8 +297,122 @@ class TestSSOLogin:
             mock_factory.create.return_value = handler
 
             service = AuthService(db, redis)
-            result = await service.sso_login("github", "code123", "https://redirect.example.com")
+            result = await service.sso_login("github", "code123", "https://redirect.example.com", state="state-ok")
 
+            assert result["access_token"] == "access_tok"
+
+
+class TestSSOStateVerification:
+    """OAuth state storage/verification against CSRF (security.md §3.2)."""
+
+    @patch("app.services.auth.SSOHandlerFactory")
+    async def test_missing_state_rejected_before_authenticate(self, mock_factory):
+        db, _ = _mock_db_session()
+        redis = _mock_redis()
+        handler = AsyncMock()
+        handler.close = AsyncMock()
+        mock_factory.create.return_value = handler
+
+        service = AuthService(db, redis)
+        with pytest.raises(ValidationError, match="Invalid or expired OAuth state"):
+            await service.sso_login("google", "code", "https://redirect.example.com")
+        handler.authenticate.assert_not_called()
+        redis.delete.assert_not_awaited()
+
+    @patch("app.services.auth.SSOHandlerFactory")
+    async def test_empty_state_rejected(self, mock_factory):
+        db, _ = _mock_db_session()
+        redis = _mock_redis()
+        handler = AsyncMock()
+        handler.close = AsyncMock()
+        mock_factory.create.return_value = handler
+
+        service = AuthService(db, redis)
+        with pytest.raises(ValidationError, match="Invalid or expired OAuth state"):
+            await service.sso_login("google", "code", "https://redirect.example.com", state="")
+        handler.authenticate.assert_not_called()
+
+    @patch("app.services.auth.SSOHandlerFactory")
+    async def test_unknown_or_expired_state_rejected(self, mock_factory):
+        """A state Redis does not know (never issued, TTL-expired or already consumed)
+        is rejected with the same generic message."""
+        db, _ = _mock_db_session()
+        redis = _mock_redis()  # redis.get returns None for every key
+        handler = AsyncMock()
+        handler.close = AsyncMock()
+        mock_factory.create.return_value = handler
+
+        service = AuthService(db, redis)
+        with pytest.raises(ValidationError) as exc_info:
+            await service.sso_login("google", "code", "https://redirect.example.com", state="never-issued")
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.error_code == ErrorCode.VALIDATION_ERROR
+        assert exc_info.value.error_message == "Invalid or expired OAuth state"
+        redis.get.assert_awaited_once_with(RedisKeys.sso_state_key("never-issued"))
+        handler.authenticate.assert_not_called()
+
+    @patch("app.services.auth.SSOHandlerFactory")
+    async def test_provider_mismatch_rejected(self, mock_factory):
+        """A state issued for one provider cannot be used to log in through another."""
+        db, _ = _mock_db_session()
+        redis = _mock_redis_with_state("github")
+        handler = AsyncMock()
+        handler.close = AsyncMock()
+        mock_factory.create.return_value = handler
+
+        service = AuthService(db, redis)
+        with pytest.raises(ValidationError, match="Invalid or expired OAuth state"):
+            await service.sso_login("google", "code", "https://redirect.example.com", state="state-ok")
+        handler.authenticate.assert_not_called()
+        redis.delete.assert_not_awaited()
+
+    @patch("app.services.auth.redis_set")
+    @patch("app.services.auth.create_refresh_token", return_value="refresh_tok")
+    @patch("app.services.auth.create_access_token", return_value="access_tok")
+    @patch("app.services.auth.SSOHandlerFactory")
+    async def test_redis_down_on_check_fails_open(
+        self, mock_factory, mock_create_access, mock_create_refresh, mock_redis_set
+    ):
+        """When Redis is unreachable the verification fails open (availability first;
+        mirroring the authorize endpoint, which also could not have stored the state)."""
+        db, _ = _mock_db_session()
+        redis = _mock_redis()
+        redis.get = AsyncMock(side_effect=RuntimeError("connection refused"))
+        user = _make_user()
+
+        with patch("app.services.auth.AuthService._get_or_create_user", new_callable=AsyncMock, return_value=user):
+            handler = AsyncMock()
+            handler.authenticate = AsyncMock(return_value=_make_sso_user_info())
+            handler.close = AsyncMock()
+            mock_factory.create.return_value = handler
+
+            service = AuthService(db, redis)
+            result = await service.sso_login("google", "code", "https://redirect.example.com", state="state-ok")
+            assert result["access_token"] == "access_tok"
+
+    @patch("app.services.auth.redis_set")
+    @patch("app.services.auth.create_refresh_token", return_value="refresh_tok")
+    @patch("app.services.auth.create_access_token", return_value="access_tok")
+    @patch("app.services.auth.SSOHandlerFactory")
+    async def test_redis_down_on_consume_still_logs_in(
+        self, mock_factory, mock_create_access, mock_create_refresh, mock_redis_set
+    ):
+        """A failed delete only reopens a short replay window until TTL; it must not
+        block a fully verified login."""
+        db, _ = _mock_db_session()
+        redis = _mock_redis_with_state("google")
+        redis.delete = AsyncMock(side_effect=RuntimeError("connection refused"))
+        user = _make_user()
+
+        with patch("app.services.auth.AuthService._get_or_create_user", new_callable=AsyncMock, return_value=user):
+            handler = AsyncMock()
+            handler.authenticate = AsyncMock(return_value=_make_sso_user_info())
+            handler.close = AsyncMock()
+            mock_factory.create.return_value = handler
+
+            service = AuthService(db, redis)
+            result = await service.sso_login("google", "code", "https://redirect.example.com", state="state-ok")
             assert result["access_token"] == "access_tok"
 
 

@@ -6,6 +6,11 @@ from pydantic import BaseModel, EmailStr, Field
 class SSOLoginRequest(BaseModel):
     code: str
     redirect_uri: str
+    # OAuth CSRF token issued by GET /auth/sso/{provider}/authorize (security.md §3.2).
+    # Optional at the schema level so its absence surfaces as 400 VALIDATION_ERROR from
+    # the service (matching the other state failures) instead of a 422; values longer
+    # than anything we ever issue are rejected here.
+    state: str | None = Field(default=None, max_length=256)
 
 
 class AdminLoginRequest(BaseModel):

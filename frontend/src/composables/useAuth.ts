@@ -32,7 +32,7 @@ export function useAuth() {
     sessionStorage.removeItem(OAUTH_PROVIDER_KEY);
 
     const redirectUri = `${window.location.origin}/auth/callback`;
-    await authStore.login(provider, code, redirectUri);
+    await authStore.login(provider, code, redirectUri, state);
     router.push("/finance");
   }
 

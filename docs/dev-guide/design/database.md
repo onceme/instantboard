@@ -384,7 +384,7 @@ CREATE INDEX idx_dashboard_snapshots_time ON dashboard_snapshots(tenant_id, time
 | **管理员防爆破 (IP)** | `admin_login:fail_ip:{ip}` / `lock_ip:{ip}` | String（计数/锁） | 1h | IP 维度：20 次失败触发锁定 |
 | **限流计数** | `rate:{tenant_id}:{ip}:{endpoint}` | — | — | 见下方未实现标注 |
 | **IP 黑名单** | `ip_blacklist` | — | — | 见下方未实现标注 |
-| **SSO State** | `sso_state:{state_key}` | — | — | 见下方未实现标注 |
+| **SSO State** | `sso_state:{state_key}` | String（provider 名） | 600s | OAuth CSRF 防护（security.md §3.2）：authorize 端点将签发的 state 写入，value 为 provider 名；`POST /auth/sso/{provider}` 登录时校验键存在且 provider 匹配，通过后**立即删键（一次性）**；缺失/过期/已用/不匹配统一 400 `VALIDATION_ERROR`。Redis 不可用时读写两侧均降级 fail-open（warning 日志），登录不阻断 |
 
 > ⚠️ **未实现（限流）**：`rate:{tenant_id}:{ip}:{endpoint}` 键与 `rate_limit_key()` helper
 > 存在定义，但全代码库零调用，**应用层限流完全未落地**（见 security.md §3.3）。
@@ -392,12 +392,9 @@ CREATE INDEX idx_dashboard_snapshots_time ON dashboard_snapshots(tenant_id, time
 > ⚠️ **未实现（IP 黑名单）**：`ip_blacklist` 仅有 `RedisKeys.IP_BLACKLIST` 定义，零使用点，
 > 无封禁与检查逻辑。
 >
-> ⚠️ **未实现（SSO state 存储）**：`sso_state:{state_key}` 从未写入——authorize 端点生成
-> state 后直接返回，不存不校验（api/v1/auth.py:62），OAuth CSRF 防护缺失。
->
 > ⚠️ **说明（key 前缀）**：并非所有 key 都有租户前缀——仅租户级数据键（quote、market_indices、
 > commodities、nav、search、dedup、watchlist）带 `t:{tenant_id}:` 前缀；session、source_health、
-> token_blacklist、admin_login:*、dashboard:*、scheduler:*、channel:*、sse:* 等均为全局键。
+> token_blacklist、admin_login:*、dashboard:*、scheduler:*、channel:*、sse:*、sso_state:* 等均为全局键。
 > 特例：话题统计推送节流键 `tech:topic_stats_pushed:{tenant_id}` 与涨跌提醒冷却键
 > `finance:alert_fired:{tenant_id}:{item_id}` 为租户级但采用后缀式命名。
 

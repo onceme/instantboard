@@ -64,6 +64,10 @@ class RedisKeys:
     # per-minute buckets expire on their own (see API_METRICS_MINUTE_TTL).
     API_METRICS_TOTALS = "dashboard:api_metrics:totals"
     API_METRICS_MINUTE = "dashboard:api_metrics:minute:{minute}"
+    # OAuth CSRF protection (security.md §3.2): the authorize endpoint stores every
+    # issued state with the provider name as value; POST /auth/sso/{provider} verifies
+    # presence + provider match and deletes the key right after (single-use). Both
+    # sides fail open on Redis outages so logins stay available.
     SSO_STATE = "sso_state:{state_key}"
     IP_BLACKLIST = "ip_blacklist"
     SEARCH = "t:{tenant_id}:search:{query_hash}"
@@ -104,6 +108,9 @@ class RedisKeys:
     ALERT_FIRED = "finance:alert_fired:{tenant_id}:{item_id}"
 
     SEARCH_TTL = 300
+    # OAuth state validity window (seconds): long enough to finish a provider
+    # round-trip including a slow consent screen, short enough to bound replays.
+    SSO_STATE_TTL = 600
     STREAM_HISTORY_LIMIT = 500
     STREAM_HISTORY_TTL = 1800
     # Worker heartbeat TTL: 3x the 15s write interval (app/scheduler/worker.py).

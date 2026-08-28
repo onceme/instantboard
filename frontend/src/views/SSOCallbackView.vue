@@ -35,7 +35,12 @@ onMounted(async () => {
     await handleCallback(provider, code, state);
   } catch (err) {
     // Login failed: extract a readable message from the backend error envelope and show it on the page instead of silently redirecting
-    error.value = getApiErrorMessage(err, "登录失败，请重试。");
+    const message = getApiErrorMessage(err, "登录失败，请重试。");
+    // The backend rejected the OAuth state (missing/expired/already used/CSRF mismatch):
+    // guide the user to start the login over instead of showing the raw backend text
+    error.value = message.includes("OAuth state")
+      ? "登录状态已失效或校验失败，请重新登录。"
+      : message;
     console.error("SSO callback error:", err);
   }
 });

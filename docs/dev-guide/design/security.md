@@ -17,7 +17,7 @@ cross_refs: [architecture.md, api.md, database.md, infrastructure.md, admin-logi
 采用 **多层防御 (Defense in Depth)** 策略：Nginx层限流/SSL → FastAPI中间件层认证/隔离 → 数据层RLS/参数化查询，5种SSO通过统一OAuth2流程集成。
 
 > 📌 **现状提示（2026-08-24 审计修订，2026-08-27 RLS 落地）**：本文档为"设计 + 现状"混合文档——尚未落地的防护层
-> （Nginx 限流、CSP、应用层限流、IP 黑名单、请求验证、Origin/Referer 校验、OAuth state 校验等）
+> （Nginx 限流、CSP、应用层限流、IP 黑名单、请求验证、Origin/Referer 校验等）
 > 均已在对应小节加 `⚠️ 未实现` 标注，规划内容保留作为路线图；
 > 代码已实现但此前未记录的机制统一补充在 §3.9。数据层 RLS 已实现（见 §3.5）。
 
@@ -58,7 +58,7 @@ cross_refs: [architecture.md, api.md, database.md, infrastructure.md, admin-logi
 | 方案 | 实现 |
 |------|------|
 | 纯 Bearer token 认证 | 认证不使用 Cookie（后端无 `Set-Cookie`，浏览器不会自动附带任何认证 Cookie）→ CSRF 自然免疫 |
-| SSO OAuth State | ⚠️ **未实现**：authorize 端点生成 `state` 后直接返回、**不存 Redis、不校验**（`sso_state:*` 从无写入，api/v1/auth.py:62）——OAuth CSRF 防护层缺失，待补 |
+| SSO OAuth State | ✅ **已实现**：authorize 端点生成的 `state`（`secrets.token_urlsafe(32)`）写入 `sso_state:{state}`（value=provider 名，TTL 10 分钟）；`POST /auth/sso/{provider}` 在 code 换取之前校验——必填、键存在、provider 匹配，通过后**立即删键（一次性）**；缺失/未知/过期/已用/不匹配统一 400 `VALIDATION_ERROR`（消息固定为 "Invalid or expired OAuth state"，不泄露具体原因）。前端另在客户端比对 sessionStorage 中的 state（`composables/useAuth.ts`）。Redis 不可用时 authorize 与校验两端均 **fail-open**（warning 日志）——登录可用性优先：攻击仍需诱导受害者完成完整 OAuth 流程、且恰逢该环境 Redis 故障，风险窗口可接受（见 §5） |
 | SSE Token | SSE 认证用 query param `token` — 不受 CSRF 影响 |
 | Origin验证 | ⚠️ **未实现**：无 Origin/Referer 校验中间件（`setup_middlewares` 仅注册 CORS + `RequestLoggingMiddleware`，core/middleware.py:135-137）；因采用纯 Bearer 无 Cookie 认证，缺失该项不引入 CSRF 风险 |
 
@@ -192,11 +192,12 @@ sequenceDiagram
     BE-->>FE: 返回 enabled_providers
     FE->>FE: 1. 动态渲染登录按钮
     FE->>BE: 2. GET /auth/sso/{provider}/authorize
-    BE->>BE: 2a. 校验 provider 已启用
-    BE-->>FE: 返回授权 URL
+    BE->>BE: 2a. 校验 provider 已启用; 存 state 入 Redis (TTL 10min)
+    BE-->>FE: 返回授权 URL + state
     FE->>SSO: 3. 重定向授权页
     SSO-->>FE: 4. 用户授权后回调
-    FE->>BE: 5. POST code
+    FE->>BE: 5. POST code + state
+    BE->>BE: 5a. 校验 state (存在+provider匹配) 并删键 (一次性)
     BE->>SSO: 6a. code 换 access_token
     SSO-->>BE: 6b. 返回 access_token
     BE->>BE: 6c. 取用户信息, 建/查用户, 签发 JWT
@@ -498,6 +499,7 @@ app.add_middleware(
 - **SSO提供商宕机**: 返回 `SSO_PROVIDER_ERROR (502)`，前端提示用户尝试其他SSO或稍后重试
 - **JWT密钥泄露**: 管理API支持立即更换 `JWT_SECRET`，所有旧token自动失效
 - **Redis限流不可用**: 降级为 Nginx 层限流 (粗粒度但有效)
+- **Redis不可用（OAuth state）**: authorize 存 state 与登录校验 state 均降级为 fail-open（warning 日志），SSO 登录保持可用；详见 §3.2 SSO OAuth State 行的决策说明
 - **Apple代理email**: 用户隐藏真实email时，使用代理email，不可变更
 - **多SSO同一email（身份隔离）**: 按登录入口隔离，**不做跨 email 合并**（见 [admin-login.md](admin-login.md) §2、`app/services/auth.py::_get_or_create_user`）：
   - 主路径：按 `(sso_provider, sso_provider_id)` 精确匹配，命中则刷新 profile 后返回；

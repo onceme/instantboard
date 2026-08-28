@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # InstantBoard pre-commit hook: lint staged files before each commit.
 #   backend  *.py                        -> ruff check + ruff format --check
-#   frontend src/**/*.{ts,vue}, tests/** -> eslint --max-warnings=0
+#   frontend src/**/*.{ts,vue}, tests/** -> eslint --max-warnings=0 + prettier --check
 # Install with: make hooks
 set -o pipefail
 
@@ -32,6 +32,8 @@ if [ "${#FRONTEND_STAGED[@]}" -gt 0 ]; then
   FRONTEND_FILES=("${FRONTEND_STAGED[@]#frontend/}")
   echo "pre-commit: eslint on ${#FRONTEND_FILES[@]} staged frontend file(s)"
   (cd "$REPO_ROOT/frontend" && npx eslint "${FRONTEND_FILES[@]}" --max-warnings=0) || STATUS=1
+  echo "pre-commit: prettier on ${#FRONTEND_FILES[@]} staged frontend file(s)"
+  (cd "$REPO_ROOT/frontend" && npx prettier --check "${FRONTEND_FILES[@]}") || STATUS=1
 fi
 
 exit "$STATUS"

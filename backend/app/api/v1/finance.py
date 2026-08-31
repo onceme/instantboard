@@ -2,12 +2,14 @@ from fastapi import APIRouter, Depends, Query
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import ValidationError
 from app.dependencies import get_current_tenant, get_current_user, get_db, get_redis
 from app.schemas.base import PaginatedMeta, PaginatedResponse, SuccessResponse
 from app.schemas.finance import (
     CommodityResponse,
     FinanceQuoteResponse,
     FinanceSearchResult,
+    FundNAVIntraday,
     FundNAVResponse,
     MarketIndexResponse,
     WatchlistItemAlertUpdate,
@@ -200,6 +202,30 @@ async def get_fund_nav(
     return SuccessResponse(data=data)
 
 
+@router.get("/fund-nav/batch", response_model=SuccessResponse[list[FundNAVIntraday]])
+async def get_fund_nav_batch(
+    symbols: str = Query(..., description="Comma-separated fund codes/symbols, at most 50"),
+    service: FinanceService = Depends(_get_finance_service),
+    user: dict = Depends(get_current_user),
+    tenant_id: str = Depends(get_current_tenant),
+):
+    """Batch intraday NAV lookup (fund-intraday-nav.md §9.1).
+
+    Fresh fund_nav_rt entries win; misses degrade to latest_official without
+    triggering the heavy holdings path (a lazy ingest hook fires separately
+    when a snapshot is missing); unknown codes come back as per-entry `error`
+    items instead of a whole-array 404.
+    """
+    raw_symbols = [part.strip() for part in symbols.split(",") if part.strip()]
+    if not raw_symbols:
+        raise ValidationError(message="symbols must contain at least one fund code")
+    if len(raw_symbols) > 50:
+        raise ValidationError(message="symbols accepts at most 50 entries per request")
+
+    items = await service.get_fund_nav_batch(tenant_id=tenant_id, symbols=raw_symbols)
+    return SuccessResponse(data=items)
+
+
 @router.get("/watchlist", response_model=SuccessResponse[list[WatchlistItemResponse]])
 async def get_watchlist(
     service: FinanceService = Depends(_get_finance_service),
@@ -298,6 +324,9 @@ async def get_watchlist_quotes(
             FinanceQuoteResponse(
                 symbol=q.get("symbol", ""),
                 name=q.get("name", ""),
+                # Intraday NAV estimate attached to fund entries only
+                # (fund-intraday-nav.md §9.1); None for stocks/indices.
+                fund_nav=q.get("fund_nav"),
                 current_price=q.get("current_price"),
                 open=q.get("open"),
                 high=q.get("high"),

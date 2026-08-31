@@ -37,6 +37,32 @@ async def _record_push_event_count() -> None:
         logger.debug(f"Failed to record SSE push event count: {e}")
 
 
+async def _sync_online_finance_tenants() -> None:
+    """Write the set of tenants holding an active finance/all SSE connection to
+    Redis (fund-intraday-nav.md §8.1).
+
+    The worker-side intraday NAV job computes ONE global estimate array and then
+    fans out per online tenant; this SET is that fan-out target list. Same gauge
+    shape as _sync_active_connections_gauge: full-SET rewrite on every call
+    (self-correcting, no drift), TTL 90s refreshed by the 30s heartbeat loop and
+    by register/unregister, so a dead api process empties the fan-out list within
+    the TTL instead of pushing into the void forever. Never raises.
+    """
+    try:
+        client = await get_redis_client()
+        tenants = set()
+        for conn in event_router.get_all_active_connections():
+            if conn.categories and ("finance" in conn.categories or "all" in conn.categories):
+                tenants.add(conn.tenant_id)
+        key = RedisKeys.sse_connected_tenants_finance_key()
+        await client.delete(key)
+        if tenants:
+            await client.sadd(key, *tenants)
+            await client.expire(key, RedisKeys.SSE_CONNECTED_TENANTS_FINANCE_TTL)
+    except Exception as e:
+        logger.debug(f"Failed to sync online finance tenants set: {e}")
+
+
 async def _sync_active_connections_gauge() -> None:
     """Write the in-router active SSE connection count to Redis as a gauge.
 
@@ -128,6 +154,9 @@ class SSEEventType(StrEnum):
     QUOTE_UPDATE = "quote_update"
     MARKET_INDEX_UPDATE = "market_index_update"
     NAV_ESTIMATE_UPDATE = "nav_estimate_update"
+    # Intraday NAV batch: the full per-tenant-filtered array of FundNAVIntraday
+    # payloads, pushed ≤3s while the CN market is open (fund-intraday-nav.md §8).
+    NAV_BATCH_UPDATE = "nav_batch_update"
     COMMODITY_UPDATE = "commodity_update"
     ALERT_UPDATE = "alert_update"
     SYSTEM_METRIC_UPDATE = "system_metric_update"
@@ -191,6 +220,7 @@ class SSEEventRouter:
         # instances (notably unit tests) stay side-effect free.
         if self is event_router:
             _spawn_background_hook(_sync_active_connections_gauge())
+            _spawn_background_hook(_sync_online_finance_tenants())
             if was_empty:
                 _spawn_background_hook(_signal_first_subscriber_resume())
         return conn
@@ -210,6 +240,7 @@ class SSEEventRouter:
             # drives the cross-process gauge.
             if self is event_router:
                 _spawn_background_hook(_sync_active_connections_gauge())
+                _spawn_background_hook(_sync_online_finance_tenants())
         return conn
 
     def get_connection(self, client_id: str) -> SSEConnection | None:
@@ -234,7 +265,14 @@ class SSEEventRouter:
         self._event_counter += 1
         return f"{int(time.time())}-{self._event_counter}"
 
-    async def push_event(self, category: str, event_type: SSEEventType, data: dict | list, tenant_id: str):
+    async def push_event(
+        self,
+        category: str,
+        event_type: SSEEventType,
+        data: dict | list,
+        tenant_id: str,
+        history: bool = True,
+    ):
         message = {
             "event_type": event_type.value if isinstance(event_type, SSEEventType) else event_type,
             "channel": category,
@@ -249,12 +287,18 @@ class SSEEventRouter:
             # reconnecting client can replay what it missed via Last-Event-ID.
             # The degraded (Redis-down) fallback path below deliberately skips the
             # history write: an in-process direct push cannot be replayed.
-            await redis_push_history(
-                RedisKeys.stream_history_key(category),
-                message,
-                RedisKeys.STREAM_HISTORY_LIMIT,
-                RedisKeys.STREAM_HISTORY_TTL,
-            )
+            # history=False (fund-intraday-nav.md §8.2): full-array events like
+            # nav_batch_update are complete state replaced every cycle (reconnects
+            # recover via the REST snapshot), so they skip the replay window to
+            # keep it useful for other events. PUBLISH delivery is unaffected and the
+            # default keeps every existing call site unchanged.
+            if history:
+                await redis_push_history(
+                    RedisKeys.stream_history_key(category),
+                    message,
+                    RedisKeys.STREAM_HISTORY_LIMIT,
+                    RedisKeys.STREAM_HISTORY_TTL,
+                )
             await redis_publish(channel_key, message)
         except Exception as e:
             logger.warning(f"Redis Pub/Sub publish failed for {channel_key}: {e}, falling back to direct push")
@@ -392,6 +436,9 @@ class SSEEventRouter:
                     # one refresh per cycle is enough and a dead api process still lets
                     # the gauge expire promptly (degraded → normal collection frequency).
                     await _sync_active_connections_gauge()
+                    # Same keep-alive for the online finance-tenant set (TTL 90s = 3x
+                    # cadence), consumed by the worker's nav_batch_update fan-out.
+                    await _sync_online_finance_tenants()
                 except asyncio.CancelledError:
                     logger.info("SSE heartbeat cancelled")
                     break

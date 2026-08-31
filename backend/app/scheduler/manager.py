@@ -55,6 +55,13 @@ FUND_NAV_REFRESH_HOUR = 20
 FUND_NAV_REFRESH_MINUTE = 0
 FUND_NAV_REFRESH_TIMEZONE = "Asia/Shanghai"
 
+# Fund intraday NAV (fund-intraday-nav.md §7): the estimate loop is an
+# interval job gated on the CN market being open; the holdings refresh is a
+# daily cron (hour from settings.fund_holdings_refresh_hour, Asia/Shanghai).
+FUND_NAV_INTRADAY_JOB_ID = "fund_nav_intraday_refresh"
+FUND_HOLDINGS_REFRESH_JOB_ID = "fund_holdings_refresh"
+FUND_HOLDINGS_REFRESH_TIMEZONE = "Asia/Shanghai"
+
 # Daily finance_quotes partition roll (database.md §3.1): cron, not an
 # interval — finance_quotes is monthly RANGE-partitioned on timestamp (UTC),
 # so the next month's partition must exist before the calendar rolls over.
@@ -180,6 +187,10 @@ class AsyncSchedulerManager:
         # add_market_refresh_jobs() registers nothing. Only governs registration;
         # unrelated to the adaptive-pause / load-throttling switches above.
         self.market_refresh_jobs_enabled = True
+        # Tracks the CN open→closed edge of the intraday NAV loop so the M2
+        # close-of-market snapshot write has a stable trigger point
+        # (fund-intraday-nav.md §3.4 case 3).
+        self._fund_intraday_gate_open = False
 
     def disable_adaptive_pause(self) -> None:
         # Called by the worker process before starting the scheduler: the SSE connection
@@ -425,6 +436,157 @@ class AsyncSchedulerManager:
             else:
                 logger.info(f"{job_id}: no official NAV updates (no fund symbols or collector returned nothing)")
             self._last_run_results[job_id] = {"success": True, "items_count": updated}
+        except Exception as e:
+            logger.error(f"{job_id} failed: {e}")
+            self._last_run_results[job_id] = {"success": False, "error": str(e), "items_count": 0}
+
+    async def add_fund_intraday_jobs(self) -> None:
+        """Register the intraday NAV estimate loop (fund-intraday-nav.md §7.1).
+
+        Interval job following the add_market_refresh_jobs shape: first run
+        immediate, recorded in _original_intervals (interval semantics subject
+        to adaptive/load rescheduling), master switch
+        settings.fund_nav_intraday_enabled. The job body itself is no-op cheap
+        outside CN market hours (gate → return, zero upstream requests).
+        """
+        from app.config import settings
+
+        if not settings.fund_nav_intraday_enabled:
+            logger.info("Fund intraday NAV jobs disabled, not registering")
+            return
+
+        await self.add_job(
+            job_id=FUND_NAV_INTRADAY_JOB_ID,
+            func=self._run_fund_intraday_refresh,
+            interval_seconds=settings.fund_nav_intraday_refresh_interval,
+        )
+
+    async def _run_fund_intraday_refresh(self) -> None:
+        """Intraday NAV cycle body (fund-intraday-nav.md §7.2 steps 1-12).
+
+        Session + CN gate + Redis probe live here; the compute pipeline
+        (union → quotes → estimates → cache → push → flush) is
+        FundIntradayService.compute_cycle. Failures are logged into
+        _last_run_results and never raised — the interval retries next round.
+        """
+        job_id = FUND_NAV_INTRADAY_JOB_ID
+        self._last_run_times[job_id] = datetime.now(UTC)
+        try:
+            from app.core.redis import get_redis_client
+            from app.db.session import apply_service_context, async_session_factory
+            from app.services.finance import FinanceService
+            from app.services.fund_intraday import FundIntradayService
+
+            # Step 1: background session under the RLS service bypass.
+            async with async_session_factory() as session:
+                await apply_service_context(session)
+
+                # Step 2: CN market gate. Deliberately _is_market_open("CN") —
+                # this loop serves CN intraday only, and the 9-market union gate
+                # used by market refresh would burn cycles whenever US is open
+                # while CN sleeps. The 11:30-13:00 lunch window is naturally
+                # closed (two CN sessions), zero cost either way.
+                service = FinanceService(db=session, redis=None)
+                if not service._is_market_open("CN"):
+                    if self._fund_intraday_gate_open:
+                        self._fund_intraday_gate_open = False
+                        # TODO(M2): close-of-market forced snapshot on this
+                        # open→closed edge (fund-intraday-nav.md §3.4 case 3).
+                        logger.info(f"{job_id}: CN market closed (cycle loop stopped)")
+                    logger.debug(f"{job_id}: CN market closed, skipping")
+                    self._last_run_results[job_id] = {"success": True, "items_count": 0}
+                    return
+                self._fund_intraday_gate_open = True
+
+                # Redis carries the cycle (budgets, rt cache, fan-out): probe before
+                # spending any upstream budget, skip the round when unavailable
+                # (fund-intraday-nav.md §11).
+                try:
+                    redis_client = await get_redis_client()
+                    await redis_client.ping()
+                except Exception as exc:
+                    logger.warning(f"{job_id}: Redis unavailable, cycle skipped: {exc}")
+                    self._last_run_results[job_id] = {
+                        "success": False,
+                        "error": f"redis unavailable: {exc}",
+                        "items_count": 0,
+                    }
+                    return
+
+                # Steps 3-11: union (short-circuit empty, truncate 500), holdings +
+                # anchors, quote batch, per-fund tiered estimates, rt cache, push,
+                # downsampled flush — all inside compute_cycle.
+                summary = await FundIntradayService(db=session).compute_cycle()
+
+            codes = summary.get("codes", 0)
+            if codes:
+                logger.debug(
+                    f"{job_id}: cycle complete (funds={codes}, pushed_tenants={summary.get('pushed_tenants', 0)})"
+                )
+            self._last_run_results[job_id] = {"success": True, "items_count": codes}
+        except Exception as e:
+            logger.error(f"{job_id} failed: {e}")
+            self._last_run_results[job_id] = {"success": False, "error": str(e), "items_count": 0}
+
+    async def add_fund_holdings_job(self) -> None:
+        """Daily holdings ingestion cron (fund-intraday-nav.md §5.1/§5.5).
+
+        Hour from settings.fund_holdings_refresh_hour (Asia/Shanghai, after the
+        CN close where quarterly disclosures land). Registered from the same two
+        entry points as add_fund_nav_job and, like it, deliberately NOT added to
+        _original_intervals (cron triggers stay outside the interval-based
+        adaptive/load rescheduling machinery).
+        """
+        from app.config import settings
+
+        self.scheduler.add_job(
+            self._run_fund_holdings_refresh,
+            trigger=CronTrigger(
+                hour=settings.fund_holdings_refresh_hour,
+                minute=0,
+                timezone=ZoneInfo(FUND_HOLDINGS_REFRESH_TIMEZONE),
+            ),
+            id=FUND_HOLDINGS_REFRESH_JOB_ID,
+            replace_existing=True,
+        )
+        logger.info(
+            f"Job {FUND_HOLDINGS_REFRESH_JOB_ID} added "
+            f"(daily {settings.fund_holdings_refresh_hour:02d}:00 {FUND_HOLDINGS_REFRESH_TIMEZONE})"
+        )
+
+    async def _run_fund_holdings_refresh(self) -> None:
+        """Job body of fund_holdings_refresh: ingest every followed fund serially
+        (the governor budget paces the loop to ~6 funds/min, §5.5), checking for
+        newer report periods. Single-fund failures never kill the round."""
+        job_id = FUND_HOLDINGS_REFRESH_JOB_ID
+        self._last_run_times[job_id] = datetime.now(UTC)
+        try:
+            from app.db.session import apply_service_context, async_session_factory
+            from app.services.fund_holdings import FundHoldingsService
+
+            async with async_session_factory() as session:
+                await apply_service_context(session)
+                service = FundHoldingsService(db=session)
+                codes, _per_tenant = await service.get_followed_codes()
+                if not codes:
+                    logger.info(f"{job_id}: no followed funds, nothing to ingest")
+                    self._last_run_results[job_id] = {"success": True, "items_count": 0}
+                    return
+                if len(codes) > 200:
+                    logger.warning(
+                        f"{job_id}: {len(codes)} followed funds — serial budget pacing "
+                        f"will run long (bounded, once-a-day)"
+                    )
+                ingested = 0
+                for code in codes:
+                    try:
+                        if await service.ingest_fund(code, patient=True):
+                            ingested += 1
+                    except Exception as exc:
+                        logger.warning(f"{job_id}: ingestion failed for {code}: {exc}")
+
+            logger.info(f"{job_id}: holdings refreshed for {ingested}/{len(codes)} fund(s)")
+            self._last_run_results[job_id] = {"success": True, "items_count": ingested}
         except Exception as e:
             logger.error(f"{job_id} failed: {e}")
             self._last_run_results[job_id] = {"success": False, "error": str(e), "items_count": 0}

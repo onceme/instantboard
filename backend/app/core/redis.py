@@ -111,6 +111,34 @@ class RedisKeys:
     # not spam the user on every quote fetch (finance-tab.md §3.2). Redis
     # unavailable → detection is skipped (no alert), never an error.
     ALERT_FIRED = "finance:alert_fired:{tenant_id}:{item_id}"
+    # Upstream budget governance (fund-intraday-nav.md §6): the per-minute request
+    # budget counter for one quote/holdings upstream. Minute-window key (approx.
+    # sliding window), EX 120 so two windows survive for the pre-switch read.
+    QUOTE_BUDGET = "quote_budget:{name}:{minute}"
+    # Circuit-breaker state per upstream: {cooldown_until, consecutive_fails} JSON,
+    # EX = the cooldown duration. 403/429/5xx/connection-drop escalates; success
+    # halves/zeroes it (fund-intraday-nav.md §6.2).
+    QUOTE_BREAKER = "quote_breaker:{name}"
+    # Real-time fund NAV estimate (fund-intraday-nav.md §3.4): tenant-less global
+    # key — the estimate is derived from public market data; tenant isolation stays
+    # at the watchlist layer. TTL 12s (4x the 3s cycle) so a stalled job lets the
+    # value expire instead of serving a stale estimate.
+    FUND_NAV_RT = "fund_nav_rt:{fund_code}"
+    # Followed-fund union set (fund-intraday-nav.md §5.2): members are
+    # "{tenant_id}:{fund_code}". Global (tenant-less) — the union is computed once
+    # across tenants; invalidation on watchlist add/remove deletes the whole key.
+    FUND_FOLLOWED_CODES = "fund_followed_codes"
+    # Per-fund holdings snapshot + meta cache (fund-intraday-nav.md §7.2 step 6):
+    # JSON serialized on miss-from-PG, TTL 1h, bounded by the once-a-day holdings
+    # refresh job.
+    FUND_HOLDINGS = "fund_holdings:{fund_code}"
+    # Downsampled DB-flush throttle (fund-intraday-nav.md §3.4 case 1): SET NX EX
+    # FUND_NAV_DB_FLUSH_MIN_GAP bounds fund_nav_estimates writes to ≤1/min/fund.
+    FUND_NAV_RT_FLUSH = "fund_nav_rt_flush:{fund_code}"
+    # Online-tenant set for the finance channel (fund-intraday-nav.md §8.1): the
+    # api process writes the tenants holding an active finance/all SSE connection;
+    # the worker reads it to fan out nav_batch_update only to online tenants.
+    SSE_CONNECTED_TENANTS_FINANCE = "sse:connected_tenants:finance"
 
     SEARCH_TTL = 300
     # OAuth state validity window (seconds): long enough to finish a provider
@@ -143,6 +171,22 @@ class RedisKeys:
     # Watchlist price-alert cooldown window (seconds): one alert_update per item
     # per hour while the threshold stays breached (finance-tab.md §3.2).
     ALERT_FIRED_TTL = 3600
+    # Upstream budget window (seconds): 2x the minute bucket so the current and
+    # the previous window both exist for the budget-left / pre-switch reads.
+    QUOTE_BUDGET_TTL = 120
+    # Real-time fund NAV estimate TTL (seconds): 4x the intraday cycle interval
+    # (fund-intraday-nav.md §3.4).
+    FUND_NAV_RT_TTL = 12
+    # Followed-fund union set TTL (seconds) — short on purpose: a deleted key
+    # (watchlist add/remove) or an expiry both rebuild from PG on next read.
+    FUND_FOLLOWED_CODES_TTL = 60
+    # Per-fund holdings cache TTL (seconds) (fund-intraday-nav.md §7.2 step 6).
+    FUND_HOLDINGS_TTL = 3600
+    # Online-tenant finance set TTL (seconds): 3x the 30s SSE heartbeat refresh
+    # cadence so a live api process never lets it lapse while a dead api process
+    # drops the fan-out target promptly (same gauge logic as
+    # SSE_ACTIVE_CONNECTIONS_TTL, fund-intraday-nav.md §8.1).
+    SSE_CONNECTED_TENANTS_FINANCE_TTL = 90
 
     @staticmethod
     def session_key(session_id: str) -> str:
@@ -235,6 +279,34 @@ class RedisKeys:
     @staticmethod
     def alert_fired_key(tenant_id: str, item_id: str) -> str:
         return RedisKeys.ALERT_FIRED.format(tenant_id=tenant_id, item_id=item_id)
+
+    @staticmethod
+    def quote_budget_key(name: str, minute: str) -> str:
+        return RedisKeys.QUOTE_BUDGET.format(name=name, minute=minute)
+
+    @staticmethod
+    def quote_breaker_key(name: str) -> str:
+        return RedisKeys.QUOTE_BREAKER.format(name=name)
+
+    @staticmethod
+    def fund_nav_rt_key(fund_code: str) -> str:
+        return RedisKeys.FUND_NAV_RT.format(fund_code=fund_code)
+
+    @staticmethod
+    def fund_followed_codes_key() -> str:
+        return RedisKeys.FUND_FOLLOWED_CODES
+
+    @staticmethod
+    def fund_holdings_key(fund_code: str) -> str:
+        return RedisKeys.FUND_HOLDINGS.format(fund_code=fund_code)
+
+    @staticmethod
+    def fund_nav_rt_flush_key(fund_code: str) -> str:
+        return RedisKeys.FUND_NAV_RT_FLUSH.format(fund_code=fund_code)
+
+    @staticmethod
+    def sse_connected_tenants_finance_key() -> str:
+        return RedisKeys.SSE_CONNECTED_TENANTS_FINANCE
 
 
 async def redis_get(key: str) -> str | None:

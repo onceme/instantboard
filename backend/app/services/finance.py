@@ -361,6 +361,25 @@ class FinanceService:
             return False
 
     async def get_fund_nav(self, tenant_id: str, symbol: str, estimate_type: str = "realtime") -> dict:
+        # Intraday fast path (fund-intraday-nav.md §9.1): while the CN market is
+        # open the worker refresh loop keeps fund_nav_rt:{code} current (TTL 12s),
+        # so a fresh hit answers directly and skips both the recompute and the
+        # NAV_ESTIMATE_UPDATE side-effect push of the legacy path.
+        fund_code_fast = self._normalize_fund_code(symbol)
+        if fund_code_fast:
+            try:
+                rt_cached = await redis_get(RedisKeys.fund_nav_rt_key(fund_code_fast))
+            except Exception as e:
+                logger.debug(f"fund_nav_rt read failed for {fund_code_fast}: {e}")
+                rt_cached = None
+            if rt_cached:
+                try:
+                    rt_payload = json.loads(rt_cached)
+                    if isinstance(rt_payload, dict) and rt_payload.get("symbol"):
+                        return rt_payload
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
         nav_cache_key = RedisKeys.nav_key(tenant_id, symbol)
         cached = await redis_get(nav_cache_key)
         if cached:
@@ -431,6 +450,25 @@ class FinanceService:
             nav_official_date = str(official_source.nav_official_date) if official_source.nav_official_date else None
             nav_official_date_obj = official_source.nav_official_date
 
+        # Index binding (fund-intraday-nav.md §3.3 — dead-end fix): the
+        # fund_index_bindings table is the source of truth (seeded for
+        # mainstream broad-base funds); resolve_index_binding falls back to a
+        # residual underlying_index_symbol row for legacy estimates. Without a
+        # binding the realtime branch below simply does not engage, as before.
+        bound_index_symbol: str | None = None
+        tracking_ratio = 1.0
+        binding_code = self._normalize_fund_code(symbol)
+        if binding_code:
+            from app.services.fund_holdings import FundHoldingsService
+
+            binding_pair = await FundHoldingsService(db=self.db).resolve_index_binding(binding_code, fund.id)
+            if binding_pair is not None:
+                bound_index_symbol, tracking_ratio = binding_pair
+        if bound_index_symbol is None and nav_record and nav_record.underlying_index_symbol:
+            # Non-6-digit symbols cannot hit the bindings table; keep the
+            # legacy row-level binding usable for them.
+            bound_index_symbol = nav_record.underlying_index_symbol
+
         if nav_record:
             nav_estimate = float(nav_record.nav_estimate) if nav_record.nav_estimate else None
             nav_estimate_deviation_percent = (
@@ -438,26 +476,32 @@ class FinanceService:
             )
             estimate_method = nav_record.estimate_method
 
-            if nav_record.underlying_index_symbol:
-                index_quote = await self._get_cached_quote(tenant_id, nav_record.underlying_index_symbol)
-                underlying_index_info = {
-                    "symbol": nav_record.underlying_index_symbol,
-                    "name": nav_record.underlying_index_symbol,
-                    "current_value": float(nav_record.underlying_index_value)
-                    if nav_record.underlying_index_value
-                    else None,
-                    "change_percent": float(nav_record.underlying_index_change_percent)
+        if bound_index_symbol:
+            index_quote = await self._get_cached_quote(tenant_id, bound_index_symbol)
+            # Initialize from the stored snapshot only when it belongs to the
+            # same index (bindings can differ from a legacy row's snapshot).
+            snapshot_value = None
+            snapshot_change = None
+            if nav_record and nav_record.underlying_index_symbol == bound_index_symbol:
+                snapshot_value = float(nav_record.underlying_index_value) if nav_record.underlying_index_value else None
+                snapshot_change = (
+                    float(nav_record.underlying_index_change_percent)
                     if nav_record.underlying_index_change_percent
-                    else None,
-                }
-                if index_quote:
-                    underlying_index_info["name"] = index_quote.get("name", nav_record.underlying_index_symbol)
-                    underlying_index_info["current_value"] = index_quote.get("current_price")
-                    underlying_index_info["change_percent"] = index_quote.get("change_percent")
+                    else None
+                )
+            underlying_index_info = {
+                "symbol": bound_index_symbol,
+                "name": bound_index_symbol,
+                "current_value": snapshot_value,
+                "change_percent": snapshot_change,
+            }
+            if index_quote:
+                underlying_index_info["name"] = index_quote.get("name", bound_index_symbol)
+                underlying_index_info["current_value"] = index_quote.get("current_price")
+                underlying_index_info["change_percent"] = index_quote.get("change_percent")
 
         if estimate_type == "realtime" and fund.type == "fund" and nav_official and underlying_index_info:
             index_change = underlying_index_info.get("change_percent", 0) or 0
-            tracking_ratio = 1.0
             nav_estimate = nav_official * (1 + index_change / 100 * tracking_ratio)
             nav_estimate_deviation_percent = (
                 round((nav_estimate - nav_official) / nav_official * 100, 4) if nav_official else None
@@ -564,6 +608,132 @@ class FinanceService:
         except Exception as e:
             logger.warning(f"Failed to persist NAV estimate for {fund.symbol}: {e}")
             await self.db.rollback()
+
+    # --- Intraday NAV REST surface (fund-intraday-nav.md §9.1) ---
+
+    async def _read_fund_nav_rt(self, fund_code: str) -> dict | None:
+        """Fresh realtime estimate from the worker loop's fund_nav_rt cache."""
+        try:
+            raw = await redis_get(RedisKeys.fund_nav_rt_key(fund_code))
+        except Exception as e:
+            logger.debug(f"fund_nav_rt read failed for {fund_code}: {e}")
+            return None
+        if not raw:
+            return None
+        try:
+            payload = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return None
+        return payload if isinstance(payload, dict) and payload.get("symbol") else None
+
+    @staticmethod
+    def _fund_nav_error_entry(symbol: str, message: str) -> dict:
+        """Per-code error entry: unknown/degenerate codes degrade to an entry
+        instead of failing the whole batch (§9.1)."""
+        return {
+            "symbol": symbol or "",
+            "name": symbol or "",
+            "estimate_method": "latest_official",
+            "quote_status": "frozen",
+            "estimate_timestamp": datetime.now(UTC).isoformat(),
+            "error": message,
+        }
+
+    async def _fund_nav_latest_official_entries(self, codes: list[str]) -> dict[str, dict]:
+        """Lightweight latest_official fallback for rt-cache misses: anchor +
+        official date from fund_nav_estimates only — never triggers holdings
+        ingestion or a quote fetch (the ingest hook is fired separately by
+        get_fund_nav_batch when a snapshot is missing)."""
+        from app.services.fund_intraday import FundIntradayService
+
+        now_iso = datetime.now(UTC).isoformat()
+        code_set = set(codes)
+        intraday = FundIntradayService(db=self.db)
+        ids_per_code, name_per_code = await intraday._load_symbol_map(code_set)
+        anchors = await intraday._load_official_anchors(ids_per_code)
+
+        out: dict[str, dict] = {}
+        for code in codes:
+            if code not in ids_per_code:
+                out[code] = self._fund_nav_error_entry(code, "fund symbol not found")
+                continue
+            anchor = anchors.get(code)
+            out[code] = {
+                "symbol": code,
+                "name": name_per_code.get(code, code),
+                "nav_official": anchor[0] if anchor else None,
+                "nav_official_date": str(anchor[1]) if anchor and anchor[1] else None,
+                "nav_estimate": anchor[0] if anchor else None,
+                "estimate_change_percent": None,
+                "estimate_method": "latest_official",
+                "coverage_percent": None,
+                "holdings_report_date": None,
+                "quote_status": "frozen",
+                "delayed_markets": [],
+                "holdings_stale": False,
+                "estimate_timestamp": now_iso,
+            }
+        return out
+
+    async def get_fund_nav_batch(self, tenant_id: str, symbols: list[str]) -> list[dict]:
+        """Batch intraday NAV lookup (§9.1): ≤50 symbols, de-duplicated and
+        normalized to 6-digit codes. rt-cache hit → live estimate; miss →
+        latest_official fallback and a lazy holdings-ingest hook for codes
+        without a snapshot; unknown codes → error entry (never a 404)."""
+        raw_to_code: list[tuple[str, str | None]] = []
+        ordered_codes: list[str] = []
+        seen: set[str] = set()
+        for raw in symbols:
+            raw_clean = str(raw or "").strip()
+            code = self._normalize_fund_code(raw_clean)
+            raw_to_code.append((raw_clean, code))
+            if code and code not in seen:
+                seen.add(code)
+                ordered_codes.append(code)
+
+        results_by_code: dict[str, dict] = {}
+        if ordered_codes:
+            for code in ordered_codes:
+                payload = await self._read_fund_nav_rt(code)
+                if payload is not None:
+                    results_by_code[code] = payload
+            missing = [code for code in ordered_codes if code not in results_by_code]
+            if missing:
+                results_by_code.update(await self._fund_nav_latest_official_entries(missing))
+                # Lazy holdings ingest (§5.1 case 3): fire-and-forget only for
+                # codes that truly lack a usable snapshot; the current request
+                # already got its lightweight answer.
+                try:
+                    from app.services.fund_holdings import FundHoldingsService, spawn_holdings_ingestion
+
+                    needing = await FundHoldingsService(db=self.db).codes_needing_ingestion(missing)
+                    for code in sorted(needing):
+                        spawn_holdings_ingestion(code)
+                except Exception as e:
+                    logger.debug(f"fund-nav batch: lazy ingest hook failed: {e}")
+
+        entries: list[dict] = []
+        emitted_invalid: set[str] = set()
+        for raw_clean, code in raw_to_code:
+            if code is None:
+                if raw_clean in emitted_invalid:
+                    continue
+                emitted_invalid.add(raw_clean)
+                entries.append(self._fund_nav_error_entry(raw_clean, "unrecognized fund code"))
+                continue
+            entries.append(results_by_code.get(code) or self._fund_nav_error_entry(code, "no data available"))
+        return entries
+
+    async def _quote_symbols_types(self, tenant_id: str, symbols: list[str]) -> dict[str, str]:
+        symbols = [s for s in symbols if s]
+        if not symbols:
+            return {}
+        stmt = select(FinanceSymbol.symbol, FinanceSymbol.type).where(
+            FinanceSymbol.tenant_id == tenant_id,
+            FinanceSymbol.symbol.in_(symbols),
+        )
+        result = await self.db.execute(stmt)
+        return {symbol: fund_type for symbol, fund_type in result.all()}
 
     async def update_official_nav(self, tenant_id: str) -> int:
         """Daily official NAV refresh (fund_nav_official_refresh job, 20:00
@@ -825,6 +995,22 @@ class FinanceService:
 
         await self._invalidate_watchlist_cache(tenant_id, user_id)
 
+        # Holdings-ingestion hook (fund-intraday-nav.md §5.1): adding a fund to
+        # the watchlist makes it part of the global followed union, so trigger a
+        # fire-and-forget f10 holdings fetch (budget-gated, failures only logged)
+        # and invalidate the followed-codes cache so the next estimate cycle picks
+        # the fund up. Never blocks or breaks the watchlist response.
+        if symbol_data is not None and symbol_data.type == "fund":
+            fund_code = self._normalize_fund_code(symbol_data.symbol)
+            if fund_code:
+                from app.services.fund_holdings import (
+                    invalidate_followed_codes_cache,
+                    spawn_holdings_ingestion,
+                )
+
+                await invalidate_followed_codes_cache()
+                spawn_holdings_ingestion(fund_code)
+
         return {
             "id": str(new_item.id),
             "symbol_id": str(new_item.symbol_id),
@@ -856,6 +1042,11 @@ class FinanceService:
         await self.db.commit()
 
         await self._invalidate_watchlist_cache(tenant_id, user_id)
+        # The followed-fund union may have shrunk; force a rebuild on next
+        # estimate-cycle read (fund-intraday-nav.md §5.2).
+        from app.services.fund_holdings import invalidate_followed_codes_cache
+
+        await invalidate_followed_codes_cache()
 
     async def reorder_watchlist(self, tenant_id: str, user_id: str, order_items: list[dict]) -> None:
         for order_item in order_items:
@@ -1004,6 +1195,20 @@ class FinanceService:
                     # Alert detection rides on the quote path: checked for every
                     # resolved quote, de-duplicated by the Redis cooldown marker.
                     await self._check_alert_threshold(tenant_id, item, quote)
+
+        # Fund rows carry the intraday NAV estimate when the worker loop has
+        # one in fund_nav_rt (fund-intraday-nav.md §9.1); non-fund rows keep
+        # fund_nav=None. The dicts here are fresh json.loads copies (quote
+        # cache / fetch path), so attaching the field never corrupts a cache.
+        symbol_types = await self._quote_symbols_types(tenant_id, [q.get("symbol") for q in quotes])
+        for quote in quotes:
+            symbol = quote.get("symbol")
+            fund_nav = None
+            if symbol and symbol_types.get(symbol) == "fund":
+                fund_code = self._normalize_fund_code(symbol)
+                if fund_code:
+                    fund_nav = await self._read_fund_nav_rt(fund_code)
+            quote["fund_nav"] = fund_nav
         return quotes
 
     def _is_market_open(self, market: str) -> bool:

@@ -94,6 +94,12 @@ async def lifespan(app: FastAPI):
         # §3.8.2). Same ownership rule as the market refresh jobs above.
         await scheduler_manager.add_fund_nav_job()
 
+        # Fund intraday NAV: the estimate loop (interval, gated on CN market
+        # open) and the daily holdings ingestion cron (fund-intraday-nav.md §7).
+        # Same ownership rule as the market refresh jobs above.
+        await scheduler_manager.add_fund_intraday_jobs()
+        await scheduler_manager.add_fund_holdings_job()
+
         # Daily finance_quotes partition roll: cron 00:30 UTC (database.md §3.1).
         # Same ownership rule as the market refresh jobs above.
         await scheduler_manager.add_quote_partition_job()

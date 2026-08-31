@@ -557,6 +557,8 @@ class TestWorkerModule:
                 mock_mgr.schedule_all_active_sources = AsyncMock()
                 mock_mgr.add_market_refresh_jobs = AsyncMock()
                 mock_mgr.add_fund_nav_job = AsyncMock()
+                mock_mgr.add_fund_intraday_jobs = AsyncMock()
+                mock_mgr.add_fund_holdings_job = AsyncMock()
                 mock_mgr.add_quote_partition_job = AsyncMock()
                 mock_session = AsyncMock()
                 mock_session.__aenter__ = AsyncMock(return_value=mock_session)
@@ -582,6 +584,10 @@ class TestWorkerModule:
                         mock_mgr.add_market_refresh_jobs.assert_awaited_once()
                         # ...and the daily official fund NAV refresh cron job.
                         mock_mgr.add_fund_nav_job.assert_awaited_once()
+                        # ...and the fund intraday NAV loop + daily holdings cron
+                        # (fund-intraday-nav.md §7).
+                        mock_mgr.add_fund_intraday_jobs.assert_awaited_once()
+                        mock_mgr.add_fund_holdings_job.assert_awaited_once()
                         # ...and the daily finance_quotes partition roll (database.md §3.1).
                         mock_mgr.add_quote_partition_job.assert_awaited_once()
 

@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -19,9 +20,41 @@ class QuoteHistoryPoint(BaseModel):
     close: float
 
 
+class FundNAVIntraday(BaseModel):
+    """Realtime intraday NAV estimate for one followed fund (fund-intraday-nav.md
+    §3.5). Shared verbatim by the SSE nav_batch_update payload and the REST
+    batch / watchlist-quotes endpoints."""
+
+    symbol: str  # normalized 6-digit fund code
+    name: str
+    nav_official: float | None = None  # anchoring official NAV
+    nav_official_date: str | None = None  # staleness of the anchor (§11)
+    nav_estimate: float | None = None  # intraday estimate (fall-back 2 → latest official)
+    # Estimated change vs. the official NAV anchor, in percent.
+    estimate_change_percent: float | None = None
+    estimate_method: Literal["holdings_weighted", "index_tracking", "latest_official"]
+    # Precision = sum of available holding weights (0-100); the accuracy badge.
+    coverage_percent: float | None = None
+    holdings_report_date: str | None = None
+    quote_status: Literal["realtime", "delayed", "mixed", "frozen"]
+    # e.g. ["HK","US"] → the UI renders a delayed-quote annotation.
+    delayed_markets: list[str] = Field(default_factory=list)
+    # Report period older than the freshness threshold (§4.3).
+    holdings_stale: bool = False
+    estimate_timestamp: str  # UTC ISO8601
+    # REST batch only (§9.1): per-code error marker so an unknown code degrades
+    # to an entry instead of failing the whole array. Absent/null on SSE payloads
+    # and on every resolvable code.
+    error: str | None = None
+
+
 class FinanceQuoteResponse(BaseModel):
     symbol: str
     name: str
+    # Intraday NAV estimate for fund entries (fund-intraday-nav.md §9.1): fed
+    # from the worker's fund_nav_rt cache on watchlist/quotes; always None for
+    # stocks/indices. Optional → backward compatible with older clients.
+    fund_nav: FundNAVIntraday | None = None
     current_price: float | None = None
     open: float | None = None
     high: float | None = None

@@ -125,6 +125,8 @@ class TestWorkerDisablesAdaptivePause:
                 mock_mgr.schedule_all_active_sources = AsyncMock()
                 mock_mgr.add_market_refresh_jobs = AsyncMock()
                 mock_mgr.add_fund_nav_job = AsyncMock()
+                mock_mgr.add_fund_intraday_jobs = AsyncMock()
+                mock_mgr.add_fund_holdings_job = AsyncMock()
                 mock_mgr.add_quote_partition_job = AsyncMock()
                 mock_session = AsyncMock()
                 mock_session.__aenter__ = AsyncMock(return_value=mock_session)

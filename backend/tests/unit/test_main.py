@@ -152,6 +152,8 @@ class TestLifespan:
                     mock_sched_mgr.schedule_all_active_sources = AsyncMock()
                     mock_sched_mgr.add_market_refresh_jobs = AsyncMock()
                     mock_sched_mgr.add_fund_nav_job = AsyncMock()
+                    mock_sched_mgr.add_fund_intraday_jobs = AsyncMock()
+                    mock_sched_mgr.add_fund_holdings_job = AsyncMock()
                     mock_sched_mgr.add_quote_partition_job = AsyncMock()
                     with patch("app.db.session.async_session_factory", return_value=mock_session):
                         async with main_mod.lifespan(_app):
@@ -161,6 +163,10 @@ class TestLifespan:
                             mock_sched_mgr.add_market_refresh_jobs.assert_awaited_once()
                             # daily official fund NAV refresh (cron 20:00 Asia/Shanghai)
                             mock_sched_mgr.add_fund_nav_job.assert_awaited_once()
+                            # fund intraday NAV estimate loop + daily holdings cron
+                            # (fund-intraday-nav.md §7)
+                            mock_sched_mgr.add_fund_intraday_jobs.assert_awaited_once()
+                            mock_sched_mgr.add_fund_holdings_job.assert_awaited_once()
                             # daily finance_quotes partition roll (cron 00:30 UTC,
                             # database.md §3.1)
                             mock_sched_mgr.add_quote_partition_job.assert_awaited_once()

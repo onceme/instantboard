@@ -18,6 +18,19 @@ here because the tables only exist after this migration — the tenancy RLS
 migration ran before them. Non-PostgreSQL dialects (SQLite dev/test) get the
 plain tables without RLS, matching the baseline/RLS migration behavior.
 
+Idempotency note (added after a staging incident): this revision is written
+with ``CREATE TABLE IF NOT EXISTS`` / ``CREATE INDEX IF NOT EXISTS`` /
+``ADD COLUMN IF NOT EXISTS`` so it converges from a partially-applied state.
+Observed staging history: an earlier ``alembic upgrade head`` failed and the
+entrypoint fell back to ``Base.metadata.create_all()``, which created the
+three new tables but never added the two ``fund_nav_estimates`` columns
+(create_all does not ALTER existing tables). With alembic_version still at
+7d9a46a0d5c9, re-running this revision then failed with "relation ... already
+exists" and the chain could not advance, so the columns were never added and
+the fund-NAV endpoints 500'd with UndefinedColumnError. The IF NOT EXISTS
+forms let this revision succeed whether or not the objects already exist, so
+the chain reaches head (and the follow-up repair revision e5a9c4f7b2d1).
+
 Revision ID: c3f2a8d1e9b4
 Revises: 7d9a46a0d5c9
 Create Date: 2026-08-31 22:00:00.000000
@@ -40,74 +53,113 @@ depends_on: str | Sequence[str] | None = None
 _NEW_TABLES = ("fund_holdings_snapshots", "fund_holdings_meta", "fund_index_bindings")
 
 
+def _column_exists(bind, table: str, column: str) -> bool:
+    """True when `column` already exists on `table` (dialect-aware)."""
+    if bind.dialect.name == "postgresql":
+        result = bind.execute(
+            sa.text("SELECT 1 FROM information_schema.columns WHERE table_name = :table AND column_name = :column"),
+            {"table": table, "column": column},
+        )
+        return result.first() is not None
+    # SQLite: consult pragma_table_info.
+    result = bind.execute(sa.text(f"PRAGMA table_info({table})"))
+    return any(row[1] == column for row in result)
+
+
 def upgrade() -> None:
-    op.create_table(
-        "fund_holdings_snapshots",
-        sa.Column("id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False),
-        sa.Column("tenant_id", sa.UUID(), nullable=False),
-        sa.Column("fund_code", sa.String(length=6), nullable=False),
-        sa.Column("symbol_id", sa.UUID(), nullable=True),
-        sa.Column("report_date", sa.DATE(), nullable=False),
-        sa.Column("stock_code", sa.String(length=20), nullable=False),
-        sa.Column("stock_name", sa.String(length=100), nullable=True),
-        sa.Column("market", sa.String(length=10), nullable=False),
-        sa.Column("secid", sa.String(length=30), nullable=True),
-        sa.Column("weight_percent", sa.Numeric(precision=8, scale=4), nullable=False),
-        sa.Column("shares_held", sa.Numeric(precision=20, scale=4), nullable=True),
-        sa.Column("fetched_at", sa.DateTime(timezone=True), nullable=False),
-        sa.ForeignKeyConstraint(["symbol_id"], ["finance_symbols.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["tenant_id"], ["tenants.id"], ondelete="CASCADE"),
-        sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("fund_code", "report_date", "stock_code", name="uq_fund_holdings_snapshot"),
-    )
-    op.create_index(
-        "idx_fund_holdings_snapshot_fund", "fund_holdings_snapshots", ["fund_code", "report_date"], unique=False
-    )
-
-    op.create_table(
-        "fund_holdings_meta",
-        sa.Column("id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False),
-        sa.Column("tenant_id", sa.UUID(), nullable=False),
-        sa.Column("fund_code", sa.String(length=6), nullable=False),
-        sa.Column("symbol_id", sa.UUID(), nullable=True),
-        sa.Column("latest_report_date", sa.DATE(), nullable=True),
-        sa.Column("top10_weight_sum", sa.Numeric(precision=8, scale=4), nullable=True),
-        sa.Column("holdings_count", sa.Integer(), nullable=True),
-        sa.Column("disclosure_status", sa.String(length=20), nullable=True),
-        sa.Column("last_fetched_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("last_error", sa.Text(), nullable=True),
-        sa.ForeignKeyConstraint(["symbol_id"], ["finance_symbols.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["tenant_id"], ["tenants.id"], ondelete="CASCADE"),
-        sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("fund_code", name="uq_fund_holdings_meta_fund_code"),
-    )
-    op.create_index("idx_fund_holdings_meta_code", "fund_holdings_meta", ["fund_code"], unique=False)
-
-    op.create_table(
-        "fund_index_bindings",
-        sa.Column("id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False),
-        sa.Column("tenant_id", sa.UUID(), nullable=False),
-        sa.Column("fund_code", sa.String(length=6), nullable=False),
-        sa.Column("index_symbol", sa.String(length=20), nullable=False),
-        sa.Column("tracking_ratio", sa.Numeric(precision=6, scale=4), server_default=sa.text("1.0"), nullable=False),
-        sa.Column("source", sa.String(length=20), server_default=sa.text("'seed'"), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("NOW()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("NOW()"), nullable=False),
-        sa.ForeignKeyConstraint(["tenant_id"], ["tenants.id"], ondelete="CASCADE"),
-        sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("fund_code", name="uq_fund_index_bindings_fund_code"),
-    )
-    op.create_index("idx_fund_index_bindings_code", "fund_index_bindings", ["fund_code"], unique=False)
-
-    op.add_column(
-        "fund_nav_estimates", sa.Column("holdings_coverage_percent", sa.Numeric(precision=8, scale=4), nullable=True)
-    )
-    op.add_column("fund_nav_estimates", sa.Column("holdings_report_date", sa.DATE(), nullable=True))
-
-    # RLS for the new tenant-scoped tables (see module docstring): identical
-    # ENABLE + FORCE + tenant_isolation policy as the other 8 tables. SQLite
-    # and other non-PostgreSQL dialects skip this, same as the RLS migration.
     bind = op.get_bind()
+
+    # --- 1. The three new tables (IF NOT EXISTS → converge from any state) ---
+    op.execute(
+        sa.text(
+            """
+            CREATE TABLE IF NOT EXISTS fund_holdings_snapshots (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+                fund_code VARCHAR(6) NOT NULL,
+                symbol_id UUID REFERENCES finance_symbols(id) ON DELETE CASCADE,
+                report_date DATE NOT NULL,
+                stock_code VARCHAR(20) NOT NULL,
+                stock_name VARCHAR(100),
+                market VARCHAR(10) NOT NULL,
+                secid VARCHAR(30),
+                weight_percent NUMERIC(8, 4) NOT NULL,
+                shares_held NUMERIC(20, 4),
+                fetched_at TIMESTAMP WITH TIME ZONE NOT NULL,
+                CONSTRAINT uq_fund_holdings_snapshot UNIQUE (fund_code, report_date, stock_code)
+            )
+            """
+        )
+    )
+    op.execute(
+        sa.text(
+            """
+            CREATE TABLE IF NOT EXISTS fund_holdings_meta (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+                fund_code VARCHAR(6) NOT NULL,
+                symbol_id UUID REFERENCES finance_symbols(id) ON DELETE CASCADE,
+                latest_report_date DATE,
+                top10_weight_sum NUMERIC(8, 4),
+                holdings_count INTEGER,
+                disclosure_status VARCHAR(20),
+                last_fetched_at TIMESTAMP WITH TIME ZONE,
+                last_error TEXT,
+                CONSTRAINT uq_fund_holdings_meta_fund_code UNIQUE (fund_code)
+            )
+            """
+        )
+    )
+    op.execute(
+        sa.text(
+            """
+            CREATE TABLE IF NOT EXISTS fund_index_bindings (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+                fund_code VARCHAR(6) NOT NULL,
+                index_symbol VARCHAR(20) NOT NULL,
+                tracking_ratio NUMERIC(6, 4) NOT NULL DEFAULT 1.0,
+                source VARCHAR(20) NOT NULL DEFAULT 'seed',
+                created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+                CONSTRAINT uq_fund_index_bindings_fund_code UNIQUE (fund_code)
+            )
+            """
+        )
+    )
+
+    # --- 2. Indexes (IF NOT EXISTS → no-op if present) ----------------------
+    op.execute(
+        sa.text(
+            "CREATE INDEX IF NOT EXISTS idx_fund_holdings_snapshot_fund "
+            "ON fund_holdings_snapshots (fund_code, report_date)"
+        )
+    )
+    op.execute(sa.text("CREATE INDEX IF NOT EXISTS idx_fund_holdings_meta_code ON fund_holdings_meta (fund_code)"))
+    op.execute(sa.text("CREATE INDEX IF NOT EXISTS idx_fund_index_bindings_code ON fund_index_bindings (fund_code)"))
+
+    # --- 3. fund_nav_estimates provenance columns ---------------------------
+    # PostgreSQL has native ADD COLUMN IF NOT EXISTS; SQLite has no IF NOT
+    # EXISTS clause for ADD COLUMN, so guard with an existence check first.
+    if bind.dialect.name == "postgresql":
+        op.execute(
+            sa.text("ALTER TABLE fund_nav_estimates ADD COLUMN IF NOT EXISTS holdings_coverage_percent NUMERIC(8, 4)")
+        )
+        op.execute(sa.text("ALTER TABLE fund_nav_estimates ADD COLUMN IF NOT EXISTS holdings_report_date DATE"))
+    else:
+        if not _column_exists(bind, "fund_nav_estimates", "holdings_coverage_percent"):
+            op.add_column(
+                "fund_nav_estimates",
+                sa.Column("holdings_coverage_percent", sa.Numeric(precision=8, scale=4), nullable=True),
+            )
+        if not _column_exists(bind, "fund_nav_estimates", "holdings_report_date"):
+            op.add_column("fund_nav_estimates", sa.Column("holdings_report_date", sa.DATE(), nullable=True))
+
+    # --- 4. RLS for the new tenant-scoped tables (idempotent) ---------------
+    # Identical ENABLE + FORCE + tenant_isolation policy as the other 8 tables.
+    # SQLite and other non-PostgreSQL dialects skip this, same as the RLS
+    # migration. rls_ddl_statements is safe to re-run (DROP POLICY IF EXISTS +
+    # CREATE POLICY, ENABLE/FORCE are idempotent).
     if bind.dialect.name == "postgresql":
         for table in _NEW_TABLES:
             for statement in rls_ddl_statements(table):

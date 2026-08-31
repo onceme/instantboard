@@ -30,6 +30,9 @@ export enum SSEEventType {
   MARKET_INDEX_UPDATE = "market_index_update",
   COMMODITY_UPDATE = "commodity_update",
   NAV_ESTIMATE_UPDATE = "nav_estimate_update",
+  // Intraday NAV batch: full array of FundNAVIntraday filtered per tenant,
+  // pushed while the CN market is open (fund-intraday-nav.md §8).
+  NAV_BATCH_UPDATE = "nav_batch_update",
   ALERT_UPDATE = "alert_update",
   ITEM_UPDATE = "item_update",
   TOPIC_STATS_UPDATE = "topic_stats_update",
@@ -159,6 +162,31 @@ export interface FundNAV {
   };
 }
 
+// Intraday NAV estimate (fund-intraday-nav.md §3.5): shared by the SSE
+// nav_batch_update payload, GET /finance/fund-nav/batch, and the fund_nav
+// field attached to fund rows on GET /finance/watchlist/quotes.
+export interface FundNAVIntraday {
+  symbol: string;
+  name: string;
+  nav_official: number | null;
+  nav_official_date: string | null;
+  nav_estimate: number | null;
+  estimate_change_percent: number | null;
+  estimate_method: "holdings_weighted" | "index_tracking" | "latest_official";
+  // Precision = sum of available holding weights (0-100) → the accuracy badge.
+  coverage_percent: number | null;
+  holdings_report_date: string | null;
+  quote_status: "realtime" | "delayed" | "mixed" | "frozen";
+  // e.g. ["HK","US"] → renders "延迟·HK/US" on the row.
+  delayed_markets: string[];
+  // Report period older than the freshness threshold → warning icon.
+  holdings_stale: boolean;
+  estimate_timestamp: string;
+  // REST batch only: unknown/degenerate codes carry an error instead of the
+  // whole request failing. Absent on resolvable entries and SSE payloads.
+  error?: string | null;
+}
+
 export interface WatchlistItem {
   id: string;
   symbol: string;
@@ -176,6 +204,10 @@ export interface WatchlistQuote {
   change_percent: number;
   volume?: number;
   timestamp: string;
+  // Intraday NAV estimate attached to fund entries only (backend adds it from
+  // the fund_nav_rt cache on watchlist/quotes, fund-intraday-nav.md §9.1);
+  // null/absent for stocks and indices.
+  fund_nav?: FundNAVIntraday | null;
 }
 
 // SSE payload of "alert_update" (finance channel): fired by the backend when a

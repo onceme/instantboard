@@ -14,9 +14,31 @@ import {
 } from "lucide-vue-next";
 import EmptyState from "@/components/common/EmptyState.vue";
 import ErrorAlert from "@/components/common/ErrorAlert.vue";
-import type { WatchlistItem } from "@/types";
+import type { FundNAVIntraday, WatchlistItem, WatchlistQuote } from "@/types";
 
 const financeStore = useFinanceStore();
+
+// Intraday NAV estimate for a row (fund-intraday-nav.md §9.2): the store's
+// navEstimates (SSE-fed) wins; the quote's fund_nav snapshot seeds rows until
+// the first batch arrives. null → stock/index row (no estimate cell rendered).
+function fundNavFor(item: {
+  symbol: string;
+  quote?: WatchlistQuote;
+}): FundNAVIntraday | null {
+  return financeStore.navEstimates[item.symbol] ?? item.quote?.fund_nav ?? null;
+}
+
+// Tooltip texts for the estimate badges (accuracy definition, unknown-position
+// assumption and disclaimer / delayed-quote magnitude / stale disclosure).
+const COVERAGE_BADGE_TOOLTIP =
+  "精度口径：可得持仓权重之和占净值比例。基金未披露的仓位按盘中不变假设处理，精度越低估值偏差可能越大。估值仅供参考，不构成投资建议";
+function delayedBadgeTooltip(markets: string[]): string {
+  return `含延迟行情成分（港股免费源延迟约15~25分钟、美股约15分钟，涉及市场：${markets.join(
+    "/",
+  )}），估值基于延迟行情计算`;
+}
+const STALE_BADGE_TOOLTIP =
+  "该基金持仓披露报告期已超过新鲜度阈值，估值基于较旧持仓，可能与实际组合存在偏差";
 
 // Inline alert-threshold editor state (one editor open at a time).
 // Mirror the backend 0.5-50 range client-side for immediate feedback; the
@@ -329,6 +351,37 @@ async function retryWatchlist() {
             <span class="item-name text-truncate">{{
               item.name || item.symbol
             }}</span>
+            <!-- Intraday NAV badges (fund rows only, fund-intraday-nav.md §9.2) -->
+            <span
+              v-if="fundNavFor(item)?.coverage_percent != null"
+              class="fund-badge fund-badge-coverage"
+              :title="COVERAGE_BADGE_TOOLTIP"
+            >
+              精度 {{ fundNavFor(item)!.coverage_percent!.toFixed(1) }}%
+            </span>
+            <span
+              v-if="
+                fundNavFor(item) &&
+                (fundNavFor(item)!.delayed_markets.length > 0 ||
+                  fundNavFor(item)!.quote_status === 'delayed' ||
+                  fundNavFor(item)!.quote_status === 'mixed')
+              "
+              class="fund-badge fund-badge-delayed"
+              :title="delayedBadgeTooltip(fundNavFor(item)!.delayed_markets)"
+            >
+              延迟·{{
+                fundNavFor(item)!.delayed_markets.length > 0
+                  ? fundNavFor(item)!.delayed_markets.join("/")
+                  : "行情"
+              }}
+            </span>
+            <span
+              v-if="fundNavFor(item)?.holdings_stale"
+              class="fund-badge fund-badge-stale"
+              :title="STALE_BADGE_TOOLTIP"
+            >
+              ⚠
+            </span>
           </div>
           <div v-if="item.quote" class="item-price">
             {{ formatCurrency(item.quote.current_price) }}
@@ -343,6 +396,28 @@ async function retryWatchlist() {
           </div>
           <div v-if="!item.quote" class="item-price">--</div>
           <div v-if="!item.quote" class="item-change">--</div>
+          <!-- Intraday estimate column (fund rows only): estimate NAV +
+               estimated change vs. official NAV. Hidden below 768px. -->
+          <div v-if="fundNavFor(item)" class="item-nav">
+            <span class="nav-value">{{
+              fundNavFor(item)!.nav_estimate != null
+                ? formatCurrency(fundNavFor(item)!.nav_estimate, "CNY")
+                : "--"
+            }}</span>
+            <span
+              :class="
+                fundNavFor(item)!.estimate_change_percent != null
+                  ? changeClass(fundNavFor(item)!.estimate_change_percent)
+                  : 'change-neutral'
+              "
+            >
+              {{
+                fundNavFor(item)!.estimate_change_percent != null
+                  ? formatPercent(fundNavFor(item)!.estimate_change_percent)
+                  : "--"
+              }}
+            </span>
+          </div>
           <div class="row-move">
             <button
               class="move-btn"
@@ -556,6 +631,58 @@ async function retryWatchlist() {
   min-width: 120px;
 }
 
+/* Intraday NAV estimate column (fund rows, fund-intraday-nav.md §9.2) */
+.item-nav {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0;
+  font-size: 12px;
+  font-weight: 500;
+  text-align: right;
+  min-width: 84px;
+}
+
+.item-nav .nav-value {
+  color: var(--text-primary);
+}
+
+/* Fund estimate badges: accuracy / delayed quote / stale disclosure */
+.fund-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  margin-left: 4px;
+  font-size: 10px;
+  line-height: 16px;
+  border-radius: var(--radius-sm, 4px);
+  white-space: nowrap;
+  cursor: help;
+  user-select: none;
+}
+
+.fund-badge-coverage {
+  color: var(--accent);
+  background-color: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.fund-badge-delayed {
+  color: var(--text-secondary);
+  background-color: var(--bg-hover);
+  border: 1px solid var(--border-color);
+}
+
+.fund-badge-stale {
+  color: var(--warning, #f59e0b);
+  background-color: color-mix(
+    in srgb,
+    var(--warning, #f59e0b) 12%,
+    transparent
+  );
+  border: 1px solid color-mix(in srgb, var(--warning, #f59e0b) 35%, transparent);
+}
+
 .remove-btn {
   width: 24px;
   height: 24px;
@@ -723,6 +850,16 @@ async function retryWatchlist() {
     align-items: flex-end;
     gap: 0;
     min-width: 72px;
+  }
+
+  /* Row width budget: hide the estimate column and badges on small screens
+     (price/change stay; the estimate surfaces via SSE as soon as it exists). */
+  .item-nav {
+    display: none;
+  }
+
+  .fund-badge {
+    display: none;
   }
 }
 </style>

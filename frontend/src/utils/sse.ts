@@ -89,6 +89,7 @@ export class SSEConnection {
       SSEEventType.MARKET_INDEX_UPDATE,
       SSEEventType.COMMODITY_UPDATE,
       SSEEventType.NAV_ESTIMATE_UPDATE,
+      SSEEventType.NAV_BATCH_UPDATE,
       SSEEventType.ALERT_UPDATE,
       SSEEventType.ITEM_UPDATE,
       SSEEventType.TOPIC_STATS_UPDATE,

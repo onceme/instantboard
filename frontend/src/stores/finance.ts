@@ -6,6 +6,7 @@ import type {
   MarketIndex,
   Commodity,
   FundNAV,
+  FundNAVIntraday,
   WatchlistItem,
   WatchlistQuote,
   SearchResult,
@@ -30,6 +31,12 @@ export const useFinanceStore = defineStore("finance", () => {
   const searchResults = ref<SearchResult[]>([]);
   const quotesCache = ref<Map<string, FinanceQuote>>(new Map());
   const navData = ref<Map<string, FundNAV>>(new Map());
+  // Intraday NAV estimates keyed by normalized 6-digit fund code
+  // (fund-intraday-nav.md §9): seeded from watchlist/quotes fund_nav fields,
+  // refreshed whole-array via SSE nav_batch_update, and fetchable on demand
+  // through GET /finance/fund-nav/batch. This is the single source of truth
+  // for the Watchlist estimate column and the FundNAV panel.
+  const navEstimates = ref<Record<string, FundNAVIntraday>>({});
   // Watchlist price alerts received via SSE alert_update, newest first
   // (finance-tab.md §3.2); capped at ALERT_HISTORY_LIMIT entries.
   const alerts = ref<FinanceAlert[]>([]);
@@ -109,9 +116,28 @@ export const useFinanceStore = defineStore("finance", () => {
   }
 
   async function getFundNAV(symbol: string) {
-    const response = await apiGet<FundNAV>(`/finance/fund/${symbol}/nav`);
-    navData.value.set(symbol, response.data);
-    return response.data;
+    // Routed through the intraday batch endpoint (§9.1): fresh fund_nav_rt
+    // values win server-side, misses degrade to latest_official, and missing
+    // holdings trigger the lazy ingest hook — one code path for all funds.
+    await fetchFundNAVBatch([symbol]);
+    return navEstimates.value[symbol] ?? null;
+  }
+
+  // On-demand batch load (GET /finance/fund-nav/batch); entries carrying an
+  // error marker are skipped so unknown codes never pollute the store.
+  async function fetchFundNAVBatch(symbols: string[]) {
+    const unique = [...new Set(symbols.filter(Boolean))];
+    if (unique.length === 0) return;
+    const response = await apiGet<FundNAVIntraday[]>(
+      "/finance/fund-nav/batch",
+      { symbols: unique.join(",") },
+    );
+    const next = { ...navEstimates.value };
+    for (const entry of response.data ?? []) {
+      if (!entry || entry.error) continue;
+      next[entry.symbol] = entry;
+    }
+    navEstimates.value = next;
   }
 
   async function fetchWatchlist() {
@@ -124,10 +150,17 @@ export const useFinanceStore = defineStore("finance", () => {
         "/finance/watchlist/quotes",
       );
       const quotesMap = new Map<string, WatchlistQuote>();
+      const estimateSeeds: Record<string, FundNAVIntraday> = {};
       for (const q of quotesResponse.data) {
         quotesMap.set(q.symbol, q);
+        // Fund rows carry the intraday estimate snapshot (REST path; SSE
+        // nav_batch_update keeps them fresh afterwards, §9.1).
+        if (q.fund_nav && !q.fund_nav.error) {
+          estimateSeeds[q.symbol] = q.fund_nav;
+        }
       }
       watchlistQuotes.value = quotesMap;
+      navEstimates.value = { ...navEstimates.value, ...estimateSeeds };
       watchlistLoaded.value = true;
     } catch (err) {
       watchlistLoaded.value = false;
@@ -296,6 +329,21 @@ export const useFinanceStore = defineStore("finance", () => {
     navData.value.set(data.symbol, data);
   }
 
+  // SSE nav_batch_update (fund-intraday-nav.md §8): the payload is the whole
+  // tenant-filtered estimate array — merge each entry wholesale by symbol
+  // (no field-level merging; each item is a complete state snapshot).
+  function updateNAVBatchFromSSE(data: FundNAVIntraday | FundNAVIntraday[]) {
+    const items = Array.isArray(data) ? data : [data];
+    if (items.length === 0) return;
+    const next = { ...navEstimates.value };
+    for (const item of items) {
+      if (item && item.symbol) {
+        next[item.symbol] = item;
+      }
+    }
+    navEstimates.value = next;
+  }
+
   // alert_update payload: push to the front (newest first), cap the history,
   // and mirror the alert to a browser Notification when the tab is hidden.
   function updateAlertFromSSE(data: FinanceAlert) {
@@ -356,6 +404,8 @@ export const useFinanceStore = defineStore("finance", () => {
           updateCommodityFromSSE(data as never),
         [SSEEventType.NAV_ESTIMATE_UPDATE]: (data) =>
           updateNAVFromSSE(data as never),
+        [SSEEventType.NAV_BATCH_UPDATE]: (data) =>
+          updateNAVBatchFromSSE(data as never),
         [SSEEventType.ALERT_UPDATE]: (data) =>
           updateAlertFromSSE(data as never),
       },
@@ -392,6 +442,7 @@ export const useFinanceStore = defineStore("finance", () => {
     searchResults,
     quotesCache,
     navData,
+    navEstimates,
     alerts,
     currentPanel,
     searchQuery,
@@ -413,6 +464,8 @@ export const useFinanceStore = defineStore("finance", () => {
     removeFromWatchlist,
     reorderWatchlist,
     updateWatchlistAlert,
+    fetchFundNAVBatch,
+    updateNAVBatchFromSSE,
     updateMarketIndexFromSSE,
     updateCommodityFromSSE,
     updateAlertFromSSE,

@@ -2,13 +2,22 @@
 import { useFinanceStore } from "@/stores/finance";
 import { formatCurrency, formatPercent, getChangeClass } from "@/utils/format";
 import { computed, ref } from "vue";
-import type { FundNAV } from "@/types";
+import type { FundNAVIntraday } from "@/types";
 import { Search } from "lucide-vue-next";
 
 const financeStore = useFinanceStore();
 const searchQuery = ref("");
-const searchResults = ref<FundNAV[]>([]);
-const selectedFund = ref<FundNAV | null>(null);
+// Search hits are identified by symbol/name; the estimate itself lives in the
+// store's navEstimates (single source of truth, SSE-refreshed, §9.2).
+const searchResults = ref<Array<{ symbol: string; name: string }>>([]);
+const selectedSymbol = ref<string | null>(null);
+// Reactive selected estimate: SSE nav_batch_update merges keep this view
+// fresh without re-fetching (replaces the old snapshot-on-select logic).
+const selectedFund = computed<FundNAVIntraday | null>(() =>
+  selectedSymbol.value
+    ? (financeStore.navEstimates[selectedSymbol.value] ?? null)
+    : null,
+);
 const isSearching = ref(false);
 
 async function searchFunds() {
@@ -22,24 +31,26 @@ async function searchFunds() {
     const fundResults = financeStore.searchResults.filter(
       (r) => r.type === "fund",
     );
-    searchResults.value = [];
-    for (const r of fundResults) {
-      const navData = await financeStore.getFundNAV(r.symbol);
-      searchResults.value.push(navData);
-    }
+    // One batch load seeds the estimates for every hit (rt cache wins,
+    // misses degrade to latest_official server-side).
+    await financeStore.fetchFundNAVBatch(fundResults.map((r) => r.symbol));
+    searchResults.value = fundResults.map((r) => ({
+      symbol: r.symbol,
+      name: r.name,
+    }));
   } finally {
     isSearching.value = false;
   }
 }
 
-function selectFund(fund: FundNAV) {
-  selectedFund.value = fund;
+function selectFund(fund: { symbol: string }) {
+  selectedSymbol.value = fund.symbol;
   searchResults.value = [];
   searchQuery.value = "";
 }
 
 function clearSelection() {
-  selectedFund.value = null;
+  selectedSymbol.value = null;
 }
 
 let timer: ReturnType<typeof setTimeout> | null = null;
@@ -49,13 +60,33 @@ function onInput() {
   timer = setTimeout(searchFunds, 300);
 }
 
-const deviationClass = computed(() => {
-  if (!selectedFund.value?.nav_estimate_deviation_percent) return "";
-  const cls = getChangeClass(selectedFund.value.nav_estimate_deviation_percent);
+const changeClass = computed(() => {
+  const change = selectedFund.value?.estimate_change_percent;
+  if (change == null) return "";
+  const cls = getChangeClass(change);
   if (cls === "up") return "change-up";
   if (cls === "down") return "change-down";
   return "change-neutral";
 });
+
+const METHOD_LABELS: Record<FundNAVIntraday["estimate_method"], string> = {
+  holdings_weighted: "持仓加权",
+  index_tracking: "指数外推",
+  latest_official: "官方净值",
+};
+
+const QUOTE_STATUS_LABELS: Record<FundNAVIntraday["quote_status"], string> = {
+  realtime: "实时行情",
+  delayed: "延迟行情",
+  mixed: "实时+延迟混合行情",
+  frozen: "净值停更（非交易时段/无数据）",
+};
+
+function delayedMarketsText(fund: FundNAVIntraday): string {
+  return fund.delayed_markets.length > 0
+    ? `（${fund.delayed_markets.join("/")} 延迟）`
+    : "";
+}
 </script>
 
 <template>
@@ -89,6 +120,13 @@ const deviationClass = computed(() => {
       <div class="nav-header">
         <span class="fund-symbol">{{ selectedFund.symbol }}</span>
         <span class="fund-name">{{ selectedFund.name }}</span>
+        <span
+          v-if="selectedFund.coverage_percent != null"
+          class="nav-coverage-badge"
+          title="精度口径：可得持仓权重之和占净值比例。未披露仓位按盘中不变假设，精度越低偏差可能越大"
+        >
+          精度 {{ selectedFund.coverage_percent.toFixed(1) }}%
+        </span>
         <button class="close-btn" @click="clearSelection">×</button>
       </div>
 
@@ -96,43 +134,61 @@ const deviationClass = computed(() => {
         <div class="nav-row">
           <span class="nav-label">官方NAV</span>
           <span class="nav-official">{{
-            formatCurrency(selectedFund.nav_official, "CNY")
+            selectedFund.nav_official != null
+              ? formatCurrency(selectedFund.nav_official, "CNY")
+              : "--"
           }}</span>
-          <span class="nav-date">{{ selectedFund.nav_official_date }}</span>
+          <span class="nav-date">{{
+            selectedFund.nav_official_date
+              ? `基于 ${selectedFund.nav_official_date} 净值`
+              : "官方净值待更新"
+          }}</span>
         </div>
 
-        <div v-if="selectedFund.nav_estimate" class="nav-row">
+        <div class="nav-row">
           <span class="nav-label">估值NAV</span>
           <span class="nav-estimate">{{
-            formatCurrency(selectedFund.nav_estimate, "CNY")
+            selectedFund.nav_estimate != null
+              ? formatCurrency(selectedFund.nav_estimate, "CNY")
+              : "--"
           }}</span>
-        </div>
-
-        <div v-if="selectedFund.nav_estimate_deviation_percent" class="nav-row">
-          <span class="nav-label">估值偏差</span>
-          <span :class="deviationClass" class="nav-deviation">
-            {{ formatPercent(selectedFund.nav_estimate_deviation_percent) }}
+          <span
+            v-if="selectedFund.estimate_change_percent != null"
+            :class="changeClass"
+            class="nav-deviation"
+          >
+            {{ formatPercent(selectedFund.estimate_change_percent) }}
           </span>
         </div>
 
-        <div v-if="selectedFund.underlying_index" class="nav-row">
-          <span class="nav-label">跟踪指数</span>
-          <span class="index-info">
-            {{ selectedFund.underlying_index.name }}
-            {{ formatPercent(selectedFund.underlying_index.change_percent) }}
-          </span>
-        </div>
-
-        <div v-if="selectedFund.estimate_method" class="nav-row">
+        <div class="nav-row">
           <span class="nav-label">估值方法</span>
           <span class="estimate-method">{{
-            selectedFund.estimate_method === "index_tracking"
-              ? "指数跟踪法"
-              : selectedFund.estimate_method
+            METHOD_LABELS[selectedFund.estimate_method]
           }}</span>
         </div>
 
-        <div class="nav-disclaimer">估值仅供参考，不构成投资建议</div>
+        <div class="nav-row">
+          <span class="nav-label">行情状态</span>
+          <span class="quote-status">
+            {{ QUOTE_STATUS_LABELS[selectedFund.quote_status]
+            }}{{ delayedMarketsText(selectedFund) }}
+          </span>
+        </div>
+
+        <div v-if="selectedFund.holdings_report_date" class="nav-row">
+          <span class="nav-label">持仓报告期</span>
+          <span class="report-date">
+            {{ selectedFund.holdings_report_date }}
+            <span v-if="selectedFund.holdings_stale" class="report-stale">
+              （披露较旧，估值偏差可能较大）
+            </span>
+          </span>
+        </div>
+
+        <div class="nav-disclaimer">
+          估值仅供参考，不构成投资建议。未披露仓位按盘中不变假设处理。
+        </div>
       </div>
     </div>
 
@@ -301,6 +357,31 @@ const deviationClass = computed(() => {
 .estimate-method {
   font-size: 13px;
   color: var(--text-secondary);
+}
+
+.nav-coverage-badge {
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+  background-color: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  cursor: help;
+  user-select: none;
+}
+
+.quote-status {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.report-date {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.report-stale {
+  color: var(--warning);
 }
 
 .nav-disclaimer {

@@ -673,8 +673,14 @@ def test_run_collection_writes_on_rls_enabled_database(rls_db, monkeypatch) -> N
 
 
 # Defined last: the downgrade tears down the RLS setup asserted above.
+# Downgrades all the way to base (every migration's downgrade() in reverse):
+# "-1" used to suffice while the tenancy RLS migration was the head, but once
+# later migrations contribute their own RLS enablements (e.g. the fund intraday
+# NAV tables in c3f2a8d1e9b4), a single step would leave the core tables'
+# policies behind. Tearing down to base exercises every downgrade() and must
+# leave zero tenant_isolation policies and zero RLS flags.
 def test_downgrade_removes_rls(rls_db) -> None:
-    command.downgrade(rls_db["cfg"], "-1")
+    command.downgrade(rls_db["cfg"], "base")
 
     async def _run() -> None:
         engine = create_async_engine(rls_db["url"], poolclass=NullPool)

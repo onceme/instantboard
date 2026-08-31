@@ -227,6 +227,21 @@ cross_refs: [architecture.md, api.md, database.md, data-flow.md, finance-tab.md,
 
 支持的 `data_type` 值: `stock_quote`（`/stock/{symbol}/quote`，字段映射与 Finnhub/yfinance 行情条目格式一致；`changePercent` 为小数需 ×100）、`search`（`/search/{q}`）
 
+#### 3.2.7 盘中估值行情上游（腾讯 / 新浪 / 东财镜像）
+
+基金盘中估值（[fund-intraday-nav.md](fund-intraday-nav.md)）的成分股批量行情**不注册为 `sources` 采集器、不进 `COLLECTOR_REGISTRY`**，而是服务层直连（`app/services/quote_batch.py` + `app/services/upstream_budget.py`），全部约束以代码注册表 `UPSTREAM_REGISTRY` 为事实源（本节为其文档镜像，2026-08-31 实测）：
+
+| 上游 | 端点 | 必需请求头 | 批量上限 | 时效 | 请求预算（max_rpm / burst） | 备注 |
+|------|------|-----------|---------|------|------------------------------|------|
+| 腾讯行情 `tencent_qt` | `https://qt.gtimg.cn/q={syms}` | UA 即可 | 500 码 | A 股秒级；港股 ~15min 延迟；美股 ~15min 延迟 | 120 / 6（`QUOTE_TENCENT_MAX_RPM`） | GBK 响应，字段 32 为涨跌幅%；200码×10轮 @3s 零限流 |
+| 新浪行情 `sina_hq` | `https://hq.sinajs.cn/list={syms}` | **Referer: `https://finance.sina.com.cn`**（缺失 403） | 400 码 | A 股秒级；港股 25min+ 延迟 | 60 / 4（`QUOTE_SINA_MAX_RPM`） | GBK 响应，涨跌幅需自算 (现价−昨收)/昨收 |
+| 东财 push2 镜像 `em_push2_delay` | `https://push2delay.eastmoney.com/api/qt/ulist.np/get` | 无 | 200 码 | 延迟行情 | 40 / 4（`QUOTE_EM_DELAY_MAX_RPM`） | 仅港股链备选；200码×10轮 @3s 零限流 |
+| 东财 push2 镜像 `em_push2_m1` | `https://1.push2.eastmoney.com/…` 同上 | 无 | 200 码 | 同主域 | 15 / 2 | 港股链末位备选 |
+| 东财 push2 主域 `em_push2` | `https://push2.eastmoney.com/…` | 无 | 200 码 | A 股 ≤3s；唯一近实时港股 | 6 / 1 | ⚠️ **默认禁用**（`QUOTE_EASTMONEY_MAIN_ENABLED=false`）：实测主域约 8 次请求后断连封禁数分钟，封禁可能波及东财域族（含持仓接口 `fundf10`）；IP 安全 > 港股时效（红线开关，见 fund-intraday-nav.md §6.3） |
+| 东财持仓 `em_f10_holdings` | `https://fundf10.eastmoney.com/FundArchivesDatas.aspx?type=jjcc` | **Referer 必需** | 1 码 | 披露数据 | 8 / 1（`QUOTE_EM_F10_MAX_RPM`） | 持仓摄取（§3.2.3 东财域族 ≤10 次/分软限制的本地收紧） |
+
+全局安全系数 `QUOTE_UPSTREAM_SAFETY_FACTOR`（默认 0.8）作用于所有上游预算；治理器提供分钟预算键 + 熔断键（403/429/5xx/断连 → 60s×2^(n−2) 冷却上限 1800s，成功减半恢复），首选源预算剩余 <20% 时**提前**切换到组内余量最多的备源（fund-intraday-nav.md §6.2）。
+
 ### 3.3 科技数据源详细列表
 
 #### 3.3.1 机器人领域 (5个数据源)
@@ -390,9 +405,20 @@ commodities:
     [yfinance]   # 默认单源
 ```
 
-> **fund_nav 说明**：无 `fund_nav` 专属链（落入默认 `[yfinance]`）；且 `get_fund_nav` 本身仅读取库中已有 NAV 估算数据，**不走 failover、不做在线采集**（官方 NAV 抓取整体未实现，见 §3.2.5）。
+> **fund_nav 说明**：无 `fund_nav` 专属 `_get_failover_chain` 链（落入默认 `[yfinance]`）。官方净值抓取由 `fund_nav_official_refresh` + `TiantianFundCollector`（§3.2.5）承担；盘中估值另有专属行情链，见下方「盘中估值行情链」。
 >
 > 科技源不配置 failover 链（见 §3.5.3）。
+
+**盘中估值行情链（✅ 已实现）**：基金盘中估值的成分股行情链硬编码于 `app/services/upstream_budget.py::QUOTE_CHAINS`（链序 + 提前切换治理见 §3.2.7 与 fund-intraday-nav.md §6.2/§6.3），按成分股市场分组，缺失码沿链增量补拉：
+
+```
+cn_quote (A股成分):   [tencent_qt, sina_hq]
+hk_quote (港股成分):  [tencent_qt, sina_hq, em_push2_delay]
+                      (+ em_push2_m1; + em_push2 主域仅当
+                        QUOTE_EASTMONEY_MAIN_ENABLED=true, 默认禁入)
+us_quote (美股成分):  [tencent_qt, sina_hq]
+fund_holdings:        [em_f10_holdings]   # 单源, 无等价替代
+```
 
 **采集器解析机制**（`app/collectors/__init__.py::resolve_collector`）：
 

@@ -286,15 +286,67 @@ CREATE TABLE fund_nav_estimates (
     nav_official_date   DATE,                      -- 官方NAV日期
     nav_estimate        DECIMAL(18,4),             -- 实时估值 (get_fund_nav 估值成功后回写)
     nav_estimate_deviation_percent DECIMAL(8,4),   -- 估值偏差百分比
-    estimate_method     VARCHAR(50),                -- 行类型/估值方法: 'official'(每日官方净值行) / 'index_tracking'(实时估值行, 按 基金+官方净值日期 upsert)
+    estimate_method     VARCHAR(50),                -- 行类型/估值方法: 'official'(每日官方净值行) / 'index_tracking'(实时估值行) / 'holdings_weighted'(盘中持仓加权行, 均按 基金+官方净值日期 upsert)
     estimate_timestamp  TIMESTAMPTZ NOT NULL,
     underlying_index_symbol VARCHAR(20),            -- 跟踪指数代码
     underlying_index_value  DECIMAL(18,4),          -- 指数当前值
     underlying_index_change_percent DECIMAL(8,4),   -- 指数涨跌幅
+    holdings_coverage_percent DECIMAL(8,4),         -- 持仓加权估值精度 = 可得持仓权重之和 (仅 holdings_weighted 行, fund-intraday-nav.md §3.4)
+    holdings_report_date DATE,                      -- 估值所用持仓报告期 (仅 holdings_weighted 行)
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX idx_fund_nav_symbol ON fund_nav_estimates(symbol_id, estimate_timestamp DESC);
+
+-- ============================================
+-- 基金盘中估值三表 (fund-intraday-nav.md §3)
+-- 租户归属: 均为 system 租户 (SYSTEM_TENANT_ID) 写入与托管——持仓是跨租户
+-- 共享的市场客观事实, 关注并集本就全局计算一次; 租户隔离保留在自选关系层
+-- (watchlist_items)。三表均启用 RLS (tenant_isolation 策略), 由迁移
+-- c3f2a8d1e9b4_fund_intraday_nav 建表后施加。
+-- ============================================
+
+CREATE TABLE fund_holdings_snapshots (           -- 基金最新披露前 N 大持仓快照
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id        UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,   -- 恒为 system 租户
+    fund_code        VARCHAR(6) NOT NULL,          -- 规范化 6 位基金代码
+    symbol_id        UUID REFERENCES finance_symbols(id) ON DELETE CASCADE,    -- 可空; 级联清理
+    report_date      DATE NOT NULL,                -- 持仓报告期
+    stock_code       VARCHAR(20) NOT NULL,         -- 成分股代码 (600519/000858/00700/AAPL)
+    stock_name       VARCHAR(100),
+    market           VARCHAR(10) NOT NULL,         -- CN / HK / US
+    secid            VARCHAR(30),                  -- 东财行情 secid (持仓页链接解析, 缺失为 NULL)
+    weight_percent   DECIMAL(8,4) NOT NULL,        -- 占净值比 (%)
+    shares_held      DECIMAL(20,4),                -- 持股数 (参考)
+    fetched_at       TIMESTAMPTZ NOT NULL,
+    UNIQUE (fund_code, report_date, stock_code)
+);
+
+CREATE INDEX idx_fund_holdings_snapshot_fund ON fund_holdings_snapshots(fund_code, report_date);
+
+CREATE TABLE fund_holdings_meta (                -- 持仓摄取/披露状态 (每基金一行)
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id        UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,   -- 恒为 system 租户
+    fund_code        VARCHAR(6) NOT NULL UNIQUE,
+    symbol_id        UUID REFERENCES finance_symbols(id) ON DELETE CASCADE,
+    latest_report_date DATE,                       -- 最新摄取的报告期
+    top10_weight_sum DECIMAL(8,4),                 -- 最新一期权重和 (精度/coverage 分子)
+    holdings_count   INTEGER,
+    disclosure_status VARCHAR(20),                 -- ok / stale(报告期>新鲜度阈值) / anomalous(>730天或零持仓)
+    last_fetched_at  TIMESTAMPTZ,
+    last_error       TEXT
+);
+
+CREATE TABLE fund_index_bindings (               -- 基金→跟踪指数绑定 (事实源, 修复绑定断头路)
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id        UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,   -- 恒为 system 租户
+    fund_code        VARCHAR(6) NOT NULL UNIQUE,
+    index_symbol     VARCHAR(20) NOT NULL,         -- 如 000300.SS (finance_symbols 符号风格)
+    tracking_ratio   DECIMAL(6,4) NOT NULL DEFAULT 1.0,  -- 指数外推比率 (替代原硬编码 1.0)
+    source           VARCHAR(20) NOT NULL DEFAULT 'seed', -- seed / admin
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
 -- ============================================
 -- 自选关注列表
@@ -367,6 +419,13 @@ CREATE INDEX idx_dashboard_snapshots_time ON dashboard_snapshots(tenant_id, time
 | **市场指数缓存** | `t:{tenant_id}:market_indices` | String (JSON) | 60s | 所有市场指数汇总 |
 | **大宗商品缓存** | `t:{tenant_id}:commodities` | String (JSON) | 60s | 黄金、原油等 |
 | **基金NAV缓存** | `t:{tenant_id}:nav:{symbol}` | String (JSON) | 120s | 估值数据 |
+| **基金盘中估值（实时）** | `fund_nav_rt:{fund_code}` | String (JSON `FundNAVIntraday`) | 12s | 盘中估值实时值（仅缓存，不落库）；`fund_nav_intraday_refresh` 每周期 pipeline 写入，`GET /finance/fund-nav/batch` / `get_fund_nav` 快路径 / `watchlist/quotes` 读取；任务停摆自然过期不供陈旧值（全局键、无租户前缀，同上说明，fund-intraday-nav.md §3.4） |
+| **关注基金并集** | `fund_followed_codes` | Set（成员 `{tenant_id}:{fund_code}`） | 60s | 跨租户关注并集缓存：盘中估值与持仓摄取的懒加载边界；未命中时由 `watchlist_items ⋈ finance_symbols` 重建；加/删自选时整键删除失效（fund-intraday-nav.md §5.2） |
+| **持仓快照缓存** | `fund_holdings:{fund_code}` | String (JSON) | 1h | 持仓快照 + 披露状态的读缓存，miss 落 PG 后回填（fund-intraday-nav.md §7.2 第 6 步） |
+| **落库降采样节流** | `fund_nav_rt_flush:{fund_code}` | String（标记位 `"1"`） | 60s（`FUND_NAV_DB_FLUSH_MIN_GAP`） | `fund_nav_estimates` 降采样写节流：`SET NX EX` 抢占成功才允许写（≤1 次/分/基金）；状态切换强写时先删键重锚（fund-intraday-nav.md §3.4） |
+| **上游分钟预算** | `quote_budget:{name}:{yyyymmddHHMM}` | String（整数计数） | 120s | 行情/持仓上游每分钟请求计数（INCRBY + EX）；`min(max_rpm × QUOTE_UPSTREAM_SAFETY_FACTOR)` 为可用预算，超限拒绝并回退计数（fund-intraday-nav.md §6.2） |
+| **上游熔断器** | `quote_breaker:{name}` | String (JSON `{cooldown_until, consecutive_fails}`) | 冷却时长 | 403/429/5xx/断连累计 ≥2 次进入冷却 `60s × 2^(n-2)` 上限 1800s；成功减半恢复；Redis 不可用时 fail-open（fund-intraday-nav.md §6.2） |
+| **在线租户集（finance）** | `sse:connected_tenants:finance` | Set（tenant_id） | 90s | api 进程在 SSE `register`/`unregister`/30s 心跳时全量重写订阅 finance/all 的活跃连接租户；`fund_nav_intraday_refresh` 据此按租户扇出 `nav_batch_update`（api 挂掉 → 键过期 → 停止扇出，计算与缓存照旧；fund-intraday-nav.md §8.1） |
 | **SSE Pub/Sub** | `channel:{category}` | Pub/Sub | 无 | 数据更新事件分发（finance/tech/dashboard/admin/all） |
 | **搜索缓存** | `t:{tenant_id}:search:{query_hash}` | String (JSON) | 300s | 金融搜索结果缓存（query_hash = md5(q:type:market)） |
 | **去重集合** | `t:{tenant_id}:dedup:{source_id}` | Set | ⚠️ **无 TTL（永不过期）** | 成员为 `MD5(title:url)` 十六进制摘要（processors/dedup.py:41-43），快速去重 |
@@ -388,9 +447,12 @@ CREATE INDEX idx_dashboard_snapshots_time ON dashboard_snapshots(tenant_id, time
 
 > ⚠️ **说明（key 前缀）**：并非所有 key 都有租户前缀——仅租户级数据键（quote、market_indices、
 > commodities、nav、search、dedup、watchlist）带 `t:{tenant_id}:` 前缀；session、source_health、
-> token_blacklist、admin_login:*、dashboard:*、scheduler:*、channel:*、sse:*、sso_state:* 等均为全局键。
+> token_blacklist、admin_login:*、dashboard:*、scheduler:*、channel:*、sse:*、sso_state:*、
+> fund_nav_rt:* / fund_followed_codes / fund_holdings:* / fund_nav_rt_flush:* / quote_budget:* /
+> quote_breaker:*（基金盘中估值，公开市场数据派生或系统级治理状态，租户隔离保留在自选关系层）等均为全局键。
 > 特例：话题统计推送节流键 `tech:topic_stats_pushed:{tenant_id}` 与涨跌提醒冷却键
-> `finance:alert_fired:{tenant_id}:{item_id}` 为租户级但采用后缀式命名。
+> `finance:alert_fired:{tenant_id}:{item_id}` 为租户级但采用后缀式命名；`fund_followed_codes` 的成员
+> 内嵌 `{tenant_id}:{fund_code}` 以实现「全局并集 + 按租户过滤」两用。
 
 **Redis 配置要点**:
 - `maxmemory-policy: allkeys-lru` — 内存满时淘汰最久未使用的 key
@@ -470,13 +532,19 @@ CREATE INDEX idx_dashboard_snapshots_time ON dashboard_snapshots(tenant_id, time
   包**（只 import `app.models.base` 时 metadata 为空，autogenerate 检测不到任何表）。
   数据库 URL 运行时取自 `settings.database_url`（覆盖 ini 中的占位值），因此
   `alembic -c app/alembic/alembic.ini ...` 始终作用于当前环境配置的库
-- Baseline 迁移 `versions/bb1a61d49502_baseline_schema.py` = 当前 12 张表全集
+- Baseline 迁移 `versions/bb1a61d49502_baseline_schema.py` = 当时 12 张表全集
   （tenants/users/categories/sources/source_health/items/finance_symbols/
   fund_nav_estimates/watchlist_items/finance_quotes/dashboard_snapshots/
   sse_connections）。在干净 PG 库上 `revision --autogenerate` 生成后人工复核，
   `alembic upgrade head` 应用，并与 `create_all` 建出的 schema 做了
   `pg_dump` 对比——逐字一致（仅多 `alembic_version` 表）。`downgrade()` 为
   逆序 drop 全部表
+- 后续迁移链（线性，均为 upgrade head 自动应用）：
+  `7d9a46a0d5c9_tenancy_row_level_security`（8 张租户业务表启用 RLS，§3.5）→
+  `c3f2a8d1e9b4_fund_intraday_nav`（基金盘中估值，2026-08-31）：新增
+  `fund_holdings_snapshots` / `fund_holdings_meta` / `fund_index_bindings` 三表、
+  `fund_nav_estimates` 增列 `holdings_coverage_percent` / `holdings_report_date`，
+  并在建表后对三张新表施加同款 `tenant_isolation` RLS 策略（表清单现为 15 张）
 
 **启动链路（upgrade-first）**: `entrypoint.sh` 检测 `versions/` 是否含迁移脚本：
 
@@ -529,9 +597,12 @@ app/alembic/alembic.ini revision --autogenerate -m "..."`）→ **人工审查**
 **第二道防线——PostgreSQL RLS** ✅ 已实现（迁移 `7d9a46a0d5c9_tenancy_row_level_security`；
 SQL 常量与运行时接线集中在 `app/db/rls.py`）：
 
-*覆盖的 8 张表*（按模型逐一核对，凡含 `tenant_id` 的业务表全覆盖）：
+*覆盖的 11 张表*（按模型逐一核对，凡含 `tenant_id` 的业务表全覆盖）：
 `categories`、`sources`、`items`、`finance_symbols`、`finance_quotes`、
 `fund_nav_estimates`、`watchlist_items`、`sse_connections`
++ 基金盘中估值三表 `fund_holdings_snapshots`、`fund_holdings_meta`、`fund_index_bindings`
+（由迁移 `c3f2a8d1e9b4_fund_intraday_nav` 建表后即时施加同款策略——`app/db/rls.py`
+的 `RLS_TABLES` 常量冻结在 `7d9a46a0d5c9` 运行时的 8 张表语义，新表不进入旧迁移的迭代集）
 
 *明确排除*：
 - `users`：登录/SSO/refresh 的用户查找发生在租户上下文建立**之前**（无 JWT 可解析），

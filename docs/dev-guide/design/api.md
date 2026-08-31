@@ -642,6 +642,8 @@ Response 200:
 
 #### GET `/api/v1/finance/fund/{symbol}/nav` — 基金NAV估值
 
+> 快路径（fund-intraday-nav.md §9.1）：先读全局实时缓存 `fund_nav_rt:{code}`，命中（盘中估值任务在跑）直接返回 `FundNAVIntraday` 形状的结果、**跳过重算与 `nav_estimate_update` 副作用推送**；未命中走下方原有路径。指数绑定改读 `fund_index_bindings` 表（缺失回退既有行内绑定），`tracking_ratio` 随绑定提供（默认 1.0）。
+
 ```
 Query Params:
   estimate_type: "realtime" | "latest_official" (default "realtime")
@@ -668,15 +670,57 @@ Response 200:
   }
 ```
 
+#### GET `/api/v1/finance/fund-nav/batch` — 基金盘中估值批量查询（fund-intraday-nav.md §9.1）
+
+```
+Query Params:
+  symbols: 逗号分隔的基金代码/符号 (1~50 个, 去重 + 规范化为 6 位代码;
+           空或超 50 → 400 VALIDATION_ERROR)
+
+Response 200: SuccessResponse[list[FundNAVIntraday]]
+  {
+    "success": true,
+    "data": [
+      {
+        "symbol": "510300",
+        "name": "沪深300ETF",
+        "nav_official": 4.1234,
+        "nav_official_date": "2026-08-28",
+        "nav_estimate": 4.1502,
+        "estimate_change_percent": 0.65,
+        "estimate_method": "holdings_weighted",
+        "coverage_percent": 69.0,
+        "holdings_report_date": "2026-06-30",
+        "quote_status": "mixed",
+        "delayed_markets": ["HK"],
+        "holdings_stale": false,
+        "estimate_timestamp": "2026-08-31T04:30:00+00:00",
+        "error": null
+      }
+    ]
+  }
+
+语义:
+  - 命中实时缓存（fund_nav_rt:{code}, TTL 12s）→ 返回最新盘中估值；
+  - 未命中 → latest_official 兜底（轻量锚查询, 不触发持仓摄取重路径）;
+  - 兜底命中且基金无持仓快照 → 异步触发持仓摄取钩子（本次响应不等待）;
+  - 未知/非法代码 → 条目携带 "error" 字段而非整体 404。
+```
+
 #### Watchlist API (见 [finance-tab.md](finance-tab.md) §3.2/§3.4 详细设计)
 
 ```
 GET    /api/v1/finance/watchlist               — 获取自选列表
-POST   /api/v1/finance/watchlist               — 添加到自选列表 (最多512项, 超出返回400 VALIDATION_ERROR)
+POST   /api/v1/finance/watchlist               — 添加到自选列表 (最多512项, 超出返回400 VALIDATION_ERROR;
+                                                 成功后基金符号异步触发持仓摄取钩子,
+                                                 fund-intraday-nav.md §5.1)
 PATCH  /api/v1/finance/watchlist/{item_id}     — 设置/关闭自选涨跌提醒阈值 (见下方)
 DELETE /api/v1/finance/watchlist/{item_id}      — 从自选列表移除
 PUT    /api/v1/finance/watchlist/reorder        — 重排序自选列表 (见下方)
-GET    /api/v1/finance/watchlist/quotes         — 自选列表所有行情
+GET    /api/v1/finance/watchlist/quotes         — 自选列表所有行情；基金条目附
+                                                 `fund_nav: FundNAVIntraday | null`
+                                                 （来自 fund_nav_rt 实时缓存；股票条目恒为
+                                                 null，可选字段向后兼容, §9.1）
 ```
 
 #### PUT `/api/v1/finance/watchlist/reorder` — 重排序自选列表

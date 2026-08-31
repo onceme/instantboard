@@ -1,9 +1,9 @@
 ---
-version: 1.6
+version: 1.8
 author: designer
-date: 2026-08-26
+date: 2026-08-31
 status: draft
-cross_refs: [frontend.md, api.md, data-sources.md, database.md, data-flow.md]
+cross_refs: [frontend.md, api.md, data-sources.md, database.md, data-flow.md, fund-intraday-nav.md]
 ---
 
 # InstantBoard 财经模块详细设计
@@ -148,8 +148,9 @@ if estimate_type == "realtime" and fund.type == "fund" and nav_official and unde
 > 2. **每日 20:00 官方 NAV 任务** `fund_nav_official_refresh`（cron，Asia/Shanghai；`scheduler/manager.py::add_fund_nav_job`，`main.py` lifespan 与 `worker.py` 两处接线）：`FinanceService.update_official_nav` 对当前租户所有 `type='fund'` 的活跃 `FinanceSymbol`（符号规范化为 6 位基金代码，如 `510300.SS → 510300`）逐个拉取最新官方单位净值 + 净值日期，按 (基金, 净值日期) **upsert** `fund_nav_estimates`（`estimate_method='official'`）；无基金符号/采集失败 → 记日志返回 0，不抛、不杀任务
 > 3. **读库优先**：`get_fund_nav` 的 `nav_official` 优先读 `fund_nav_estimates` 最新一条官方净值行（`nav_official_date` 降序，PG DESC 默认 NULLS FIRST 故显式 `nulls_last()`），回退最新任意行（兼容既有数据）；全表无数据时返回全 None 的温和响应（不 500），Redis 缓存 120s 语义不变
 > 4. **估值回写**：实时估值计算成功后 `_save_nav_estimate` 落库（`estimate_method='index_tracking'`，含底层指数信息）；口径为**按 (基金, 官方净值日期) 覆盖更新**——同一官方净值日内的多次估值更新同一行（表有界），新官方净值日期开新行；落库失败记日志回滚、不影响读路径返回
+> 5. **盘中估值（关注制）** ✅ 已实现：`fund_nav_intraday_refresh`（CN 开市时段 ≤3s 周期，见 §3.8.2）对关注并集内的基金计算盘中估值，新增 `estimate_method='holdings_weighted'` **持仓加权法**——最新披露前十大持仓权重 × 成分股实时涨跌幅加权求和（未披露仓位按盘中不变假设），精度 = 可得持仓权重之和；分层决策为 `holdings_weighted`（持仓新鲜且 coverage 达标）→ `index_tracking`（指数外推，修复后的绑定表提供标的与比率）→ `latest_official`（仅显官方净值）。实时值仅存 Redis `fund_nav_rt:{code}`（TTL 12s），落库走降采样（≥60s/状态切换），推送经 `nav_batch_update` 按租户扇出（见 §3.9）。完整设计见 [fund-intraday-nav.md](fund-intraday-nav.md)
 
-> ⚠️ **残余未实现**：`underlying_index_symbol`（基金 ↔ 跟踪指数绑定）仍无自动写入源，需行内既有绑定才会触发估值分支；`tracking_ratio` 仍硬编码 1.0。
+> ✅ **绑定断头路已修复**：`underlying_index_symbol` 的初始写入源现为 `fund_index_bindings` 配置表（`db/init_db.py` 种子灌入主流宽基绑定；见 [fund-intraday-nav.md](fund-intraday-nav.md) §3.3/§4.3），`get_fund_nav` 读取次序为绑定表 → 既有行内绑定回退；`tracking_ratio` 改由绑定表提供（默认 1.0，不再硬编码于估值公式）。
 
 **估值精度说明**:
 - 指数ETF: 估值偏差通常 < 0.5%，实时性取决于指数数据频率
@@ -380,21 +381,24 @@ graph TD
 | 大宗商品 | 60s 定时刷新（`COMMODITIES_REFRESH_INTERVAL` 可配）+ 缓存未命中按需兜底 | 60s | 同上 |
 | 个股/自选行情 | 请求时按需拉取 | 30s | 自选无后台周期推送（`watchlist_quotes_realtime` 属后续特性） |
 | 基金NAV估值 | 官方NAV每日 20:00 定时刷新（`fund_nav_official_refresh`）+ 请求时按需估值 | 120s | 官方净值与估值均落库 `fund_nav_estimates`（见 §3.3）；Redis 仅为读缓存 |
+| 基金盘中估值（关注制） | 3s 周期（`FUND_NAV_INTRADAY_REFRESH_INTERVAL` 可配，下限 2s），**仅 CN 开市时段**、关注并集为空时零上游请求短路；`fund_nav_rt:{code}` TTL 12s，落库降采样 ≥60s | 12s | worker 进程计算，`nav_batch_update` 按租户扇出；未关注/闭市时无请求（见 §3.8.2、[fund-intraday-nav.md](fund-intraday-nav.md) §7） |
 | 搜索结果 | 按需(用户触发) | 300s (5min) | |
 
-> ⚠️ **未实现**：自选行情（`watchlist_quotes_realtime`）的定时推送——仍按需，属后续特性。指数/商品的定时刷新 + SSE 推送已实现（见 §3.8.2）。NAV 管道的定时侧为**官方净值每日 20:00 落库**（`fund_nav_official_refresh`，见 §3.8.2）；实时估值仍按需计算（无定时估值推送）。
+> ⚠️ **未实现**：自选行情（`watchlist_quotes_realtime`）的定时推送——仍按需，属后续特性。指数/商品的定时刷新 + SSE 推送已实现（见 §3.8.2）。**NAV 定时估值推送已实现**：`fund_nav_intraday_refresh` 关注制持仓加权盘中估值，≤3s 周期、CN 开市门控、经 `nav_batch_update` SSE 推送（见 §3.8.2 与 [fund-intraday-nav.md](fund-intraday-nav.md)）；未关注基金与闭市时段保持零请求。
 
 #### 3.8.2 定时任务现状
 
 **统一采集任务**：每个数据源一个任务，ID 为 `collect_{source_id}`（`scheduler/manager.py`），周期取自 `source.refresh_interval_seconds`（经租户覆盖解析，见 content-categories.md §3.4.4），首次立即执行。金融种子源（东方财富 15s、yfinance 指数 30s、大宗商品 60s）确实会周期采集，但产出走通用 items 管道并被 `FilterProcessor` 过滤，**不进入行情展示链路**。
 
-**行情定时刷新任务组** ✅ 已实现（`scheduler/manager.py::add_market_refresh_jobs` + `add_fund_nav_job` + `add_quote_partition_job`；开发内嵌调度器在 `main.py` lifespan、生产在 `scheduler/worker.py::main()` 注册——`SCHEDULER_ENABLED=false` 的 api 进程不注册）：
+**行情定时刷新任务组** ✅ 已实现（`scheduler/manager.py::add_market_refresh_jobs` + `add_fund_nav_job` + `add_fund_intraday_jobs` + `add_fund_holdings_job` + `add_quote_partition_job`；开发内嵌调度器在 `main.py` lifespan、生产在 `scheduler/worker.py::main()` 注册——`SCHEDULER_ENABLED=false` 的 api 进程不注册）：
 
 | 任务 ID | 间隔 | 任务体 |
 |--------|------|--------|
 | `market_indices_refresh` | 30s（`MARKET_INDICES_REFRESH_INTERVAL`） | 开市门控 → `FinanceService.refresh_market_indices` |
 | `commodities_refresh` | 60s（`COMMODITIES_REFRESH_INTERVAL`） | 开市门控 → `FinanceService.refresh_commodities` |
 | `fund_nav_official_refresh` | 每日 20:00（cron，Asia/Shanghai） | `FinanceService.update_official_nav`：天天基金官方净值 → `fund_nav_estimates` upsert（`estimate_method='official'`，见 §3.3）；**无开市门控**（官方净值每交易日收盘后发布一次，与盘中行情刷新不同）；失败记日志不杀任务 |
+| `fund_nav_intraday_refresh` | 3s（`FUND_NAV_INTRADAY_REFRESH_INTERVAL`，下限 2s；`FUND_NAV_INTRADAY_ENABLED` 总开关） | **仅 CN 开市门控**（`_is_market_open("CN")`，含节假日历与午休）→ 关注并集（跨租户去重、空则零请求短路、超 `FUND_NAV_INTRADAY_MAX_FUNDS` 按最早关注截断）→ 持仓快照 + 官方净值锚 → 成分股批量行情（预算治理器）→ 分层估值 → `fund_nav_rt:{code}`（TTL 12s）+ `nav_batch_update` 按租户扇出 + 降采样落库（[fund-intraday-nav.md](fund-intraday-nav.md) §7） |
+| `fund_holdings_refresh` | 每日 `FUND_HOLDINGS_REFRESH_HOUR`:00（cron，Asia/Shanghai，默认 18 点） | 关注并集全部基金逐个摄取东财 f10 持仓（预算门控串行节流 ≤8 次/分），整组替换快照 + 更新披露状态（§5 见 [fund-intraday-nav.md](fund-intraday-nav.md)）；单基金失败不杀整轮 |
 | `finance_quotes_partition_roll` | 每日 00:30（cron，UTC） | `db/partitions.py::ensure_quote_partitions`：`finance_quotes` 按月 RANGE 分区（database.md §3.1）幂等供给上月/当月/下月分区（命名 `finance_quotes_y{yyyy}m{mm}`）；"无可创建"是常态结果（记成功）；非 PostgreSQL 为 no-op；失败仅日志不杀任务 |
 
 - **开市门控**：`FinanceService.is_any_market_open()`（复用 `MARKET_TRADING_HOURS` / `_is_market_open`），任一主要市场开市才执行；全休市时静默跳过（省外部 API 调用）——替代原设计的 `market_indices_off_hours` 低频任务
@@ -402,7 +406,7 @@ graph TD
 - **容错**：全部 failover 源无数据返回 False，异常只记日志不杀任务，下一周期重试；`_last_run_results` 记录成败供 `get_jobs_status` 观测
 - **租户口径**：系统租户（`SYSTEM_TENANT_ID`，与 dashboard 指标采集一致；SSE 租户路由为精确字符串匹配）；`fund_nav_official_refresh` 同口径
 - **cron 任务不受降频机制影响**：`fund_nav_official_refresh` 与 `finance_quotes_partition_roll` 都是 cron 触发器，刻意不进 `_original_intervals` 簿记，健康降频/负载降频/自适应暂停（均为 interval 语义）不会触碰它们；`finance_quotes_partition_roll` 与租户/行情无关（纯 DDL 供给），也不受 `market_refresh_jobs_enabled` 开关影响
-- 原设计的 `scheduler/jobs.py` / `FINANCE_SCHEDULE_CONFIG`（`active_hours` / `pause_on_holiday` 等）未实现；`watchlist_quotes_realtime` 与 `nav_estimates` 定时估值推送保留按需，属后续特性（NAV 的官方净值每日落库已由 `fund_nav_official_refresh` 覆盖，见 §3.3）
+- 原设计的 `scheduler/jobs.py` / `FINANCE_SCHEDULE_CONFIG`（`active_hours` / `pause_on_holiday` 等）未实现；`watchlist_quotes_realtime` 保留按需，属后续特性；**`nav_estimates` 定时估值推送已完成设计**——见 [fund-intraday-nav.md](fund-intraday-nav.md)（关注制持仓加权盘中估值 ≤3s，含指数外推回退与 `underlying_index` 绑定修复），实现落地前仍按需（NAV 的官方净值每日落库已由 `fund_nav_official_refresh` 覆盖，见 §3.3）
 
 #### 3.8.3 动态频率调整（现状）
 
@@ -422,12 +426,13 @@ graph TD
 | `market_index_update` | **整个指数数组** `[{symbol, name, value, change, change_percent, market_status, market_status_reason, holiday_name, region, timestamp}, ...]`（`market_status_reason` 为闭市原因 `weekend`/`holiday`/`off_hours`，开市为 `null`；`holiday_name` 为节日名称，非节假日为 `null`） | 定时刷新任务 `market_indices_refresh`（30s、开市门控、载荷未变时跳过推送）+ `get_market_indices` 缓存未命中拉取完成后随路推送 | 注意是数组 |
 | `commodity_update` | **整个商品数组** `[{symbol, name, value, change, change_percent, unit, timestamp}, ...]` | 定时刷新任务 `commodities_refresh`（60s、开市门控、载荷未变时跳过推送）+ `get_commodities` 缓存未命中拉取完成后随路推送 | 注意是数组 |
 | `nav_estimate_update` | `{symbol, name, nav_official, nav_estimate, nav_estimate_deviation_percent, estimate_method, timestamp}` | `get_fund_nav` 请求时随路推送 | `nav_official` 来自 `fund_nav_estimates` 表（每日 20:00 任务写入，见 §3.3）；估值成功时同步回写该表 |
+| `nav_batch_update` | **整个估值数组** `list[FundNAVIntraday]`（`{symbol, name, nav_official, nav_official_date, nav_estimate, estimate_change_percent, estimate_method, coverage_percent, holdings_report_date, quote_status, delayed_markets, holdings_stale, estimate_timestamp}`，schema 见 [fund-intraday-nav.md](fund-intraday-nav.md) §3.5） | 定时任务 `fund_nav_intraday_refresh`（3s、CN 开市门控、1bp 量化变更检测，整数组无变化跳过推送） | 按在线租户扇出、**按租户过滤**（各租户只见各自关注的基金码；`SYSTEM_TENANT_ID` 收全量）；`push_event(history=False)` 不入回放历史窗（重连由 `GET /finance/fund-nav/batch` 快照覆盖） |
 | `alert_update` | `{symbol, name, price, change_percent, threshold_percent, direction: "up"\|"down", triggered_at}` **单对象** | 自选行情链路（`get_watchlist_quotes`）：设置阈值的条目 `abs(change_percent) >= 阈值` 且 1h 冷却未触发 | 涨跌提醒，见 §3.2；`finance:alert_fired:{tenant_id}:{item_id}` SET NX EX 3600 冷却，Redis 不可用静默跳过 |
 | `heartbeat` | `{timestamp}` | 保持连接 | 30s |
 
 > ⚠️ **已知契约冲突（待修复）**：后端 `market_index_update` / `commodity_update` 每次推送**整个数组**（`services/finance.py` push_event 直接传 `formatted` 列表），但前端 `stores/finance.ts` 的 `updateMarketIndexFromSSE` / `updateCommodityFromSSE` 按**单对象**消费（读 `data.symbol`），数组 payload 无法落位——这两个事件实际不生效。需统一为数组契约（前端整体替换）或后端改为逐条推送。
 
-> ✅ **已实现**：`alert_update` — 后端 `SSEEventType` 枚举现为 **10 种事件**；检测挂在自选行情链路（`get_watchlist_quotes`，同条目 1 小时冷却、无全市场定时扫描），前端以浮动 toast + 页面隐藏时的浏览器通知呈现（详见 §3.2）。
+> ✅ **已实现**：`alert_update` — 后端 `SSEEventType` 枚举现为 **11 种事件**（`nav_batch_update` 加入，见上表与 [fund-intraday-nav.md](fund-intraday-nav.md) §8）；检测挂在自选行情链路（`get_watchlist_quotes`，同条目 1 小时冷却、无全市场定时扫描），前端以浮动 toast + 页面隐藏时的浏览器通知呈现（详见 §3.2）。
 
 详见 [api.md](api.md) SSE 端点定义。
 

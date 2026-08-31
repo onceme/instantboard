@@ -389,13 +389,13 @@ graph TD
 
 | 频道名称 | 发布者 | 订阅者 | 消息内容 |
 |---------|--------|--------|---------|
-| `channel:finance` | FinanceService / 采集管道 / 调度器行情刷新任务组（`scheduler/manager.py::_run_market_refresh`，指数 30s / 商品 60s、开市门控，见 finance-tab.md §3.8.2） | SSEEventRouter | quote_update / market_index_update / commodity_update / nav_estimate_update |
+| `channel:finance` | FinanceService / 采集管道 / 调度器行情刷新任务组（`scheduler/manager.py::_run_market_refresh`，指数 30s / 商品 60s、开市门控，见 finance-tab.md §3.8.2）/ **盘中估值任务 `fund_nav_intraday_refresh`（worker 进程，≤3s、CN 开市门控，按在线租户扇出、不入历史窗，见 fund-intraday-nav.md §7/§8）** | SSEEventRouter | quote_update / market_index_update / commodity_update / nav_estimate_update / **nav_batch_update**（`data = list[FundNAVIntraday]`，按租户过滤、`history=False`） |
 | `channel:tech` | 采集管道 | SSEEventRouter | item_update / topic_stats_update（条目入库触发 + 900s 窗口节流，见 tech-tab.md §3.8） |
 | `channel:dashboard` | SourceService / 调度器 / 指标采集 / SSE 首个订阅者钩子 | SSEEventRouter **+ worker**（`scheduler/worker.py::source_event_listener`） | SSE 事件：system_metric_update / source_health_update / source_created；worker 消费的事件（键为 `event`，`WORKER_EVENT_NAMES`）：source_enabled / source_disabled / source_deleted（源生命周期）+ `scheduler_resume`（api SSE 注册表 0→1 时发布 → worker `resume_paused_jobs()`，见 finance-tab.md §3.8.3）——**注意：发布在 dashboard 频道，而非 admin** |
 | `channel:admin` | **无** | SSEEventRouter | 已被订阅但当前无任何发布者（保留备用） |
 | `channel:all` | — | SSEEventRouter（all 聚合） | 各频道消息向 `all` 订阅者二次投递 |
 
-> ⚠️ **未实现**：`db_metric_update` / `business_metric_update` 无后端发布者——后端 `SSEEventType`（`core/sse_router.py`）共 10 种（item_update / quote_update / market_index_update / nav_estimate_update / commodity_update / alert_update / system_metric_update / source_health_update / topic_stats_update / heartbeat），这两个事件名仅存在于前端枚举死代码（`frontend/src/utils/sse.ts`）。亦不存在 `source_updated` 事件。（`alert_update` 已实现：自选行情链路检测 + 1h 冷却，见 finance-tab.md §3.2；`topic_stats_update` 已实现：科技条目入库触发 + 900s 窗口节流，见 tech-tab.md §3.8）
+> ⚠️ **未实现**：`db_metric_update` / `business_metric_update` 无后端发布者——后端 `SSEEventType`（`core/sse_router.py`）共 11 种（item_update / quote_update / market_index_update / nav_estimate_update / **nav_batch_update** / commodity_update / alert_update / system_metric_update / source_health_update / topic_stats_update / heartbeat），这两个事件名仅存在于前端枚举死代码（`frontend/src/utils/sse.ts`）。亦不存在 `source_updated` 事件。（`alert_update` 已实现：自选行情链路检测 + 1h 冷却，见 finance-tab.md §3.2；`topic_stats_update` 已实现：科技条目入库触发 + 900s 窗口节流，见 tech-tab.md §3.8；`nav_batch_update` 已实现：盘中估值整数组按租户扇出，见 fund-intraday-nav.md §8）
 
 #### 3.5.2 消息格式
 
@@ -519,6 +519,7 @@ graph TD
 | `t:{tid}:market_indices` | 60s | 主动更新覆盖 | 每次采集直接SET覆盖 |
 | `t:{tid}:commodities` | 60s | 主动更新覆盖 | 同market_indices |
 | `t:{tid}:nav:{symbol}` | 120s | 主动更新覆盖 | 估值数据 |
+| `fund_nav_rt:{fund_code}` | 12s | 每周期 pipeline 覆盖（全局键，无租户前缀） | 盘中估值实时值：`fund_nav_intraday_refresh` 写、`GET /finance/fund-nav/batch` / `get_fund_nav` 快路径 / `watchlist/quotes` 读；任务停摆自然过期、不供陈旧值；落库另有降采样节流键 `fund_nav_rt_flush:{code}`（SET NX EX 60s，见 database.md §3.2、fund-intraday-nav.md §3.4） |
 | `t:{tid}:dedup:{source_id}` | **永不过期** | 无 TTL | `processors/dedup.py:33` 的 `redis_sadd` 不设 TTL，与原设计"24h 自动清理"不符，**待修复**（当前仅靠 512mb + allkeys-lru 兜底） |
 | `t:{tid}:search:{hash}` | 5min | 被动过期 | 搜索结果缓存 |
 | `t:{tid}:watchlist:{uid}` | 600s | 读写 + 变异即失效 | `get_watchlist` 读穿透缓存：命中直返、未命中查 PG 后写入；加/删自选、重排、阈值 PATCH 均 `redis_delete` 失效；脏条目删除自愈；Redis 不可用降级直查（`services/finance.py`） |

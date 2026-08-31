@@ -225,10 +225,13 @@ TECH_ROBOTICS_SOURCES = [
         "priority": 3,
     },
     {
-        "name": "IEEE Robotics",
+        # ieee.org sits behind a JS-challenge WAF that plain HTTP clients can
+        # never pass (permanent 202/empty); IEEE Spectrum's official RSS is the
+        # reachable successor (verified 2026-08-31 with the collector UA).
+        "name": "IEEE Spectrum",
         "source_type": "rss",
-        "url": "https://www.ieee.org/publications/rss_feed.xml",
-        "config": {"parse_rules": {"summary": "abstract"}},
+        "url": "https://spectrum.ieee.org/feeds/feed.rss",
+        "config": {"parse_rules": {}},
         "refresh_interval_seconds": 86400,
         "priority": 5,
     },
@@ -308,9 +311,12 @@ TECH_EMBEDDED_SOURCES = [
         "is_active": True,
     },
     {
+        # The old /rss/ endpoint is bot-blocked (403 + connection reset); the
+        # WordPress feed is the official reachable successor (verified
+        # 2026-08-31 with the collector UA).
         "name": "EE Times",
         "source_type": "rss",
-        "url": "https://www.eetimes.com/rss/",
+        "url": "https://www.eetimes.com/feed/",
         "config": {"parse_rules": {}},
         "refresh_interval_seconds": 86400,
         "priority": 5,
@@ -369,9 +375,12 @@ TECH_SPACE_SOURCES = [
         "is_active": True,
     },
     {
+        # The legacy /RSS endpoint returns 403; rssfeed/TopNews is ESA's
+        # official reachable successor (verified 2026-08-31 with the
+        # collector UA).
         "name": "ESA News",
         "source_type": "rss",
-        "url": "https://www.esa.int/RSS",
+        "url": "https://www.esa.int/rssfeed/TopNews",
         "config": {"parse_rules": {}},
         "refresh_interval_seconds": 1800,
         "priority": 4,

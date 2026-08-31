@@ -170,6 +170,17 @@ class FinanceService:
                     seen_symbols.add(ext["symbol"])
                     results.append(ext)
 
+        # CN fund-code fallback (fund-intraday-nav.md, M2 phase A): external
+        # indexes do not know OTC open-end funds and search only ever created
+        # symbols from upstream hits. When the query itself is a 6-digit CN
+        # fund code and nothing matched, register a fund symbol under the
+        # requesting tenant so the code can be added to a watchlist and
+        # consumed by the intraday pipeline.
+        if not results and (type in (None, "all", "fund")):
+            auto_registered = await self._maybe_autoregister_fund_code(tenant_id, q)
+            if auto_registered is not None:
+                results.append(auto_registered)
+
         if results:
             await redis_set(cache_key, json.dumps(results), ex=REDIS_TTL_SEARCH)
 
@@ -395,6 +406,26 @@ class FinanceService:
         )
         result = await self.db.execute(stmt)
         fund = result.scalar_one_or_none()
+
+        if not fund:
+            # Fund-code fallback (M2 phase A): bare-code and suffixed spellings
+            # of the same fund resolve interchangeably (seeds use suffixed
+            # symbols for listed ETFs, auto-registration uses bare OTC codes).
+            nav_fund_code = self._normalize_fund_code(symbol)
+            if nav_fund_code:
+                variants = [nav_fund_code, f"{nav_fund_code}.SS", f"{nav_fund_code}.SZ", f"{nav_fund_code}.OF"]
+                retry_stmt = (
+                    select(FinanceSymbol)
+                    .where(
+                        FinanceSymbol.tenant_id == tenant_id,
+                        FinanceSymbol.type == "fund",
+                        FinanceSymbol.is_active,
+                        func.upper(FinanceSymbol.symbol).in_([v.upper() for v in variants]),
+                    )
+                    .order_by(FinanceSymbol.symbol)
+                    .limit(1)
+                )
+                fund = (await self.db.execute(retry_stmt)).scalar_one_or_none()
 
         if not fund:
             raise SymbolNotFound(message=f"Fund symbol not found: {symbol}")
@@ -937,6 +968,24 @@ class FinanceService:
             )
             lookup_result = await self.db.execute(stmt_lookup)
             fin_symbol = lookup_result.scalar_one_or_none()
+            if not fin_symbol:
+                # Fund-code fallback (M2 phase A): registered/seeded fund
+                # symbols carry exchange suffixes ("510300.SS") or bare codes
+                # ("110011"); accept either spelling of a 6-digit fund code.
+                fund_code = self._normalize_fund_code(symbol_text)
+                if fund_code:
+                    variants = [fund_code, f"{fund_code}.SS", f"{fund_code}.SZ", f"{fund_code}.OF"]
+                    stmt_variants = (
+                        select(FinanceSymbol)
+                        .where(
+                            FinanceSymbol.tenant_id == tenant_id,
+                            FinanceSymbol.type == "fund",
+                            func.upper(FinanceSymbol.symbol).in_([v.upper() for v in variants]),
+                        )
+                        .order_by(FinanceSymbol.symbol)
+                        .limit(1)
+                    )
+                    fin_symbol = (await self.db.execute(stmt_variants)).scalar_one_or_none()
             if not fin_symbol:
                 raise SymbolNotFound(message=f"Symbol not found: {symbol_text}")
             symbol_id = str(fin_symbol.id)
@@ -1491,6 +1540,74 @@ class FinanceService:
 
         return None
 
+    async def _maybe_autoregister_fund_code(self, tenant_id: str, query: str) -> dict | None:
+        """Register a bare 6-digit CN fund code as a fund symbol (§M2 phase A).
+
+        Fires only when search produced no hits at all — OTC open-end funds are
+        absent from every external index, so without this they could never enter
+        a watchlist. Listed ETF/LOF codes normally resolve through the external
+        path (with the corrected type), so this is the narrow OTC gap filler.
+        Returns the search-result dict for the (existing or newly created)
+        symbol, or None when the query is not a fund code / already registered.
+        """
+        fund_code = self._normalize_fund_code(query)
+        if not fund_code or not self._is_cn_fund_code(fund_code):
+            return None
+
+        # Already registered under this tenant (bare code or a suffixed
+        # variant)? Reuse it instead of duplicating.
+        variants = [fund_code, f"{fund_code}.SS", f"{fund_code}.SZ", f"{fund_code}.OF"]
+        existing_stmt = (
+            select(FinanceSymbol)
+            .where(
+                FinanceSymbol.tenant_id == tenant_id,
+                func.upper(FinanceSymbol.symbol).in_([v.upper() for v in variants]),
+            )
+            .order_by(FinanceSymbol.symbol)
+            .limit(1)
+        )
+        existing = (await self.db.execute(existing_stmt)).scalar_one_or_none()
+        if existing is not None:
+            return {
+                "symbol": existing.symbol,
+                "name": existing.name,
+                "type": existing.type,
+                "market": existing.market,
+                "exchange": existing.exchange,
+                "current_price": None,
+                "change_percent": None,
+                "currency": existing.currency or "CNY",
+            }
+
+        new_symbol = FinanceSymbol(
+            tenant_id=tenant_id,
+            symbol=fund_code,
+            name=f"基金 {fund_code}",
+            type="fund",
+            market="CN",
+            exchange="",
+            currency="CNY",
+            is_active=True,
+        )
+        self.db.add(new_symbol)
+        try:
+            await self.db.commit()
+        except Exception as e:
+            # Concurrent search races the unique constraint; the winner's row is
+            # picked up by the next search — never fail this request over it.
+            logger.warning(f"Fund code auto-registration failed for {fund_code}: {e}")
+            await self.db.rollback()
+        return {
+            "symbol": fund_code,
+            "name": f"基金 {fund_code}",
+            "type": "fund",
+            "market": "CN",
+            "exchange": "",
+            "current_price": None,
+            "change_percent": None,
+            "currency": "CNY",
+        }
+
     async def _search_symbols_external(self, query: str, tenant_id: str) -> list[dict]:
         try:
             from app.collectors.finance.yfinance_collector import YFinanceCollector
@@ -1524,12 +1641,15 @@ class FinanceService:
                         continue
 
                     market = self._infer_market(symbol)
+                    # CN listed funds are upstream-reported as EQUITY; the
+                    # fund-code heuristic restores type='fund' (M2 phase A).
+                    symbol_type = self._classify_symbol_type(symbol, q_type)
 
                     fin_symbol = FinanceSymbol(
                         tenant_id=tenant_id,
                         symbol=symbol,
                         name=name,
-                        type=self._map_yfinance_type(q_type),
+                        type=symbol_type,
                         market=market,
                         exchange=exchange,
                         currency=q.get("currency", "USD"),
@@ -1541,7 +1661,7 @@ class FinanceService:
                         {
                             "symbol": symbol,
                             "name": name,
-                            "type": self._map_yfinance_type(q_type),
+                            "type": symbol_type,
                             "market": market,
                             "exchange": exchange,
                             "current_price": None,
@@ -1573,7 +1693,8 @@ class FinanceService:
             return "US"
         return "US"
 
-    def _map_yfinance_type(self, q_type: str) -> str:
+    @classmethod
+    def _map_yfinance_type(cls, q_type: str) -> str:
         type_map = {
             "EQUITY": "stock",
             "ETF": "fund",
@@ -1585,6 +1706,40 @@ class FinanceService:
             "COMMODITY": "commodity",
         }
         return type_map.get(q_type, "stock")
+
+    # 6-digit CN fund-code heuristic (fund-intraday-nav.md, M2 phase A).
+    # External search indexes map CN listed ETFs/LOFs to EQUITY and miss OTC
+    # open-end funds entirely, which left the intraday NAV pipeline without
+    # consumable type='fund' symbols. Unambiguous CN fund-code families:
+    #   leading '5'           — SSE listed-fund family (ETF/LOF/close-end)
+    #   prefixes 15 / 16 / 18 — SZSE listed-fund family (ETF/LOF/close-end)
+    #   prefixes 005..009     — mainstream OTC open-end fund ranges
+    # Main-board / GEM / STAR / BSE equity prefixes (60/68/00/30/8x/4x/9x)
+    # never classify as fund. OTC 11x-series funds (convertible-bond code
+    # collision) are deliberately NOT covered here — they reach the pipeline
+    # via the seed data instead.
+    _CN_FUND_CODE_LEADING = "5"
+    _CN_FUND_CODE_PREFIXES2 = ("15", "16", "18")
+    _CN_FUND_CODE_PREFIXES3 = ("005", "006", "007", "008", "009")
+
+    @classmethod
+    def _is_cn_fund_code(cls, code: str | None) -> bool:
+        if not code or len(code) != 6 or not code.isdigit():
+            return False
+        return (
+            code[0] == cls._CN_FUND_CODE_LEADING
+            or code[:2] in cls._CN_FUND_CODE_PREFIXES2
+            or code[:3] in cls._CN_FUND_CODE_PREFIXES3
+        )
+
+    @classmethod
+    def _classify_symbol_type(cls, symbol: str, yahoo_quote_type: str) -> str:
+        """Effective symbol type: the CN fund-code heuristic overrides Yahoo's
+        mapping (CN listed funds are upstream-reported as EQUITY)."""
+        fund_code = cls._normalize_fund_code(symbol)
+        if fund_code and cls._is_cn_fund_code(fund_code):
+            return "fund"
+        return cls._map_yfinance_type(yahoo_quote_type)
 
     def _paginate_results(self, results: list, page: int, page_size: int) -> dict:
         total = len(results)

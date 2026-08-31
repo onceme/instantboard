@@ -178,6 +178,7 @@ class TestInitDBModule:
         from app.db.init_db import (
             FINANCE_SOURCES,
             FUND_INDEX_BINDINGS,
+            FUND_SYMBOL_SEEDS,
             TECH_AI_SOURCES,
             TECH_CROSS_DOMAIN_SOURCES,
             TECH_EMBEDDED_SOURCES,
@@ -221,6 +222,9 @@ class TestInitDBModule:
             elif call_count == 6:
                 # all fund index bindings already exist (fund-intraday-nav.md §3.3 seed)
                 r.all.return_value = [(code,) for code, _ in FUND_INDEX_BINDINGS]
+            elif call_count == 7:
+                # all fund symbols already exist (fund-intraday-nav.md M2 phase A seed)
+                r.all.return_value = [(symbol,) for symbol, _ in FUND_SYMBOL_SEEDS]
             return r
 
         with (
@@ -475,6 +479,7 @@ class TestInitDBModule:
         from app.db.init_db import (
             FINANCE_SOURCES,
             FUND_INDEX_BINDINGS,
+            FUND_SYMBOL_SEEDS,
             TECH_AI_SOURCES,
             TECH_CROSS_DOMAIN_SOURCES,
             TECH_EMBEDDED_SOURCES,
@@ -524,6 +529,10 @@ class TestInitDBModule:
                 # fund index bindings all present → binding seed skips
                 # (fund-intraday-nav.md §3.3)
                 r.all.return_value = [(code,) for code, _ in FUND_INDEX_BINDINGS]
+            elif call_count == 7:
+                # fund symbols all present → fund symbol seed skips
+                # (fund-intraday-nav.md M2 phase A)
+                r.all.return_value = [(symbol,) for symbol, _ in FUND_SYMBOL_SEEDS]
             return r
 
         with (
@@ -532,7 +541,8 @@ class TestInitDBModule:
         ):
             await seed_default_data()
         mock_session.commit.assert_called()
-        # add is called only 4 times for tenants/categories, never for sources/bindings
+        # add is called only 4 times for tenants/categories, never for
+        # sources/bindings/fund symbols
         assert mock_session.add.call_count == 4  # system tenant, default tenant, finance cat, tech cat
 
     async def test_seed_full_source_creation(self):

@@ -10,7 +10,7 @@ from app.db.partitions import ensure_quote_partitions
 from app.db.session import apply_service_context, async_session_factory
 from app.models.base import Base
 from app.models.category import Category
-from app.models.finance import BINDING_SOURCE_SEED, FundIndexBinding
+from app.models.finance import BINDING_SOURCE_SEED, FinanceSymbol, FundIndexBinding
 from app.models.source import Source, SourceHealth
 from app.models.tenant import Tenant
 
@@ -49,6 +49,46 @@ FUND_INDEX_BINDINGS = [
     ("001548", "000016.SS"),  # 天弘上证50指数 → 上证50
     ("005918", "399006.SZ"),  # 天弘创业板指数 → 创业板指
     ("003765", "000933.SS"),  # 天弘中证医药100 → 中证医药
+]
+
+# Fund symbol seeds for the system tenant (fund-intraday-nav.md, M2 phase A).
+# Production/staging had zero type='fund' finance_symbols rows — external search
+# maps CN listed funds to 'stock' and misses OTC open-end funds entirely, so no
+# tenant could add a fund to a watchlist and the intraday pipeline had nothing
+# to consume. Listed ETFs/LOFs carry the exchange suffix (search/Yahoo spelling,
+# `_normalize_fund_code` reduces them to the 6-digit code used by the bindings
+# table); OTC open-end funds use bare codes. Coverage is a superset of
+# FUND_INDEX_BINDINGS plus a few popular active funds.
+FUND_SYMBOL_SEEDS = [
+    # 场内 ETF / LOF（带交易所后缀，与搜索返回拼写一致）
+    ("510300.SS", "华泰柏瑞沪深300ETF"),
+    ("510500.SS", "南方中证500ETF"),
+    ("510050.SS", "华夏上证50ETF"),
+    ("159915.SZ", "易方达创业板ETF"),
+    ("512880.SS", "国泰中证全指证券公司ETF"),
+    ("588000.SS", "华夏上证科创板50ETF"),
+    ("512100.SS", "南方中证1000ETF"),
+    ("510880.SS", "华泰柏瑞红利ETF"),
+    ("159901.SZ", "易方达深证100ETF"),
+    ("512010.SS", "医药ETF"),
+    ("159928.SZ", "汇添富中证主要消费ETF"),
+    ("512660.SS", "国泰中证军工ETF"),
+    ("512980.SS", "广发中证传媒ETF"),
+    ("160706.SZ", "嘉实沪深300ETF联接(LOF)A"),
+    ("160119.SZ", "南方中证500ETF联接(LOF)A"),
+    # 场外开放式基金（6 位裸代码，无交易所后缀）
+    ("110020", "易方达沪深300ETF联接A"),
+    ("000051", "华夏沪深300ETF联接A"),
+    ("000961", "天弘沪深300ETF联接A"),
+    ("000962", "天弘中证500指数A"),
+    ("001548", "天弘上证50指数A"),
+    ("005918", "天弘创业板指数A"),
+    ("003765", "天弘中证医药100A"),
+    ("110011", "易方达优质精选混合(QDII)"),
+    ("161725", "招商中证白酒指数(LOF)A"),
+    ("005827", "易方达蓝筹精选混合"),
+    ("320007", "诺安成长混合"),
+    ("260108", "景顺长城新兴成长混合"),
 ]
 
 
@@ -655,6 +695,37 @@ async def seed_default_data():
             logger.info(f"Seeded {len(missing_bindings)} fund index bindings for system tenant")
         else:
             logger.info("All seed fund index bindings already exist, skipping binding seed")
+
+        # Fund symbols (fund-intraday-nav.md M2 phase A): system-tenant type='fund'
+        # rows — idempotent backfill keyed by (tenant, symbol), matching the
+        # source/binding seed shape above. Feeds the daily official-NAV job and
+        # the intraday pipeline; other tenants get their own copies via search
+        # auto-registration.
+        existing_fund_symbols_result = await session.execute(
+            select(FinanceSymbol.symbol).where(FinanceSymbol.tenant_id == system_tenant.id)
+        )
+        existing_fund_symbols = {sym for (sym,) in existing_fund_symbols_result.all()}
+        missing_fund_symbols = [
+            FinanceSymbol(
+                tenant_id=system_tenant.id,
+                symbol=fund_symbol,
+                name=fund_name,
+                type="fund",
+                market="CN",
+                exchange="",
+                currency="CNY",
+                is_active=True,
+            )
+            for fund_symbol, fund_name in FUND_SYMBOL_SEEDS
+            if fund_symbol not in existing_fund_symbols
+        ]
+        if missing_fund_symbols:
+            for fund_symbol_row in missing_fund_symbols:
+                session.add(fund_symbol_row)
+            await session.flush()
+            logger.info(f"Seeded {len(missing_fund_symbols)} fund symbols for system tenant")
+        else:
+            logger.info("All seed fund symbols already exist, skipping fund symbol seed")
 
         await session.commit()
         logger.info("Default data seeded successfully")

@@ -490,9 +490,17 @@ class AsyncSchedulerManager:
                 if not service._is_market_open("CN"):
                     if self._fund_intraday_gate_open:
                         self._fund_intraday_gate_open = False
-                        # TODO(M2): close-of-market forced snapshot on this
-                        # open→closed edge (fund-intraday-nav.md §3.4 case 3).
-                        logger.info(f"{job_id}: CN market closed (cycle loop stopped)")
+                        # Close-of-market forced snapshot on the open→closed edge
+                        # (fund-intraday-nav.md §3.4 case 3): flushes the last
+                        # computed estimates via the downsample channel.
+                        # write_close_snapshots guarantees it never raises.
+                        from app.services.fund_intraday import write_close_snapshots
+
+                        closed_rows = await write_close_snapshots(session)
+                        logger.info(
+                            f"{job_id}: CN market closed (cycle loop stopped), "
+                            f"close-of-market snapshot wrote {closed_rows} row(s)"
+                        )
                     logger.debug(f"{job_id}: CN market closed, skipping")
                     self._last_run_results[job_id] = {"success": True, "items_count": 0}
                     return

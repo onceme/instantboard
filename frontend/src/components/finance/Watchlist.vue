@@ -43,10 +43,18 @@ function isDelayedNav(nav: FundNAVIntraday | null | undefined): boolean {
       nav.quote_status === "mixed")
   );
 }
+// Delay-tier labels per market (fund-intraday-nav.md §1.2/§6.1 magnitudes):
+// HK free feeds lag ~15-25min, US ~15min; A-shares are realtime and never
+// appear in delayed_markets.
+const DELAY_TIER_LABELS: Record<string, string> = {
+  HK: "HK ≈15~25min",
+  US: "US ≈15min",
+};
 function delayedMarketsLabel(nav: FundNAVIntraday | null | undefined): string {
-  return nav != null && nav.delayed_markets.length > 0
-    ? nav.delayed_markets.join("/")
-    : "行情";
+  if (nav == null || nav.delayed_markets.length === 0) return "行情";
+  return nav.delayed_markets
+    .map((m) => DELAY_TIER_LABELS[m] ?? `${m} 延迟`)
+    .join(" · ");
 }
 
 // Tooltip texts for the estimate badges (accuracy definition, unknown-position
@@ -54,12 +62,13 @@ function delayedMarketsLabel(nav: FundNAVIntraday | null | undefined): string {
 const COVERAGE_BADGE_TOOLTIP =
   "精度口径：可得持仓权重之和占净值比例。基金未披露的仓位按盘中不变假设处理，精度越低估值偏差可能越大。估值仅供参考，不构成投资建议";
 function delayedBadgeTooltip(markets: string[]): string {
-  return `含延迟行情成分（港股免费源延迟约15~25分钟、美股约15分钟，涉及市场：${markets.join(
-    "/",
-  )}），估值基于延迟行情计算`;
+  const tiers = markets
+    .map((m) => DELAY_TIER_LABELS[m] ?? `${m} 延迟`)
+    .join("、");
+  return `含延迟行情成分（${tiers}），估值基于延迟行情计算，可能与实时价格存在偏差`;
 }
 const STALE_BADGE_TOOLTIP =
-  "该基金持仓披露报告期已超过新鲜度阈值，估值基于较旧持仓，可能与实际组合存在偏差";
+  "该基金持仓披露报告期已超过 120 天新鲜度阈值：持仓不足以代表当前组合，估值已转为指数外推或仅显示官方净值，偏差可能较大";
 
 // Inline alert-threshold editor state (one editor open at a time).
 // Mirror the backend 0.5-50 range client-side for immediate feedback; the

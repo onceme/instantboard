@@ -87,6 +87,22 @@ function delayedMarketsText(fund: FundNAVIntraday): string {
     ? `（${fund.delayed_markets.join("/")} 延迟）`
     : "";
 }
+
+// Concise reason for the degraded estimate methods (fund-intraday-nav.md
+// §4.3): why the holdings-weighted path is not in effect.
+function methodReason(fund: FundNAVIntraday): string | null {
+  if (fund.estimate_method === "index_tracking") {
+    if (fund.holdings_report_date == null) return "无可用持仓，改用指数外推";
+    if (fund.holdings_stale) return "持仓报告期超过 120 天，改用指数外推";
+    return "可得持仓精度不足，采用指数外推";
+  }
+  if (fund.estimate_method === "latest_official") {
+    return fund.holdings_stale
+      ? "持仓披露异常或过旧，仅显示官方净值"
+      : "暂无可用持仓与指数绑定，仅显示官方净值";
+  }
+  return null;
+}
 </script>
 
 <template>
@@ -166,6 +182,11 @@ function delayedMarketsText(fund: FundNAVIntraday): string {
           <span class="estimate-method">{{
             METHOD_LABELS[selectedFund.estimate_method]
           }}</span>
+        </div>
+
+        <div v-if="methodReason(selectedFund)" class="nav-row">
+          <span class="nav-label">方法说明</span>
+          <span class="method-reason">{{ methodReason(selectedFund) }}</span>
         </div>
 
         <div class="nav-row">
@@ -357,6 +378,11 @@ function delayedMarketsText(fund: FundNAVIntraday): string {
 .estimate-method {
   font-size: 13px;
   color: var(--text-secondary);
+}
+
+.method-reason {
+  font-size: 12px;
+  color: var(--text-muted);
 }
 
 .nav-coverage-badge {

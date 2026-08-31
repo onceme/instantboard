@@ -311,6 +311,12 @@ class UpstreamBudgetGovernor:
 
         alternatives.sort(key=lambda entry: (-entry[0], chain.index(entry[1])))
         best = alternatives[0][1]
+        # Structured observability (fund-intraday-nav.md §13 M2): a pre-switch
+        # means the preferred source is nearing its budget ceiling — worth an
+        # INFO trail so a burst of switches is visible without scraping debug.
+        logger.info(
+            f"upstream_budget: pre-switch {market} chain {preferred}->{best} (preferred budget left {left}/{budget})"
+        )
         return [best, *([n for n in chain if n != best])]
 
     # --- result reporting ---

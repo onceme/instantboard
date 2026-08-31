@@ -51,11 +51,17 @@ ESTIMATE_METHOD_OFFICIAL = "official"
 # reset via reset_cycle_state().
 _LAST_PUSH_SIGNATURES: dict[str, tuple] = {}
 _LAST_FLUSH_MODES: dict[str, tuple] = {}
+# Last successful cycle context (fund-intraday-nav.md §3.4 case 3, M2): the
+# open→closed gate edge writes the closing snapshot from the LAST computed
+# estimates — recomputing at the edge is not an option (market already closed,
+# quotes stale). Keys: results_by_code, ids_per_code.
+_LAST_CYCLE_CONTEXT: dict = {}
 
 
 def reset_cycle_state() -> None:
     _LAST_PUSH_SIGNATURES.clear()
     _LAST_FLUSH_MODES.clear()
+    _LAST_CYCLE_CONTEXT.clear()
 
 
 def _index_symbol_to_constituent(index_symbol: str) -> tuple[str, str]:
@@ -305,9 +311,29 @@ class FundIntradayService:
                 )
             )
 
+        # Stash the cycle context for the open→closed gate-edge closing snapshot
+        # write (§3.4 case 3, M2) — the scheduler calls write_close_snapshots()
+        # with the same session when the CN market flips closed.
+        _LAST_CYCLE_CONTEXT.clear()
+        _LAST_CYCLE_CONTEXT.update(
+            {
+                "results_by_code": {r["symbol"]: r for r in results},
+                "ids_per_code": ids_per_code,
+            }
+        )
+
         await self._write_rt_cache(results)
         pushed_tenants = await self._push_batch(results, per_tenant)
         await self._flush_results(results, ids_per_code)
+
+        # Structured observability (fund-intraday-nav.md §13 M2): a cycle that
+        # nears the interval budget risks coalescing/overlap, so it warns early.
+        elapsed = (datetime.now(UTC) - now).total_seconds()
+        if elapsed > 2.5:
+            logger.warning(
+                f"fund_intraday: cycle duration {elapsed:.2f}s exceeds the 2.5s "
+                f"soft budget (codes={len(codes)}, pushed_tenants={pushed_tenants})"
+            )
 
         return {"codes": len(codes), "results": results, "pushed_tenants": pushed_tenants}
 
@@ -547,9 +573,10 @@ class FundIntradayService:
         state switch (method/quote_status changed vs. last flush) forces a
         write, otherwise a SET NX EX throttle bounds writes to one per
         fund_nav_db_flush_min_gap window. latest_official rows are skipped —
-        they carry no estimate to record.
-        TODO(M2): close-of-market forced snapshot on the open→closed gate edge
-        (fund-intraday-nav.md §3.4 case 3 + §13 M2)."""
+        they carry no estimate to record. The third rule (close-of-market
+        forced snapshot on the open→closed gate edge) lives in the
+        module-level write_close_snapshots() so the scheduler can invoke it
+        outside the cycle (fund-intraday-nav.md §3.4 case 3)."""
         gap = settings.fund_nav_db_flush_min_gap
         try:
             client = await get_redis_client()
@@ -647,3 +674,50 @@ class FundIntradayService:
         else:
             row.holdings_report_date = None
         return True
+
+
+async def write_close_snapshots(session) -> int:
+    """Close-of-market forced snapshot write (fund-intraday-nav.md §3.4 case 3).
+
+    Called by the scheduler on the open→closed gate edge with the same service
+    session the cycles used. Flushes the LAST computed estimates for every fund
+    that carried a holdings_weighted/index_tracking estimate, regardless of the
+    downsample throttle window, so fund_nav_estimates holds the closing snapshot
+    (fresh fetches are impossible at the edge — the market is already closed).
+    Also clears the throttle keys and flush-mode state so the next session's
+    first in-session write is not swallowed by a stale window. Returns rows
+    written; never raises (the gate path must stay exception-free)."""
+    results_by_code = _LAST_CYCLE_CONTEXT.get("results_by_code") or {}
+    ids_per_code = _LAST_CYCLE_CONTEXT.get("ids_per_code") or {}
+    due = [r for r in results_by_code.values() if r.get("estimate_method") in ("holdings_weighted", "index_tracking")]
+
+    written = 0
+    if due:
+        svc = FundIntradayService(db=session)
+        for result in due:
+            try:
+                if await svc._upsert_flush_row(result, ids_per_code):
+                    written += 1
+            except Exception as exc:  # noqa: BLE001 - one fund's failure must not drop the rest
+                logger.warning(f"fund_intraday: close snapshot upsert failed for {result.get('symbol')}: {exc}")
+        if written:
+            try:
+                await session.commit()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"fund_intraday: close snapshot commit failed: {exc}")
+                with contextlib.suppress(Exception):
+                    await session.rollback()
+                written = 0
+
+    # Reset throttle windows + flush modes for the next trading session.
+    try:
+        client = await get_redis_client()
+        for result in due:
+            await client.delete(RedisKeys.fund_nav_rt_flush_key(result["symbol"]))
+    except Exception as exc:  # noqa: BLE001 - stale windows merely delay the next write
+        logger.debug(f"fund_intraday: close throttle reset failed: {exc}")
+
+    _LAST_FLUSH_MODES.clear()
+    _LAST_CYCLE_CONTEXT.clear()
+    logger.info(f"fund_intraday: close-of-market snapshot wrote {written} row(s)")
+    return written

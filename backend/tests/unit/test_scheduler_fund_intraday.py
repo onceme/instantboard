@@ -170,6 +170,43 @@ class TestCycleGate:
         result = mgr._last_run_results[FUND_NAV_INTRADAY_JOB_ID]
         assert result["success"] is False and "boom" in result["error"]
 
+    async def test_gate_open_to_closed_edge_writes_close_snapshot(self):
+        """§3.4 case 3 (M2): the open→closed edge invokes the closing snapshot
+        write with the cycle's service session."""
+        mgr = _make_manager()
+        mgr._fund_intraday_gate_open = True  # the loop was running
+        session = _mock_session()
+        with (
+            patch("app.db.session.async_session_factory", return_value=session),
+            patch.object(FinanceService, "_is_market_open", return_value=False),
+            patch(
+                "app.services.fund_intraday.write_close_snapshots",
+                new_callable=AsyncMock,
+                return_value=2,
+            ) as mock_close,
+        ):
+            await mgr._run_fund_intraday_refresh()
+        mock_close.assert_awaited_once_with(session)
+        assert mgr._fund_intraday_gate_open is False
+        result = mgr._last_run_results[FUND_NAV_INTRADAY_JOB_ID]
+        assert result["success"] is True and result["items_count"] == 0
+
+    async def test_gate_closed_twice_no_duplicate_snapshot(self):
+        """No prior open cycle → no snapshot write on a plain closed round."""
+        mgr = _make_manager()
+        assert mgr._fund_intraday_gate_open is False
+        with (
+            patch("app.db.session.async_session_factory", return_value=_mock_session()),
+            patch.object(FinanceService, "_is_market_open", return_value=False),
+            patch(
+                "app.services.fund_intraday.write_close_snapshots",
+                new_callable=AsyncMock,
+            ) as mock_close,
+        ):
+            await mgr._run_fund_intraday_refresh()
+        mock_close.assert_not_awaited()
+        assert mgr._last_run_results[FUND_NAV_INTRADAY_JOB_ID]["success"] is True
+
 
 class TestMarketCalendarGateTruth:
     """The scheduler gate consumes FinanceService._is_market_open('CN'); these

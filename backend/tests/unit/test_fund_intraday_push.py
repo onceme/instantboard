@@ -228,3 +228,106 @@ class TestRtCacheWrite:
         ):
             # must not raise — the compute cycle continues without the cache
             await svc._write_rt_cache([_entry("510300")])
+
+
+class TestWriteCloseSnapshots:
+    """Close-of-market forced snapshot (fund-intraday-nav.md §3.4 case 3)."""
+
+    async def test_empty_context_writes_nothing(self):
+        session = AsyncMock()
+        session.commit = AsyncMock()
+        with patch(
+            "app.services.fund_intraday.FundIntradayService._upsert_flush_row",
+            new_callable=AsyncMock,
+        ) as mock_upsert:
+            written = await fund_intraday.write_close_snapshots(session)
+        assert written == 0
+        mock_upsert.assert_not_awaited()
+        session.commit.assert_not_awaited()
+
+    async def test_writes_estimated_rows_and_skips_latest_official(self):
+        hw = _entry("510300", method="holdings_weighted", status="realtime")
+        it = _entry("005827", method="index_tracking", status="realtime")
+        lo = _entry("110011", method="latest_official", status="frozen")
+        fund_intraday._LAST_CYCLE_CONTEXT.update(
+            {
+                "results_by_code": {"510300": hw, "005827": it, "110011": lo},
+                "ids_per_code": {"510300": ["s1"], "005827": ["s2"], "110011": ["s3"]},
+            }
+        )
+        session = AsyncMock()
+        session.commit = AsyncMock()
+        redis_client = AsyncMock()
+        redis_client.delete = AsyncMock(return_value=1)
+        with (
+            patch(
+                "app.services.fund_intraday.FundIntradayService._upsert_flush_row",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_upsert,
+            patch(
+                "app.services.fund_intraday.get_redis_client",
+                new_callable=AsyncMock,
+                return_value=redis_client,
+            ),
+        ):
+            written = await fund_intraday.write_close_snapshots(session)
+        assert written == 2  # holdings_weighted + index_tracking, not latest_official
+        assert mock_upsert.await_count == 2
+        session.commit.assert_awaited_once()
+        # throttle windows cleared for the next session
+        assert redis_client.delete.await_count == 2
+        # context + flush modes reset after the edge
+        assert fund_intraday._LAST_CYCLE_CONTEXT == {}
+        assert fund_intraday._LAST_FLUSH_MODES == {}
+
+    async def test_single_fund_upsert_failure_does_not_block_rest(self):
+        hw = _entry("510300", method="holdings_weighted", status="realtime")
+        it = _entry("005827", method="index_tracking", status="realtime")
+        fund_intraday._LAST_CYCLE_CONTEXT.update(
+            {
+                "results_by_code": {"510300": hw, "005827": it},
+                "ids_per_code": {"510300": ["s1"], "005827": ["s2"]},
+            }
+        )
+        session = AsyncMock()
+        session.commit = AsyncMock()
+        with (
+            patch(
+                "app.services.fund_intraday.FundIntradayService._upsert_flush_row",
+                new_callable=AsyncMock,
+                side_effect=[RuntimeError("db glitch"), True],
+            ),
+            patch(
+                "app.services.fund_intraday.get_redis_client",
+                new_callable=AsyncMock,
+                return_value=AsyncMock(delete=AsyncMock(return_value=1)),
+            ),
+        ):
+            written = await fund_intraday.write_close_snapshots(session)
+        assert written == 1  # second fund still written
+        session.commit.assert_awaited_once()
+
+    async def test_commit_failure_returns_zero_without_raising(self):
+        hw = _entry("510300", method="holdings_weighted", status="realtime")
+        fund_intraday._LAST_CYCLE_CONTEXT.update(
+            {"results_by_code": {"510300": hw}, "ids_per_code": {"510300": ["s1"]}}
+        )
+        session = AsyncMock()
+        session.commit = AsyncMock(side_effect=RuntimeError("commit failed"))
+        session.rollback = AsyncMock()
+        with (
+            patch(
+                "app.services.fund_intraday.FundIntradayService._upsert_flush_row",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "app.services.fund_intraday.get_redis_client",
+                new_callable=AsyncMock,
+                return_value=AsyncMock(delete=AsyncMock(return_value=1)),
+            ),
+        ):
+            written = await fund_intraday.write_close_snapshots(session)
+        assert written == 0
+        session.rollback.assert_awaited_once()

@@ -52,16 +52,23 @@ class BaseCollector(abc.ABC):
                 source_id=source_id,
             )
 
-        raw_data = await self._collect_with_retry(source)
+        raw_data, fetch_error = await self._collect_with_retry(source)
         elapsed_ms = int((time.monotonic() - start_time) * 1000)
 
         if raw_data is None:
-            await self.record_health(source, False, elapsed_ms, "All retry attempts failed")
+            # Keep the REAL root cause of the last failed attempt (exception
+            # type + message, e.g. "HTTPStatusError: ... 403 Forbidden" or
+            # "ConnectTimeout: ...") instead of a generic message — the bare
+            # "All retry attempts failed" made field diagnosis impossible.
+            error = f"All {self.max_retries} retry attempts failed"
+            if fetch_error:
+                error = f"{error}: {fetch_error}"
+            await self.record_health(source, False, elapsed_ms, error)
             return CollectionResult(
                 items=[],
                 success=False,
                 response_time_ms=elapsed_ms,
-                error="All retry attempts failed",
+                error=error,
                 source_id=source_id,
             )
 
@@ -99,12 +106,17 @@ class BaseCollector(abc.ABC):
             source_id=source_id,
         )
 
-    async def _collect_with_retry(self, source: Any) -> Any | None:
+    async def _collect_with_retry(self, source: Any) -> tuple[Any | None, str | None]:
+        """Returns (raw_data, None) on success, (None, root_cause) after the
+        final attempt fails, where root_cause is "ExceptionType: message" of
+        the LAST failed attempt so callers can surface it as last_error."""
+        last_error: str | None = None
         for attempt in range(1, self.max_retries + 1):
             try:
                 raw_data = await self.fetch_data(source)
-                return raw_data
+                return raw_data, None
             except Exception as e:
+                last_error = f"{type(e).__name__}: {str(e)[:400]}"
                 logger.warning(
                     f"Collect attempt {attempt}/{self.max_retries} failed "
                     f"for source {getattr(source, 'name', 'unknown')}: {e}"
@@ -113,7 +125,7 @@ class BaseCollector(abc.ABC):
                     delay = self.retry_base_delay_seconds * (2 ** (attempt - 1))
                     await asyncio.sleep(delay)
         logger.error(f"All {self.max_retries} attempts failed for source {getattr(source, 'name', 'unknown')}")
-        return None
+        return None, last_error
 
     async def rate_limit_check(self, source: Any) -> bool:
         if self.rate_limit_per_minute <= 0:

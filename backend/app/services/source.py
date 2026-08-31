@@ -8,7 +8,7 @@ from sqlalchemy.orm import selectinload
 # Fix: the local SYSTEM_TENANT_ID used to be the string "system", which asyncpg failed to
 # encode when compared against a UUID column. Reuse the UUID constant from core.constants
 # instead (keeping the original exported name so modules like dashboard still work).
-from app.collectors import resolve_collector
+from app.collectors import COLLECTOR_REGISTRY, resolve_collector
 from app.core.constants import SYSTEM_TENANT_ID
 from app.core.exceptions import (
     CategoryNotFound,
@@ -125,12 +125,14 @@ class SourceService:
         # the source would sit in is_active=True forever without collecting anything
         # (e.g. an api/social source with no config.library override).
         if resolve_collector(source_type, config) is None:
+            # Derived from the registry so the list can never drift out of
+            # sync with the collectors actually registered.
+            libraries = ", ".join(sorted(COLLECTOR_REGISTRY))
             raise NoCollectorAvailable(
                 message=(
                     f"No collector available for source_type '{source_type}'. "
-                    "Set config.library to a supported collector "
-                    "(yfinance, alpha_vantage, eastmoney, finnhub, iex_cloud, rss, "
-                    "hackernews, arxiv, reddit) or keep the source inactive."
+                    f"Set config.library to a supported collector "
+                    f"({libraries}) or keep the source inactive."
                 )
             )
 

@@ -1,6 +1,7 @@
 """Unit tests for app/collectors package."""
 
 import asyncio
+import json
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -135,6 +136,76 @@ class TestBaseCollector:
             result = await c.collect(source)
         assert result.success is False
         assert "retry" in result.error.lower()
+
+    async def test_collect_failure_keeps_root_cause(self):
+        # The generic "All retry attempts failed" made field diagnosis
+        # impossible; the last real exception (type + message) must survive
+        # into CollectionResult.error and the health record.
+        class ConcreteCol(BaseCollector):
+            max_retries = 2
+            retry_base_delay_seconds = 0.01
+
+            async def fetch_data(self, source):
+                raise ConnectionError("upstream returned 403 Forbidden")
+
+            async def parse_data(self, raw_data, source):
+                return []
+
+        c = ConcreteCol()
+        source = _make_source()
+        with (
+            patch("app.collectors.base.redis_get", new_callable=AsyncMock, return_value=None),
+            patch("app.collectors.base.redis_set", new_callable=AsyncMock) as mock_set,
+        ):
+            result = await c.collect(source)
+        assert result.success is False
+        assert "ConnectionError" in result.error
+        assert "403 Forbidden" in result.error
+        # record_health must receive the same detailed message so it lands in
+        # the source's last_error via the scheduler.
+        recorded = json.loads(mock_set.call_args.args[1])
+        assert "ConnectionError" in recorded["last_error_message"]
+        assert "403 Forbidden" in recorded["last_error_message"]
+
+    async def test_collect_failure_root_cause_from_last_attempt_only(self):
+        attempts = 0
+
+        class ConcreteCol(BaseCollector):
+            max_retries = 3
+            retry_base_delay_seconds = 0.01
+
+            async def fetch_data(self, source):
+                nonlocal attempts
+                attempts += 1
+                raise RuntimeError(f"boom-{attempts}")
+
+            async def parse_data(self, raw_data, source):
+                return []
+
+        c = ConcreteCol()
+        with (
+            patch("app.collectors.base.redis_get", new_callable=AsyncMock, return_value=None),
+            patch("app.collectors.base.redis_set", new_callable=AsyncMock),
+        ):
+            result = await c.collect(_make_source())
+        assert attempts == 3
+        assert "boom-3" in result.error
+        assert "boom-1" not in result.error
+
+    async def test_collect_with_retry_success_returns_no_error(self):
+        class ConcreteCol(BaseCollector):
+            max_retries = 2
+            retry_base_delay_seconds = 0.01
+
+            async def fetch_data(self, source):
+                return {"ok": True}
+
+            async def parse_data(self, raw_data, source):
+                return []
+
+        raw_data, error = await ConcreteCol()._collect_with_retry(_make_source())
+        assert raw_data == {"ok": True}
+        assert error is None
 
     async def test_collect_parse_error(self):
         class ConcreteCol(BaseCollector):

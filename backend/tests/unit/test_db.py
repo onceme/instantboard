@@ -177,6 +177,7 @@ class TestInitDBModule:
         """Idempotent seeding: when tenants/categories/sources all exist, re-running seed creates nothing."""
         from app.db.init_db import (
             FINANCE_SOURCES,
+            FUND_INDEX_BINDINGS,
             TECH_AI_SOURCES,
             TECH_CROSS_DOMAIN_SOURCES,
             TECH_EMBEDDED_SOURCES,
@@ -217,6 +218,9 @@ class TestInitDBModule:
             elif call_count == 5:
                 # all seed sources already exist
                 r.all.return_value = [(name,) for name in all_seed_names]
+            elif call_count == 6:
+                # all fund index bindings already exist (fund-intraday-nav.md §3.3 seed)
+                r.all.return_value = [(code,) for code, _ in FUND_INDEX_BINDINGS]
             return r
 
         with (
@@ -470,6 +474,7 @@ class TestInitDBModule:
         """Do not recreate sources when all seed sources already exist (deduplicated by name)."""
         from app.db.init_db import (
             FINANCE_SOURCES,
+            FUND_INDEX_BINDINGS,
             TECH_AI_SOURCES,
             TECH_CROSS_DOMAIN_SOURCES,
             TECH_EMBEDDED_SOURCES,
@@ -515,6 +520,10 @@ class TestInitDBModule:
             elif call_count == 5:
                 # new flow: query existing source names, all present
                 r.all.return_value = [(name,) for name in all_seed_names]
+            elif call_count == 6:
+                # fund index bindings all present → binding seed skips
+                # (fund-intraday-nav.md §3.3)
+                r.all.return_value = [(code,) for code, _ in FUND_INDEX_BINDINGS]
             return r
 
         with (
@@ -523,7 +532,7 @@ class TestInitDBModule:
         ):
             await seed_default_data()
         mock_session.commit.assert_called()
-        # add is called only 4 times for tenants/categories, never for sources
+        # add is called only 4 times for tenants/categories, never for sources/bindings
         assert mock_session.add.call_count == 4  # system tenant, default tenant, finance cat, tech cat
 
     async def test_seed_full_source_creation(self):

@@ -1,7 +1,14 @@
 from app.models.base import Base, BaseModel, TenantMixin, TimestampMixin
 from app.models.category import Category
 from app.models.dashboard import DashboardSnapshot
-from app.models.finance import FinanceQuote, FinanceSymbol, FundNAVEstimate
+from app.models.finance import (
+    FinanceQuote,
+    FinanceSymbol,
+    FundHoldingsMeta,
+    FundHoldingSnapshot,
+    FundIndexBinding,
+    FundNAVEstimate,
+)
 from app.models.item import Item
 from app.models.source import Source, SourceHealth
 from app.models.sse import SSEConnection
@@ -23,6 +30,9 @@ __all__ = [
     "FinanceSymbol",
     "FinanceQuote",
     "FundNAVEstimate",
+    "FundHoldingSnapshot",
+    "FundHoldingsMeta",
+    "FundIndexBinding",
     "WatchlistItem",
     "SSEConnection",
     "DashboardSnapshot",

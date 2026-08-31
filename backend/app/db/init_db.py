@@ -10,10 +10,46 @@ from app.db.partitions import ensure_quote_partitions
 from app.db.session import apply_service_context, async_session_factory
 from app.models.base import Base
 from app.models.category import Category
+from app.models.finance import BINDING_SOURCE_SEED, FundIndexBinding
 from app.models.source import Source, SourceHealth
 from app.models.tenant import Tenant
 
 logger = logging.getLogger(__name__)
+
+# Fund → tracking index bindings for mainstream broad-based ETFs and feeder
+# (联接) funds (fund-intraday-nav.md §3.3). Fixes the underlying_index_symbol
+# dead-end: without this table no code path ever wrote a binding, so the
+# index-tracking estimate branch never engaged for funds added to a watchlist.
+# Pure backfill semantics: existing bindings are never overwritten (the seed
+# skips known fund codes), so later admin maintenance wins over re-seeding.
+# index_symbol uses finance_symbols style (Yahoo suffix) because the estimate
+# path fetches index quotes through the regular quote failover chain.
+FUND_INDEX_BINDINGS = [
+    # ETFs (交易所交易基金)
+    ("510300", "000300.SS"),  # 华泰柏瑞沪深300ETF → 沪深300
+    ("510500", "000905.SS"),  # 南方中证500ETF → 中证500
+    ("510050", "000016.SS"),  # 华夏上证50ETF → 上证50
+    ("159915", "399006.SZ"),  # 易方达创业板ETF → 创业板指
+    ("512880", "000991.SS"),  # 国泰中证全指证券公司ETF → 证券公司
+    ("588000", "000688.SS"),  # 华夏上证科创板50ETF → 科创50
+    ("512100", "000852.SS"),  # 南方中证1000ETF → 中证1000
+    ("510880", "000015.SS"),  # 华泰柏瑞红利ETF → 上证红利
+    ("159901", "399330.SZ"),  # 易方达深证100ETF → 深证100
+    ("512010", "000933.SS"),  # 汇添富/易方达医药ETF → 中证医药
+    ("159928", "000932.SS"),  # 汇添富中证主要消费ETF → 中证主要消费
+    ("512660", "399967.SZ"),  # 国泰中证军工ETF → 中证军工
+    ("512980", "399971.SZ"),  # 广发中证传媒ETF → 中证传媒
+    # Feeder funds (场外联接基金)
+    ("110020", "000300.SS"),  # 易方达沪深300ETF联接 → 沪深300
+    ("160706", "000300.SS"),  # 嘉实沪深300ETF联接 → 沪深300
+    ("000051", "000300.SS"),  # 华夏沪深300ETF联接 → 沪深300
+    ("000961", "000300.SS"),  # 天弘沪深300指数 → 沪深300
+    ("160119", "000905.SS"),  # 南方中证500ETF联接 → 中证500
+    ("000962", "000905.SS"),  # 天弘中证500指数 → 中证500
+    ("001548", "000016.SS"),  # 天弘上证50指数 → 上证50
+    ("005918", "399006.SZ"),  # 天弘创业板指数 → 创业板指
+    ("003765", "000933.SS"),  # 天弘中证医药100 → 中证医药
+]
 
 
 async def create_tables():
@@ -596,6 +632,29 @@ async def seed_default_data():
             logger.info(f"Seeded {len(missing_sources)} missing data sources for system tenant")
         else:
             logger.info("All seed sources already exist, skipping source seed")
+
+        # Fund → tracking index bindings (fund-intraday-nav.md §3.3). Same
+        # idempotent backfill shape as the source seed above: existing rows win
+        # (checked by fund_code), so admin-maintained bindings survive re-runs.
+        existing_bindings_result = await session.execute(select(FundIndexBinding.fund_code))
+        existing_binding_codes = {code for (code,) in existing_bindings_result.all()}
+        missing_bindings = [
+            FundIndexBinding(
+                tenant_id=system_tenant.id,
+                fund_code=fund_code,
+                index_symbol=index_symbol,
+                source=BINDING_SOURCE_SEED,
+            )
+            for fund_code, index_symbol in FUND_INDEX_BINDINGS
+            if fund_code not in existing_binding_codes
+        ]
+        if missing_bindings:
+            for binding in missing_bindings:
+                session.add(binding)
+            await session.flush()
+            logger.info(f"Seeded {len(missing_bindings)} fund index bindings for system tenant")
+        else:
+            logger.info("All seed fund index bindings already exist, skipping binding seed")
 
         await session.commit()
         logger.info("Default data seeded successfully")

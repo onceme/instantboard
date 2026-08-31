@@ -174,6 +174,51 @@ class Settings(BaseSettings):
     market_indices_refresh_interval: int = Field(default=30, alias="MARKET_INDICES_REFRESH_INTERVAL")
     commodities_refresh_interval: int = Field(default=60, alias="COMMODITIES_REFRESH_INTERVAL")
 
+    # Fund intraday NAV (fund-intraday-nav.md §10): holdings-weighted intraday
+    # estimate of followed funds, computed every N seconds while the CN market
+    # is open and pushed via SSE nav_batch_update.
+    # Master switch: false skips job registration; REST still degrades to
+    # latest_official answers (fund-intraday-nav.md §10).
+    fund_nav_intraday_enabled: bool = Field(default=True, alias="FUND_NAV_INTRADAY_ENABLED")
+    # Estimate cycle seconds; lower bound 2s is the single-cycle timing budget
+    # of the fetch+compute+push pipeline (fund-intraday-nav.md §7.3).
+    fund_nav_intraday_refresh_interval: int = Field(default=3, ge=2, alias="FUND_NAV_INTRADAY_REFRESH_INTERVAL")
+    # Followed-union cap: codes beyond it are truncated (oldest-followed first
+    # kept) so a worst-case union never breaks the cycle budget
+    # (fund-intraday-nav.md §7.2/§7.3). 1000 is the hard configuration-error
+    # ceiling, not an operating point.
+    fund_nav_intraday_max_funds: int = Field(default=500, ge=1, le=1000, alias="FUND_NAV_INTRADAY_MAX_FUNDS")
+    # Holdings freshness threshold in days: disclosures older than this fall
+    # back from holdings_weighted to index_tracking (/latest_official)
+    # (fund-intraday-nav.md §4.3).
+    fund_nav_holdings_fresh_days: int = Field(default=120, ge=1, alias="FUND_NAV_HOLDINGS_FRESH_DAYS")
+    # Minimum coverage (sum of available holding weights, percent) for the
+    # holdings_weighted method; below it the estimator prefers index tracking
+    # (fund-intraday-nav.md §4.3).
+    fund_nav_holdings_min_coverage: float = Field(default=30.0, ge=0.0, alias="FUND_NAV_HOLDINGS_MIN_COVERAGE")
+    # Downsampled DB flush: minimum seconds between two fund_nav_estimates
+    # writes per fund (fund-intraday-nav.md §3.4 case 1).
+    fund_nav_db_flush_min_gap: int = Field(default=60, ge=1, alias="FUND_NAV_DB_FLUSH_MIN_GAP")
+    # Hour (Asia/Shanghai) of the daily holdings refresh cron — after the CN
+    # close, when quarterly disclosure updates land (fund-intraday-nav.md
+    # §5.1/§5.5).
+    fund_holdings_refresh_hour: int = Field(default=18, ge=0, le=23, alias="FUND_HOLDINGS_REFRESH_HOUR")
+
+    # Quote upstream budget governance (fund-intraday-nav.md §6): global safety
+    # factor applied to every upstream's max_rpm budget, and the IP-safety red
+    # line switch that admits the EastMoney push2 MAIN domain into the HK quote
+    # chain (default off — the main domain bans clients after ~8 requests,
+    # §6.3).
+    quote_upstream_safety_factor: float = Field(default=0.8, gt=0.0, le=1.0, alias="QUOTE_UPSTREAM_SAFETY_FACTOR")
+    quote_eastmoney_main_enabled: bool = Field(default=False, alias="QUOTE_EASTMONEY_MAIN_ENABLED")
+    # Per-upstream budget overrides (fund-intraday-nav.md §6.1 registry
+    # defaults; the values below mirror that table so ops can tune without a
+    # code change).
+    quote_tencent_max_rpm: int = Field(default=120, ge=1, alias="QUOTE_TENCENT_MAX_RPM")
+    quote_sina_max_rpm: int = Field(default=60, ge=1, alias="QUOTE_SINA_MAX_RPM")
+    quote_em_delay_max_rpm: int = Field(default=40, ge=1, alias="QUOTE_EM_DELAY_MAX_RPM")
+    quote_em_f10_max_rpm: int = Field(default=8, ge=1, alias="QUOTE_EM_F10_MAX_RPM")
+
     # Dashboard snapshot retention (docs/dev-guide/design/dashboard-tab.md §3.9.3):
     # the metrics collection loop purges dashboard_snapshots rows older than this.
     dashboard_snapshot_retention_days: int = Field(default=30, alias="DASHBOARD_SNAPSHOT_RETENTION_DAYS")

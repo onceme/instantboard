@@ -1251,6 +1251,10 @@ class TestModelsInitExports:
             "FinanceSymbol",
             "FinanceQuote",
             "FundNAVEstimate",
+            # Fund intraday NAV models (fund-intraday-nav.md §3).
+            "FundHoldingSnapshot",
+            "FundHoldingsMeta",
+            "FundIndexBinding",
             "WatchlistItem",
             "SSEConnection",
             "DashboardSnapshot",
@@ -1271,6 +1275,10 @@ class TestModelsInitExports:
             "finance_symbols",
             "finance_quotes",
             "fund_nav_estimates",
+            # Fund intraday NAV tables (fund-intraday-nav.md §3).
+            "fund_holdings_snapshots",
+            "fund_holdings_meta",
+            "fund_index_bindings",
             "watchlist_items",
             "sse_connections",
             "dashboard_snapshots",

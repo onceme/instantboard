@@ -1,8 +1,8 @@
 ---
-version: 1.0
+version: 1.1
 author: designer
 date: 2026-08-31
-status: draft
+status: finalized
 cross_refs: [finance-tab.md, data-sources.md, data-flow.md, database.md, api.md, frontend.md]
 ---
 

@@ -37,6 +37,32 @@ Makefile 和所有 shell 脚本均自动检测 `docker compose`（V2 插件）�
 | `frontend` | 静态资源 (build 产物) | 0.25 CPU / 128M |
 | `mongodb` | 可选，MongoDB 6（`--profile mongodb` 按需启用，默认不启动） | 0.5 CPU / 512M |
 
+## 数据库迁移与历史库引导
+
+**容器启动时自动迁移**。`api` / `worker` 容器的入口脚本（`entrypoint.sh`）在启动应用前会执行 `alembic upgrade head`，数据库 schema 随镜像升级自动演进；若迁移失败会回退到 `create_tables()`（等价 `Base.metadata.create_all()`）。正常情况下无需人工干预。
+
+**为什么需要"历史库引导"**。早期版本的库是先由 `create_all()` 建表、之后才引入 Alembic 迁移链的，这类库的 `alembic_version` **没有记录任何版本行**。从这种状态直接 `alembic upgrade head` 会从 baseline 迁移起步，其 `CREATE TABLE` 撞上已存在的表而失败，迁移链无法推进，后续迁移（例如给 `fund_nav_estimates` 补充 `holdings_coverage_percent` / `holdings_report_date` 两列）永远不会应用，导致基金估值相关接口 500。
+
+为此入口脚本在 `alembic upgrade head` 之前加入了一次性引导逻辑：
+
+1. 检测 `alembic_version` 是否缺失/为空，且 `tenants` 表等 schema 已存在（即"create_all 引导的历史库"）。
+2. 若命中，自动执行 `alembic stamp c3f2a8d1e9b4`，把迁移链标记到基金盘中估值迁移（此时表已存在，无需真正执行建表）。
+3. 随后 `alembic upgrade head` 只会执行幂等修复迁移 `e5a9c4f7b2d1`——它负责补上 `fund_nav_estimates` 的两列，并用 `IF NOT EXISTS` 收敛三张新表（`fund_holdings_snapshots` / `fund_holdings_meta` / `fund_index_bindings`）及其索引与 `tenant_isolation` RLS。
+
+该引导是幂等的：`alembic_version` 一旦有记录，后续启动即为 no-op。
+
+**⚠️ 首次切生产前必查**：
+
+```sql
+-- 连接生产库后执行
+SELECT * FROM alembic_version;
+```
+
+- **返回空** → 这是 create_all 引导的历史库，入口脚本会自动引导，但**建议先知情确认**再继续部署。
+- **返回版本行** → 确认版本链与代码一致即可；正常随 `alembic upgrade head` 演进。
+
+**stamp 的权衡说明**：引导只把版本标记到 `c3f2a8d1e9b4`，不会重跑 baseline 与 RLS 迁移。因此**核心 8 张表若此前未启用 RLS，将维持现状**（不会带来回归）；而三张基金新表由修复迁移 `e5a9c4f7b2d1` 保证带上 `tenant_isolation` RLS。
+
 ## 开发 vs 生产差异
 
 | 项目 | 开发 | 生产 |

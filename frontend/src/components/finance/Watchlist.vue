@@ -14,18 +14,39 @@ import {
 } from "lucide-vue-next";
 import EmptyState from "@/components/common/EmptyState.vue";
 import ErrorAlert from "@/components/common/ErrorAlert.vue";
-import type { FundNAVIntraday, WatchlistItem, WatchlistQuote } from "@/types";
+import type { FundNAVIntraday, WatchlistItem } from "@/types";
 
 const financeStore = useFinanceStore();
 
-// Intraday NAV estimate for a row (fund-intraday-nav.md §9.2): the store's
-// navEstimates (SSE-fed) wins; the quote's fund_nav snapshot seeds rows until
-// the first batch arrives. null → stock/index row (no estimate cell rendered).
-function fundNavFor(item: {
-  symbol: string;
-  quote?: WatchlistQuote;
-}): FundNAVIntraday | null {
-  return financeStore.navEstimates[item.symbol] ?? item.quote?.fund_nav ?? null;
+// Null-safe formatters for the intraday NAV estimate cell (fund-intraday-nav.md
+// §9.2). They accept the nullable estimate fields directly so the template never
+// needs cross-call narrowing (item.nav's fields are `number | null`).
+function fmtNavCurrency(v: number | null | undefined): string {
+  return v != null ? formatCurrency(v, "CNY") : "--";
+}
+function fmtNavPercent(v: number | null | undefined): string {
+  return v != null ? formatPercent(v) : "--";
+}
+function navChangeClass(v: number | null | undefined): string {
+  return v != null ? changeClass(v) : "change-neutral";
+}
+function fmtCoverage(nav: FundNAVIntraday | null | undefined): string | null {
+  return nav != null && nav.coverage_percent != null
+    ? nav.coverage_percent.toFixed(1)
+    : null;
+}
+function isDelayedNav(nav: FundNAVIntraday | null | undefined): boolean {
+  return (
+    nav != null &&
+    (nav.delayed_markets.length > 0 ||
+      nav.quote_status === "delayed" ||
+      nav.quote_status === "mixed")
+  );
+}
+function delayedMarketsLabel(nav: FundNAVIntraday | null | undefined): string {
+  return nav != null && nav.delayed_markets.length > 0
+    ? nav.delayed_markets.join("/")
+    : "行情";
 }
 
 // Tooltip texts for the estimate badges (accuracy definition, unknown-position
@@ -57,6 +78,12 @@ const sortedWatchlist = computed(() => {
     .map((item, index) => ({
       ...item,
       quote: financeStore.watchlistQuotes.get(item.symbol),
+      // Intraday estimate (fund rows): the SSE-fed navEstimates wins; the
+      // quote's fund_nav snapshot seeds the row until the first batch lands.
+      nav:
+        financeStore.navEstimates[item.symbol] ??
+        financeStore.watchlistQuotes.get(item.symbol)?.fund_nav ??
+        null,
       order: index + 1,
     }));
 });
@@ -353,30 +380,21 @@ async function retryWatchlist() {
             }}</span>
             <!-- Intraday NAV badges (fund rows only, fund-intraday-nav.md §9.2) -->
             <span
-              v-if="fundNavFor(item)?.coverage_percent != null"
+              v-if="fmtCoverage(item.nav) != null"
               class="fund-badge fund-badge-coverage"
               :title="COVERAGE_BADGE_TOOLTIP"
             >
-              精度 {{ fundNavFor(item)!.coverage_percent!.toFixed(1) }}%
+              精度 {{ fmtCoverage(item.nav) }}%
             </span>
             <span
-              v-if="
-                fundNavFor(item) &&
-                (fundNavFor(item)!.delayed_markets.length > 0 ||
-                  fundNavFor(item)!.quote_status === 'delayed' ||
-                  fundNavFor(item)!.quote_status === 'mixed')
-              "
+              v-if="isDelayedNav(item.nav)"
               class="fund-badge fund-badge-delayed"
-              :title="delayedBadgeTooltip(fundNavFor(item)!.delayed_markets)"
+              :title="delayedBadgeTooltip(item.nav?.delayed_markets ?? [])"
             >
-              延迟·{{
-                fundNavFor(item)!.delayed_markets.length > 0
-                  ? fundNavFor(item)!.delayed_markets.join("/")
-                  : "行情"
-              }}
+              延迟·{{ delayedMarketsLabel(item.nav) }}
             </span>
             <span
-              v-if="fundNavFor(item)?.holdings_stale"
+              v-if="item.nav?.holdings_stale"
               class="fund-badge fund-badge-stale"
               :title="STALE_BADGE_TOOLTIP"
             >
@@ -398,24 +416,12 @@ async function retryWatchlist() {
           <div v-if="!item.quote" class="item-change">--</div>
           <!-- Intraday estimate column (fund rows only): estimate NAV +
                estimated change vs. official NAV. Hidden below 768px. -->
-          <div v-if="fundNavFor(item)" class="item-nav">
+          <div v-if="item.nav" class="item-nav">
             <span class="nav-value">{{
-              fundNavFor(item)!.nav_estimate != null
-                ? formatCurrency(fundNavFor(item)!.nav_estimate, "CNY")
-                : "--"
+              fmtNavCurrency(item.nav.nav_estimate)
             }}</span>
-            <span
-              :class="
-                fundNavFor(item)!.estimate_change_percent != null
-                  ? changeClass(fundNavFor(item)!.estimate_change_percent)
-                  : 'change-neutral'
-              "
-            >
-              {{
-                fundNavFor(item)!.estimate_change_percent != null
-                  ? formatPercent(fundNavFor(item)!.estimate_change_percent)
-                  : "--"
-              }}
+            <span :class="navChangeClass(item.nav.estimate_change_percent)">
+              {{ fmtNavPercent(item.nav.estimate_change_percent) }}
             </span>
           </div>
           <div class="row-move">

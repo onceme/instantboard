@@ -1,5 +1,5 @@
 ---
-version: 1.8
+version: 1.9
 author: designer
 date: 2026-08-31
 status: draft
@@ -148,7 +148,8 @@ if estimate_type == "realtime" and fund.type == "fund" and nav_official and unde
 > 2. **每日 20:00 官方 NAV 任务** `fund_nav_official_refresh`（cron，Asia/Shanghai；`scheduler/manager.py::add_fund_nav_job`，`main.py` lifespan 与 `worker.py` 两处接线）：`FinanceService.update_official_nav` 对当前租户所有 `type='fund'` 的活跃 `FinanceSymbol`（符号规范化为 6 位基金代码，如 `510300.SS → 510300`）逐个拉取最新官方单位净值 + 净值日期，按 (基金, 净值日期) **upsert** `fund_nav_estimates`（`estimate_method='official'`）；无基金符号/采集失败 → 记日志返回 0，不抛、不杀任务
 > 3. **读库优先**：`get_fund_nav` 的 `nav_official` 优先读 `fund_nav_estimates` 最新一条官方净值行（`nav_official_date` 降序，PG DESC 默认 NULLS FIRST 故显式 `nulls_last()`），回退最新任意行（兼容既有数据）；全表无数据时返回全 None 的温和响应（不 500），Redis 缓存 120s 语义不变
 > 4. **估值回写**：实时估值计算成功后 `_save_nav_estimate` 落库（`estimate_method='index_tracking'`，含底层指数信息）；口径为**按 (基金, 官方净值日期) 覆盖更新**——同一官方净值日内的多次估值更新同一行（表有界），新官方净值日期开新行；落库失败记日志回滚、不影响读路径返回
-> 5. **盘中估值（关注制）** ✅ 已实现：`fund_nav_intraday_refresh`（CN 开市时段 ≤3s 周期，见 §3.8.2）对关注并集内的基金计算盘中估值，新增 `estimate_method='holdings_weighted'` **持仓加权法**——最新披露前十大持仓权重 × 成分股实时涨跌幅加权求和（未披露仓位按盘中不变假设），精度 = 可得持仓权重之和；分层决策为 `holdings_weighted`（持仓新鲜且 coverage 达标）→ `index_tracking`（指数外推，修复后的绑定表提供标的与比率）→ `latest_official`（仅显官方净值）。实时值仅存 Redis `fund_nav_rt:{code}`（TTL 12s），落库走降采样（≥60s/状态切换），推送经 `nav_batch_update` 按租户扇出（见 §3.9）。完整设计见 [fund-intraday-nav.md](fund-intraday-nav.md)
+> 5. **盘中估值（关注制）** ✅ 已实现：`fund_nav_intraday_refresh`（CN 开市时段 ≤3s 周期，见 §3.8.2）对关注并集内的基金计算盘中估值，新增 `estimate_method='holdings_weighted'` **持仓加权法**——最新披露前十大持仓权重 × 成分股实时涨跌幅加权求和（未披露仓位按盘中不变假设），精度 = 可得持仓权重之和；分层决策为 `holdings_weighted`（持仓新鲜且 coverage 达标）→ `index_tracking`（指数外推，修复后的绑定表提供标的与比率）→ `latest_official`（仅显官方净值）。实时值仅存 Redis `fund_nav_rt:{code}`（TTL 12s），落库走降采样（≥60s/状态切换/**门控开→关边沿收盘强写快照**），推送经 `nav_batch_update` 按租户扇出（见 §3.9）。延迟行情档位（港股 ≈15~25min / 美股 ≈15min）与披露异常（`holdings_stale`）在 Watchlist 徽章与 FundNAV 面板均有用户可见标注。完整设计见 [fund-intraday-nav.md](fund-intraday-nav.md)
+> 6. **基金符号可用化** ✅ 已实现（M2）：system 租户种子 27 只主流基金符号（`init_db.py::FUND_SYMBOL_SEEDS`，场内带后缀/场外裸码）；搜索外部兜底的类型映射修复（CN 基金码段启发式覆盖 Yahoo 的 stock 误映射，6 位基金码零命中时自动注册本租户符号）；加自选/估值端点对裸码与带后缀拼写变体互认（见 [fund-intraday-nav.md](fund-intraday-nav.md) §9.3）
 
 > ✅ **绑定断头路已修复**：`underlying_index_symbol` 的初始写入源现为 `fund_index_bindings` 配置表（`db/init_db.py` 种子灌入主流宽基绑定；见 [fund-intraday-nav.md](fund-intraday-nav.md) §3.3/§4.3），`get_fund_nav` 读取次序为绑定表 → 既有行内绑定回退；`tracking_ratio` 改由绑定表提供（默认 1.0，不再硬编码于估值公式）。
 

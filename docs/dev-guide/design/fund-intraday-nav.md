@@ -409,7 +409,7 @@ async def add_fund_intraday_jobs(self):
 
 | 端点 | 状态 | 说明 |
 |------|------|------|
-| `GET /api/v1/finance/fund-nav/batch?symbols=510300,005827` | **新增** | JWT 鉴权；`symbols ≤ 50` 去重；命中 `fund_nav_rt` 返回最新估值，未命中走 `latest_official` 兜底（不触发持仓摄取的重路径，摄取另由钩子异步触发）；未知代码返回 `error` 字段条目而非整体 404；响应 `SuccessResponse[list[FundNAVIntraday]]` |
+| `GET /api/v1/finance/fund-nav/batch?symbols=510300,005827` | **新增** | JWT 鉴权；`symbols ≤ 50` 去重（**超出返回 400 `VALIDATION_ERROR`**——项目异常约定，非 422）；命中 `fund_nav_rt` 返回最新估值，未命中走 `latest_official` 兜底（不触发持仓摄取的重路径，摄取另由钩子异步触发）；未知代码返回 `error` 字段条目而非整体 404；响应 `SuccessResponse[list[FundNAVIntraday]]` |
 | `GET /api/v1/finance/watchlist/quotes`（finance.py:284） | **修改** | `FinanceQuoteResponse` 增可选字段 `fund_nav: FundNAVIntraday \| None`（仅基金条目填充，股票条目 None，向后兼容）——Watchlist 基金行的估值列直接用它 |
 | `GET /api/v1/finance/fund/{symbol}/nav`（finance.py:157） | **修改** | `get_fund_nav` 先读 `fund_nav_rt:{code}`（新鲜→直接返回、跳过副作用推送）；未命中走现有路径；指数绑定改读 `fund_index_bindings`（断头路修复落点，§3.3） |
 | `POST /api/v1/finance/watchlist` | **修改（内部）** | 成功后基金符号触发异步持仓摄取钩子（§5.1）；对外契约不变 |
@@ -426,6 +426,14 @@ async def add_fund_intraday_jobs(self):
 | `frontend/src/components/finance/DetailDrawer.vue` | （可选，低优先）基金类型抽屉内联估值小行，复用 store |
 
 加自选入口：沿用 DetailDrawer/QuoteCard 现有「加入自选」链路（`finance_symbols` 中 `type='fund'` 符号可加），**无需新入口**；加自选后 ≤1 个周期（~3s）估值经 SSE/REST 自动到位，缺数据显示「—」。
+
+### 9.3 基金符号可用化（M2 新增）
+
+M1 部署验证发现的缺口：`finance_symbols` 无任何 `type='fund'` 条目——外部搜索兜底（Yahoo）把中国上市基金映射成 `stock`，场外基金完全不在索引中，用户无法把基金加自选，整条估值管道不可端到端使用。三管齐下（均已实现）：
+
+1. **种子符号**（`db/init_db.py::FUND_SYMBOL_SEEDS`，system 租户、幂等）：27 只主流基金 = 15 只场内 ETF/LOF（带 `.SS`/`.SZ` 后缀，与搜索拼写一致）+ 12 只场外开放式基金（6 位裸码），与 `FUND_INDEX_BINDINGS` 全覆盖 + 常见主动基；
+2. **搜索类型映射修复**（`services/finance.py::_classify_symbol_type`）：CN 基金码段启发式覆盖 Yahoo 类型——首位 `5`（沪市场内基金族）、`15/16/18` 前缀（深市场内）、`005-009`（场外主流段）；股票代码段恒不判基金。**偏差注记**：场外 `11x` 段与可转债代码冲突，有意排除出启发式、由种子覆盖；搜索零命中时 6 位基金码**自动注册**为本租户符号，占位名「基金 {code}」（真实名待官方数据回灌）；
+3. **变体拼写互认**：`add_to_watchlist` / `get_fund_nav` 精确匹配失败后按 `[code, code.SS, code.SZ, code.OF]` 变体回退查找——普通租户经搜索自动注册获得本租户符号（种子归 system 租户，供官方净值任务/管理端使用）。
 
 ## 10. 配置项清单（新增环境变量）
 
@@ -487,9 +495,14 @@ e2e 要点：SSE `nav_batch_update` 前端消费；Watchlist 基金行估值列/
 7. ✅ REST：batch 端点、`watchlist/quotes` 增 `fund_nav`、`get_fund_nav` 快路径与绑定表读取（**断头路修复落此**）；
 8. ✅ 前端：types/sse/store + Watchlist 估值列与精度徽章 + FundNAV 响应式。
 
-**M2 延迟与异常治理**
-- `push2delay` / `1.push2` 镜像链与可选港股近实时（主域开关）；延迟行情 UI 标注完善（延迟档位文案）；披露异常用户提示文案；
-- 落库收盘强写、周期时长/截断/熔断的结构化观测；集成与 e2e 测试补齐。
+**M2 延迟与异常治理** ✅ 已实现
+- ✅ `push2delay` / `1.push2` 镜像链与可选港股近实时主域开关（`QUOTE_EASTMONEY_MAIN_ENABLED`，默认禁入——此三条链与开关在 M1 已随 `upstream_budget.py::QUOTE_CHAINS` 落地，M2 补齐其观测与文案）；
+- ✅ 延迟行情档位文案：Watchlist 延迟徽章按 `delayed_markets` 给出量级（HK ≈15~25min / US ≈15min），FundNAV 面板行情状态同步显示；
+- ✅ 披露异常用户提示：`holdings_stale` ⚠ tooltip（120 天阈值 + 转指数外推/官方净值含义）；FundNAV 面板对 `index_tracking`/`latest_official` 附方法说明（无持仓/报告期超阈/精度不足/披露异常）；
+- ✅ 收盘强写：`write_close_snapshots`（门控开→关边沿强制落库 + 清节流窗），`scheduler/manager.py` 接线；
+- ✅ 结构化观测：周期时长 >2.5s 告警、并集截断告警、熔断触发（INFO 阶梯）、链提前切换（INFO）——仅日志、不建指标基建（§6.4 开放项决策）；
+- ✅ 基金符号可用化（M1 部署验证发现的缺口，见 §9.3）；
+- ✅ 集成测试（`tests/integration/test_fund_nav_intraday_sql.py`：周期端到端/降采样三连/batch 矩阵/搜索注册）+ e2e（`tests/e2e/test_e2e_fund_nav_pipeline.py`：加自选钩子→batch 结构→SSE 频道可订阅）。
 
 **M3 精度增强（可选）**
 - 中报/年报全量持仓摄取提升 coverage（全量披露截止日每年 8/31；接口形态需另探测）；

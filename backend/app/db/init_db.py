@@ -92,6 +92,67 @@ FUND_SYMBOL_SEEDS = [
 ]
 
 
+async def seed_fund_symbols(session, system_tenant_id) -> tuple[int, int]:
+    """Idempotent fund-symbol backfill with type reconciliation
+    (fund-intraday-nav.md M2 phase A + Task C).
+
+    Backfills system-tenant ``type='fund'`` rows for every code in
+    FUND_SYMBOL_SEEDS, keyed by the normalized 6-digit code so a pre-existing
+    row for the same code is recognized regardless of its stored spelling
+    (bare ``510300`` ↔ suffixed ``510300.SS``). When such a row exists but with
+    a different type — the historical contamination where a fund code was
+    mis-registered as ``'stock'`` — this reconciles the type to ``'fund'`` so
+    the fund pipeline recognizes it. Type reconciliation only ever moves a row
+    toward ``'fund'`` for a seed code; it never reverses a fund back to stock
+    and never touches non-seed symbols.
+
+    Returns (seeded_count, reconciled_count).
+    """
+    from app.services.fund_holdings import _normalize_fund_code_shared
+
+    existing_result = await session.execute(select(FinanceSymbol).where(FinanceSymbol.tenant_id == system_tenant_id))
+    existing_by_norm_code: dict[str, FinanceSymbol] = {}
+    for sym in existing_result.scalars().all():
+        norm = _normalize_fund_code_shared(str(sym.symbol or ""))
+        if norm:
+            existing_by_norm_code.setdefault(norm, sym)
+
+    missing: list[FinanceSymbol] = []
+    reconciled = 0
+    for fund_symbol, fund_name in FUND_SYMBOL_SEEDS:
+        norm = _normalize_fund_code_shared(fund_symbol)
+        existing = existing_by_norm_code.get(norm) if norm else None
+        if existing is None:
+            missing.append(
+                FinanceSymbol(
+                    tenant_id=system_tenant_id,
+                    symbol=fund_symbol,
+                    name=fund_name,
+                    type="fund",
+                    market="CN",
+                    exchange="",
+                    currency="CNY",
+                    is_active=True,
+                )
+            )
+        elif existing.type != "fund":
+            # Task C: correct a mis-registered type (e.g. a fund code stored as
+            # 'stock'). Preserve the existing name/market/currency; only fix type.
+            existing.type = "fund"
+            reconciled += 1
+
+    if missing:
+        for row in missing:
+            session.add(row)
+        await session.flush()
+        logger.info(f"Seeded {len(missing)} fund symbols for system tenant")
+    else:
+        logger.info("All seed fund symbols already exist, skipping fund symbol seed")
+    if reconciled:
+        logger.info(f"Reconciled {reconciled} pre-existing fund-code symbol(s) to type='fund'")
+    return len(missing), reconciled
+
+
 async def create_tables():
     _engine = create_async_engine(
         settings.database_url,
@@ -697,35 +758,12 @@ async def seed_default_data():
             logger.info("All seed fund index bindings already exist, skipping binding seed")
 
         # Fund symbols (fund-intraday-nav.md M2 phase A): system-tenant type='fund'
-        # rows — idempotent backfill keyed by (tenant, symbol), matching the
-        # source/binding seed shape above. Feeds the daily official-NAV job and
+        # rows — idempotent backfill keyed by the normalized 6-digit code, matching
+        # the source/binding seed shape above. Feeds the daily official-NAV job and
         # the intraday pipeline; other tenants get their own copies via search
-        # auto-registration.
-        existing_fund_symbols_result = await session.execute(
-            select(FinanceSymbol.symbol).where(FinanceSymbol.tenant_id == system_tenant.id)
-        )
-        existing_fund_symbols = {sym for (sym,) in existing_fund_symbols_result.all()}
-        missing_fund_symbols = [
-            FinanceSymbol(
-                tenant_id=system_tenant.id,
-                symbol=fund_symbol,
-                name=fund_name,
-                type="fund",
-                market="CN",
-                exchange="",
-                currency="CNY",
-                is_active=True,
-            )
-            for fund_symbol, fund_name in FUND_SYMBOL_SEEDS
-            if fund_symbol not in existing_fund_symbols
-        ]
-        if missing_fund_symbols:
-            for fund_symbol_row in missing_fund_symbols:
-                session.add(fund_symbol_row)
-            await session.flush()
-            logger.info(f"Seeded {len(missing_fund_symbols)} fund symbols for system tenant")
-        else:
-            logger.info("All seed fund symbols already exist, skipping fund symbol seed")
+        # auto-registration. Also reconciles a pre-existing row for a seed fund
+        # code that carries the wrong type (see seed_fund_symbols).
+        await seed_fund_symbols(session, system_tenant.id)
 
         await session.commit()
         logger.info("Default data seeded successfully")

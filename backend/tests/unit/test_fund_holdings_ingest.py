@@ -6,7 +6,7 @@ state machine (ok / stale / anomalous), the budget-gated ingest flow,
 needs_ingestion gating, and patient budget pacing for the daily cron.
 """
 
-from datetime import date
+from datetime import UTC, date, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.services.fund_holdings import (
@@ -119,28 +119,28 @@ class TestDisclosureStateMachine:
         return FundHoldingsService(db=AsyncMock(), governor=AsyncMock())
 
     def test_fresh_report_is_ok(self):
-        report = date.today() - _days(30)
+        report = _utc_today() - _days(30)
         assert self._svc()._disclosure_status(report, 10) == "ok"
 
     def test_mid_age_report_is_stale(self):
-        report = date.today() - _days(200)
+        report = _utc_today() - _days(200)
         assert self._svc()._disclosure_status(report, 10) == "stale"
 
     def test_zero_holdings_is_anomalous(self):
-        report = date.today() - _days(10)
+        report = _utc_today() - _days(10)
         assert self._svc()._disclosure_status(report, 0) == "anomalous"
 
     def test_missing_report_date_is_anomalous(self):
         assert self._svc()._disclosure_status(None, 10) == "anomalous"
 
     def test_very_old_report_is_anomalous(self):
-        report = date.today() - _days(FUND_HOLDINGS_ANOMALOUS_DAYS + 1)
+        report = _utc_today() - _days(FUND_HOLDINGS_ANOMALOUS_DAYS + 1)
         assert self._svc()._disclosure_status(report, 10) == "anomalous"
 
     def test_boundary_freshness(self):
         fresh_days = 120
-        ok_report = date.today() - _days(fresh_days)
-        stale_report = date.today() - _days(fresh_days + 1)
+        ok_report = _utc_today() - _days(fresh_days)
+        stale_report = _utc_today() - _days(fresh_days + 1)
         assert self._svc()._disclosure_status(ok_report, 10) == "ok"
         assert self._svc()._disclosure_status(stale_report, 10) == "stale"
 
@@ -315,6 +315,17 @@ def _days(n: int):
     from datetime import timedelta
 
     return timedelta(days=n)
+
+
+def _utc_today() -> date:
+    """'Today' anchored to UTC, matching FundHoldingsService._disclosure_status.
+
+    The service computes report age as ``datetime.now(UTC).date() - report``.
+    Using the local ``date.today()`` would drift by a day around the UTC/local
+    midnight boundary on UTC+ hosts (e.g. CST = UTC+8), making these boundary
+    tests flaky, so the tests anchor to the same UTC-based 'today'.
+    """
+    return datetime.now(UTC).date()
 
 
 class TestNormalizeFundCode:

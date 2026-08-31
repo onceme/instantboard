@@ -223,8 +223,11 @@ class TestInitDBModule:
                 # all fund index bindings already exist (fund-intraday-nav.md §3.3 seed)
                 r.all.return_value = [(code,) for code, _ in FUND_INDEX_BINDINGS]
             elif call_count == 7:
-                # all fund symbols already exist (fund-intraday-nav.md M2 phase A seed)
-                r.all.return_value = [(symbol,) for symbol, _ in FUND_SYMBOL_SEEDS]
+                # all fund symbols already exist with type='fund' (idempotent:
+                # seed_fund_symbols adds nothing and reconciles nothing)
+                r.scalars.return_value.all.return_value = [
+                    MagicMock(symbol=symbol, type="fund") for symbol, _ in FUND_SYMBOL_SEEDS
+                ]
             return r
 
         with (
@@ -530,9 +533,11 @@ class TestInitDBModule:
                 # (fund-intraday-nav.md §3.3)
                 r.all.return_value = [(code,) for code, _ in FUND_INDEX_BINDINGS]
             elif call_count == 7:
-                # fund symbols all present → fund symbol seed skips
+                # fund symbols all present as type='fund' → seed adds nothing
                 # (fund-intraday-nav.md M2 phase A)
-                r.all.return_value = [(symbol,) for symbol, _ in FUND_SYMBOL_SEEDS]
+                r.scalars.return_value.all.return_value = [
+                    MagicMock(symbol=symbol, type="fund") for symbol, _ in FUND_SYMBOL_SEEDS
+                ]
             return r
 
         with (

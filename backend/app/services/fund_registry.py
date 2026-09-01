@@ -15,6 +15,9 @@ fall back to the existing heuristic path):
   versioned data key ``fund_registry:{version}`` holding the compact
   ``{code: [name, type, pinyin_full, pinyin_abbr]}`` JSON (24h TTL).
 - In-process snapshot (~10min) so per-search requests never re-parse ~3MB JSON.
+  Each snapshot prebuilds query indexes (sorted-code list, pinyin first-letter
+  buckets, inverted ASCII name-token table) so text/pinyin search is index
+  lookups, never a whole-catalog scan.
 - Upstream fetch governed by the ``em_fund_registry`` budget spec plus a 300s
   negative cache so search keystrokes cannot re-hammer a failing upstream.
 """
@@ -22,9 +25,11 @@ fall back to the existing heuristic path):
 from __future__ import annotations
 
 import asyncio
+import bisect
 import hashlib
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -112,10 +117,26 @@ def _cjk_weak_match(query: str, name: str) -> bool:
     return matched * 5 >= n * 3
 
 
+# Maximal contiguous letter/digit runs of a (upper-cased) fund name. Any
+# pure-ASCII letter/digit substring of the name is contained in exactly one
+# such token, so an inverted token index answers ASCII name-substring queries
+# without re-scanning (and re-upper-casing) all ~28k names per keystroke.
+_ASCII_TOKEN_RE = re.compile(r"[A-Z0-9]+")
+
+
 class FundRegistry:
     """Immutable parsed snapshot with query methods."""
 
-    __slots__ = ("_by_code", "version", "count", "fetched_at", "persisted")
+    __slots__ = (
+        "_by_code",
+        "_codes_sorted",
+        "_pinyin_head",
+        "_ascii_tokens",
+        "version",
+        "count",
+        "fetched_at",
+        "persisted",
+    )
 
     def __init__(self, entries: dict[str, FundRegistryEntry], version: str, fetched_at: str):
         self._by_code = entries
@@ -125,6 +146,24 @@ class FundRegistry:
         # False when the Redis store failed: the process cache then serves this
         # snapshot for the full registry TTL (see module docstring).
         self.persisted = True
+        # Query indexes, rebuilt with the snapshot (fund-intraday-nav.md §9.3):
+        # a keystroke search never scans all ~28k entries startswith()-style.
+        # - _codes_sorted: bisect range for code prefixes (partial code entry).
+        # - _pinyin_head: first-letter buckets whose members are re-checked for
+        #   full/abbreviated pinyin prefix; a pinyin prefix only ever matches
+        #   its own letter bucket.
+        # - _ascii_tokens: inverted name-token index for ASCII name substrings.
+        self._codes_sorted = sorted(entries)
+        pinyin_head: dict[str, list[str]] = {}
+        ascii_tokens: dict[str, set[str]] = {}
+        for code, entry in entries.items():
+            for pinyin in (entry.pinyin_full, entry.pinyin_abbr):
+                if pinyin:
+                    pinyin_head.setdefault(pinyin[0], []).append(code)
+            for token in _ASCII_TOKEN_RE.findall(entry.name.upper()):
+                ascii_tokens.setdefault(token, set()).add(code)
+        self._pinyin_head = pinyin_head
+        self._ascii_tokens = ascii_tokens
 
     def lookup_code(self, code: str) -> FundRegistryEntry | None:
         return self._by_code.get((code or "").strip())
@@ -135,13 +174,15 @@ class FundRegistry:
         CJK input matches the Chinese name by substring (strong hits first, then
         prefix-tolerant weak hits for abbreviated catalog names); ASCII input
         matches the full-pinyin prefix, the abbreviated-pinyin prefix, an ASCII
-        name substring, or the code prefix (partial code entry).
+        name substring, or the code prefix (partial code entry) — all through
+        the snapshot indexes above, so an ASCII keystroke touches only its
+        letter bucket plus the (small) token table instead of the whole catalog.
         """
         q = (query or "").strip()
         if not q or limit <= 0:
             return []
-        hits: list[FundRegistryEntry] = []
         if _contains_cjk(q):
+            hits: list[FundRegistryEntry] = []
             weak: list[FundRegistryEntry] = []
             for entry in self._by_code.values():
                 if q in entry.name:
@@ -151,19 +192,58 @@ class FundRegistry:
                 elif len(weak) < limit and _cjk_weak_match(q, entry.name):
                     weak.append(entry)
             hits.extend(weak)
-            hits = hits[:limit]
-        else:
-            qu = q.upper()
-            for entry in self._by_code.values():
-                if (
-                    entry.pinyin_full.startswith(qu)
-                    or entry.pinyin_abbr.startswith(qu)
-                    or qu in entry.name.upper()
-                    or entry.code.startswith(qu)
-                ):
-                    hits.append(entry)
-                    if len(hits) >= limit:
-                        break
+            return hits[:limit]
+        qu = q.upper()
+        if qu.isascii() and qu.isalnum():
+            return self._search_ascii_indexed(qu, limit)
+        # Punctuation-bearing queries (rare, e.g. "BRK.B") stay on the tolerant
+        # full scan — correctness over the (unindexable) shape.
+        return self._search_ascii_scan(qu, limit)
+
+    def _search_ascii_indexed(self, qu: str, limit: int) -> list[FundRegistryEntry]:
+        """Indexed equivalent of the legacy ASCII scan (same result set/order).
+
+        Union of: code-prefix range (bisect), pinyin full/abbreviated prefix
+        (first-letter bucket re-check) and ASCII name substring (token index),
+        truncated to the lowest codes — identical to the old code-ascending
+        scan with early break.
+        """
+        hits: set[str] = set()
+
+        codes = self._codes_sorted
+        lo = bisect.bisect_left(codes, qu)
+        hi = bisect.bisect_left(codes, qu[:-1] + chr(ord(qu[-1]) + 1))
+        if hi > lo:
+            hits.update(codes[lo:hi])
+
+        bucket = self._pinyin_head.get(qu[0])
+        if bucket:
+            for code in bucket:
+                entry = self._by_code[code]
+                if entry.pinyin_full.startswith(qu) or entry.pinyin_abbr.startswith(qu):
+                    hits.add(code)
+
+        for token, token_codes in self._ascii_tokens.items():
+            if qu in token:
+                hits.update(token_codes)
+
+        if not hits:
+            return []
+        return [self._by_code[code] for code in sorted(hits)[:limit]]
+
+    def _search_ascii_scan(self, qu: str, limit: int) -> list[FundRegistryEntry]:
+        """Legacy full scan, kept for queries the indexes cannot express."""
+        hits: list[FundRegistryEntry] = []
+        for entry in self._by_code.values():
+            if (
+                entry.pinyin_full.startswith(qu)
+                or entry.pinyin_abbr.startswith(qu)
+                or qu in entry.name.upper()
+                or entry.code.startswith(qu)
+            ):
+                hits.append(entry)
+                if len(hits) >= limit:
+                    break
         return hits
 
 

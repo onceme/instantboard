@@ -211,7 +211,13 @@ class FinanceService:
                     seen_fund_codes.add(entry.code)
                     registry_candidates.append(self._registry_candidate_result(entry))
 
-        if not results and not registry_candidates:
+        # When the registry is loaded it owns pinyin/CJK retrieval for the whole
+        # CN fund catalog: if it produced no candidates, Yahoo cannot know the
+        # query either (it never indexes OTC funds) — the external round-trip
+        # (~1s+) is skipped for fund-shaped text and kept only for ticker-like
+        # input (§9.3 search performance note). Registry unavailable → legacy
+        # full fallback chain.
+        if not results and not registry_candidates and self._external_search_worthwhile(q, registry is not None):
             external_results = await self._search_symbols_external(q, tenant_id)
             for ext in external_results:
                 if ext["symbol"] not in seen_symbols:
@@ -1888,6 +1894,31 @@ class FinanceService:
         if fund_code and cls._is_cn_fund_code(fund_code):
             return "fund"
         return cls._map_yfinance_type(yahoo_quote_type)
+
+    @classmethod
+    def _external_search_worthwhile(cls, query: str, registry_loaded: bool) -> bool:
+        """Gate the Yahoo fallback for queries the DB + registry tiers missed.
+
+        With the registry loaded it has already answered authoritatively for CN
+        fund text/pinyin; a zero-candidate pure-pinyin or CJK query is unknown
+        to Yahoo too (it indexes listed tickers, never OTC funds), so the
+        external round-trip is skipped. Ticker-like input keeps the fallback:
+        market-suffixed symbols, digit codes that are not CN fund codes, and
+        short ASCII letter runs (standard tickers ≤5 chars; pinyin runs are
+        longer). Registry unavailable → legacy behavior (external is the only
+        global index then)."""
+        if not registry_loaded:
+            return True
+        q = (query or "").strip()
+        if not q:
+            return False
+        if fund_registry._contains_cjk(q):
+            return False
+        if q.isdigit():
+            return len(q) != 6 or not cls._is_cn_fund_code(q)
+        if q.isascii() and q.isalpha():
+            return len(q) < 6
+        return True
 
     def _paginate_results(self, results: list, page: int, page_size: int) -> dict:
         total = len(results)

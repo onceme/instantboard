@@ -1,5 +1,5 @@
 ---
-version: 1.2
+version: 1.3
 author: designer
 date: 2026-09-01
 status: finalized
@@ -268,6 +268,7 @@ nav_estimate            = nav_official × (1 + estimate_change_percent/100)
 | `em_push2_m1` | `https://1.push2.eastmoney.com/…` 同 API | 无 | 200 码 | 同主域 | 镜像可用 | 15 / 2 |
 | `em_push2_delay` | `https://push2delay.eastmoney.com/…` | 无 | 200 码 | 延迟行情 | 200码×10轮 @3s 零限流 | 40 / 4 |
 | `em_f10_holdings` | 见 §5.3 | Referer 必需 | 1 码 | 披露数据 | 建议 ≤10 次/分 | 8 / 1 |
+| `em_fund_registry` | `https://fund.eastmoney.com/js/fundcode_search.js` | Referer: `https://fund.eastmoney.com/` | 1 文件（~3.1MB） | 名录每日至多变化一次（新基金注册） | 静态公开名录文件，2026-09-01 实测 200/0.6s、27,718 条；**每日 1 次级**（24h TTL 惰性重建 + 持仓夜间 cron 顺手刷新），无频控风险；预算 2/分仅覆盖双进程同分钟冷启动 | 2 / 1 |
 
 **符号转换**（纯函数映射，快照优先用 secid）：内部 `{code, market}` ↔ 腾讯 `sh600519/sz000858/hk00700/usAAPL` ↔ 新浪同式（美股 `gb_aapl`，小写）↔ 东财 `1./0./116./105./106.`；港股 5 位补零（`hk00700`）、美股腾讯大写（`usAAPL`）/新浪小写（`gb_aapl`）。
 
@@ -425,15 +426,22 @@ async def add_fund_intraday_jobs(self):
 | `frontend/src/components/finance/FundNAV.vue` | 改为订阅 `navEstimates` 的响应式视图；展示 coverage、`holdings_report_date`、`quote_status` 标注 |
 | `frontend/src/components/finance/DetailDrawer.vue` | （可选，低优先）基金类型抽屉内联估值小行，复用 store |
 
-加自选入口：沿用 DetailDrawer/QuoteCard 现有「加入自选」链路（`finance_symbols` 中 `type='fund'` 符号可加），**无需新入口**；加自选后 ≤1 个周期（~3s）估值经 SSE/REST 自动到位，缺数据显示「—」。
+加自选入口：沿用 DetailDrawer/QuoteCard 现有「加入自选」链路（`finance_symbols` 中 `type='fund'` 符号可加），**无需新入口**；加自选后 ≤1 个周期（~3s）估值经 SSE/REST 自动到位，缺数据显示「—」。场外基金无实时行情源、详情抽屉行情请求必然失败，DetailDrawer 的无行情兜底态（错误/提示 + 「加入自选」按钮）保证此类标的同样可加自选（§9.3）。
 
-### 9.3 基金符号可用化（M2 新增）
+### 9.3 基金符号可用化（M2 新增，M3 名录扩展）
 
-M1 部署验证发现的缺口：`finance_symbols` 无任何 `type='fund'` 条目——外部搜索兜底（Yahoo）把中国上市基金映射成 `stock`，场外基金完全不在索引中，用户无法把基金加自选，整条估值管道不可端到端使用。三管齐下（均已实现）：
+M1 部署验证发现的缺口：`finance_symbols` 无任何 `type='fund'` 条目——外部搜索兜底（Yahoo）把中国上市基金映射成 `stock`，场外基金完全不在索引中，用户无法把基金加自选，整条估值管道不可端到端使用。四层递进（均已实现）：
 
-1. **种子符号**（`db/init_db.py::FUND_SYMBOL_SEEDS`，system 租户、幂等）：27 只主流基金 = 15 只场内 ETF/LOF（带 `.SS`/`.SZ` 后缀，与搜索拼写一致）+ 12 只场外开放式基金（6 位裸码），与 `FUND_INDEX_BINDINGS` 全覆盖 + 常见主动基；
-2. **搜索类型映射修复**（`services/finance.py::_classify_symbol_type`）：CN 基金码段启发式覆盖 Yahoo 类型——首位 `5`（沪市场内基金族）、`15/16/18` 前缀（深市场内）、`005-009`（场外主流段）；股票代码段恒不判基金。**偏差注记**：场外 `11x` 段与可转债代码冲突，有意排除出启发式、由种子覆盖；搜索零命中时 6 位基金码**自动注册**为本租户符号，占位名「基金 {code}」（真实名待官方数据回灌）；
-3. **变体拼写互认**：`add_to_watchlist` / `get_fund_nav` 精确匹配失败后按 `[code, code.SS, code.SZ, code.OF]` 变体回退查找——普通租户经搜索自动注册获得本租户符号（种子归 system 租户，供官方净值任务/管理端使用）。
+1. **种子符号**（`db/init_db.py::FUND_SYMBOL_SEEDS`，system 租户、幂等）：27 只主流基金 = 15 只场内 ETF/LOF（带 `.SS`/`.SZ` 后缀，与搜索拼写一致）+ 12 只场外开放式基金（6 位裸码），与 `FUND_INDEX_BINDINGS` 全覆盖 + 常见主动基。名录就位后种子**保留**，职责收窄为冷启动保障（名录未加载即可有可关注基金）；
+2. **搜索类型映射修复**（`services/finance.py::_classify_symbol_type`）：CN 基金码段启发式覆盖 Yahoo 类型——首位 `5`（沪市场内基金族）、`15/16/18` 前缀（深市场内）、`005-009`（场外主流段）；股票代码段恒不判基金。**名录就位后启发式降为兜底**（名录未加载时的退路），`110/111` 排除保留不动；搜索零命中时 6 位基金码仍可自动注册为本租户符号；
+3. **变体拼写互认**：`add_to_watchlist` / `get_fund_nav` 精确匹配失败后按 `[code, code.SS, code.SZ, code.OF]` 变体回退查找——普通租户经搜索自动注册获得本租户符号（种子归 system 租户，供官方净值任务/管理端使用）；
+4. **★ 基金名录（本轮新增，`services/fund_registry.py`）**：东财公开名录 `fund.eastmoney.com/js/fundcode_search.js`（UTF-8+BOM、`var r=[[code,拼音缩写,名称,类型,拼音全称],...]`）**覆盖全部中国注册基金**——2026-09-01 实测 27,718 条，含 01/02 等新代码段与 11x 场外段。可关注范围 = 种子 27 只 ∪ 名录 27,718 只 = **全部注册基金**。机制要点：
+   - **缓存**：Redis `fund_registry:ptr` → `{version=sha1(payload)[:16]}` + 版本化数据键 `fund_registry:{version}` 存精简结构 `{code:[名称,类型,拼音全称,拼音缩写]}`（~3MB）；TTL 24h（数据键 +1h）、失败负缓存 300s；进程内快照 ~600s（Redis 写失败时延长至 24h 防抖）+ `asyncio.Lock` 防并发重复拉取；解析守卫：8MB / 6 万条上限、坏行跳过、空类型/空拼音容错；
+   - **刷新**：惰性过期重建为主；每日持仓摄取 cron（`fund_holdings_refresh`）头部顺手 `refresh_registry()`，不新增任务；
+   - **三通道搜索**（`FundRegistry.search`，候选上限 20）：代码精确命中（**名录优先于启发式与外部搜索，命中即短路**）；中文名称子串（含「官方全称 ↔ 名录简称」容错弱匹配——如名录省略「市值加权」字样，仍命中 019118）；拼音前缀（全拼 + 缩写）与代码前缀；
+   - **注册时机**：代码查询命中 → 立即注册本租户符号，**名称用名录真实名**（早期「基金 {code}」占位名在被再次命中时自动修复为真实名）；文本/拼音候选**不预注册**（一次按键搜索可能命中 20 只），由 `add_to_watchlist` 的选中即注册兜底落库；
+   - **限流登记**：`em_fund_registry` 入 `UPSTREAM_REGISTRY`（§6.1，2/1、Referer），预算仅作双进程冷启动保护；拉取失败静默降级为启发式路径，不阻断搜索；
+   - **降级矩阵补充**：名录拉取/解析/Redis 全部失败 → 搜索回退 §2/§3 既有链路，用户无感（仅失去新代码段与拼音搜索能力）。
 
 ## 10. 配置项清单（新增环境变量）
 

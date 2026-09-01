@@ -1,7 +1,7 @@
 ---
-version: 1.4
+version: 1.5
 author: designer
-date: 2026-08-26
+date: 2026-09-01
 status: revised
 cross_refs: [architecture.md, database.md, frontend.md, security.md, data-flow.md, admin-login.md]
 ---
@@ -506,10 +506,16 @@ Response 200:
 
 #### GET `/api/v1/finance/search` — 股票/基金搜索
 
-**后端数据源**: 只查本地 `finance_symbols` 表——精确匹配 → 前缀匹配 → 模糊匹配（`ilike`）三级
-（`services/finance.py:99-160`）；本地零结果时回退调用 Yahoo Finance 搜索接口补充结果并写回
-`finance_symbols` 表。Finnhub **不参与**搜索（仅存在于美股报价采集的 failover 链）。
+**后端数据源**: 先查本地 `finance_symbols` 表——精确匹配 → 前缀匹配 → 模糊匹配（`ilike`）三级；
+其后叠加**基金名录**（东财全量注册基金目录，`services/fund_registry.py`，fund-intraday-nav.md §9.3）：
+6 位码查询命中名录即按基金注册返回（真实名，**短路外部搜索**）；文本/拼音查询追加名录候选
+（代码/名称/拼音三通道，上限 20 条，**不预注册**、选中加自选时落库）。名录不可用时回退
+Yahoo Finance 搜索接口补充结果并写回 `finance_symbols` 表，再回退码段启发式自动注册。
+Finnhub **不参与**搜索（仅存在于美股报价采集的 failover 链）。
 结果按 `t:{tenant_id}:search:{query_hash}` 缓存 300 秒；`page` / `page_size` 分页在内存结果上执行。
+
+> 名录扩展注记：响应结构无变化（`data` 本就是多候选数组）；变化仅在覆盖范围——
+> 可命中的基金从码段启发式子集扩展为**全部注册基金**（含 01/02 新代码段、11x 场外段、拼音搜索）。
 
 ```
 Query Params:

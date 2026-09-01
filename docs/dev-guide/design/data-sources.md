@@ -1,7 +1,7 @@
 ---
-version: 1.1
+version: 1.2
 author: designer
-date: 2026-08-24
+date: 2026-09-01
 status: draft
 cross_refs: [architecture.md, api.md, database.md, data-flow.md, finance-tab.md, tech-tab.md]
 ---
@@ -239,8 +239,23 @@ cross_refs: [architecture.md, api.md, database.md, data-flow.md, finance-tab.md,
 | 东财 push2 镜像 `em_push2_m1` | `https://1.push2.eastmoney.com/…` 同上 | 无 | 200 码 | 同主域 | 15 / 2 | 港股链末位备选 |
 | 东财 push2 主域 `em_push2` | `https://push2.eastmoney.com/…` | 无 | 200 码 | A 股 ≤3s；唯一近实时港股 | 6 / 1 | ⚠️ **默认禁用**（`QUOTE_EASTMONEY_MAIN_ENABLED=false`）：实测主域约 8 次请求后断连封禁数分钟，封禁可能波及东财域族（含持仓接口 `fundf10`）；IP 安全 > 港股时效（红线开关，见 fund-intraday-nav.md §6.3） |
 | 东财持仓 `em_f10_holdings` | `https://fundf10.eastmoney.com/FundArchivesDatas.aspx?type=jjcc` | **Referer 必需** | 1 码 | 披露数据 | 8 / 1（`QUOTE_EM_F10_MAX_RPM`） | 持仓摄取（§3.2.3 东财域族 ≤10 次/分软限制的本地收紧） |
+| 东财基金名录 `em_fund_registry` | `https://fund.eastmoney.com/js/fundcode_search.js` | **Referer: `https://fund.eastmoney.com/`** | 1 文件（~3.1MB） | 名录每日至多变化一次 | 2 / 1 | 搜索用全量基金名录（§3.2.8），非行情上游；24h TTL 惰性重建 + 夜间持仓 cron 顺手刷新，**每日 1 次级**、无频控风险（2026-09-01 实测 200/0.6s、27,718 条） |
 
 全局安全系数 `QUOTE_UPSTREAM_SAFETY_FACTOR`（默认 0.8）作用于所有上游预算；治理器提供分钟预算键 + 熔断键（403/429/5xx/断连 → 60s×2^(n−2) 冷却上限 1800s，成功减半恢复），首选源预算剩余 <20% 时**提前**切换到组内余量最多的备源（fund-intraday-nav.md §6.2）。
+
+#### 3.2.8 东方财富基金名录（搜索/注册用，非行情）
+
+| 属性 | 值 |
+|------|-----|
+| **类型** | 静态公开 JS 文件（东财基金搜索页名录，httpx 直连） |
+| **覆盖范围** | **全部中国注册基金**——2026-09-01 实测 27,718 条：6 位代码 / 名称拼音缩写 / 中文全称 / 东财基金类型（混合型-偏股、指数型-海外股票…）/ 名称全拼；含 01/02 新代码段与 11x 场外段 |
+| **URL** | `https://fund.eastmoney.com/js/fundcode_search.js` |
+| **数据格式** | `var r = [[code, 拼音缩写, 名称, 类型, 拼音全称], ...]`；UTF-8（带 BOM），剥前缀后为合法 JSON |
+| **费用 / API Key** | 免费 / 无需 |
+| **频率限制** | 无官方限制；静态文件、每日至多变化一次（新基金注册）。**治理定位：每日 1 次级、无频控风险**；预算 2/分仅覆盖双进程同分钟冷启动，登记进 `UPSTREAM_REGISTRY`（`em_fund_registry`，Referer 必需）与熔断器保持一致性 |
+| **消费方** | `app/services/fund_registry.py`：Redis `fund_registry:ptr`/`fund_registry:{version}` 24h TTL + 进程内快照 ~600s；供 `FinanceService.search_symbols` 名录优先搜索与 `add_to_watchlist` 选中即注册（fund-intraday-nav.md §9.3） |
+| **降级** | 拉取/解析/缓存任意失败 → 搜索回退码段启发式 + Yahoo 外部兜底（不阻断搜索） |
+| **备选源** | `fundsuggest.eastmoney.com/FundSearch/api/FundSearchAPI.ashx` 搜索联想接口可作同义查询备选，本轮未启用（静态名录已满足需求，仅登记备查） |
 
 ### 3.3 科技数据源详细列表
 

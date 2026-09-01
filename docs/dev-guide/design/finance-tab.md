@@ -1,7 +1,7 @@
 ---
-version: 1.9
+version: 1.10
 author: designer
-date: 2026-08-31
+date: 2026-09-01
 status: draft
 cross_refs: [frontend.md, api.md, data-sources.md, database.md, data-flow.md, fund-intraday-nav.md]
 ---
@@ -150,6 +150,7 @@ if estimate_type == "realtime" and fund.type == "fund" and nav_official and unde
 > 4. **估值回写**：实时估值计算成功后 `_save_nav_estimate` 落库（`estimate_method='index_tracking'`，含底层指数信息）；口径为**按 (基金, 官方净值日期) 覆盖更新**——同一官方净值日内的多次估值更新同一行（表有界），新官方净值日期开新行；落库失败记日志回滚、不影响读路径返回
 > 5. **盘中估值（关注制）** ✅ 已实现：`fund_nav_intraday_refresh`（CN 开市时段 ≤3s 周期，见 §3.8.2）对关注并集内的基金计算盘中估值，新增 `estimate_method='holdings_weighted'` **持仓加权法**——最新披露前十大持仓权重 × 成分股实时涨跌幅加权求和（未披露仓位按盘中不变假设），精度 = 可得持仓权重之和；分层决策为 `holdings_weighted`（持仓新鲜且 coverage 达标）→ `index_tracking`（指数外推，修复后的绑定表提供标的与比率）→ `latest_official`（仅显官方净值）。实时值仅存 Redis `fund_nav_rt:{code}`（TTL 12s），落库走降采样（≥60s/状态切换/**门控开→关边沿收盘强写快照**），推送经 `nav_batch_update` 按租户扇出（见 §3.9）。延迟行情档位（港股 ≈15~25min / 美股 ≈15min）与披露异常（`holdings_stale`）在 Watchlist 徽章与 FundNAV 面板均有用户可见标注。完整设计见 [fund-intraday-nav.md](fund-intraday-nav.md)
 > 6. **基金符号可用化** ✅ 已实现（M2）：system 租户种子 27 只主流基金符号（`init_db.py::FUND_SYMBOL_SEEDS`，场内带后缀/场外裸码）；搜索外部兜底的类型映射修复（CN 基金码段启发式覆盖 Yahoo 的 stock 误映射，6 位基金码零命中时自动注册本租户符号）；加自选/估值端点对裸码与带后缀拼写变体互认（见 [fund-intraday-nav.md](fund-intraday-nav.md) §9.3）
+> 7. **夜间估值校准（M3）** ✅ 已实现：官方净值任务提交后 `_run_night_calibration` best-effort 运行 `FundCalibrationService.update_calibrations`——配对近期「盘中估计变化 × 官方净值日间变化」日样本学习加性偏差（样本 ≥3 日，±50bp 夹界），落 `fund_nav_calibration`（每基金一行），盘中周期批读后经 `apply_additive_bias` 应用于 `holdings_weighted` 估值（`calibrated` 标记）；样本积累期结构化休眠。持仓摄取同步升级 `FUND_HOLDINGS_TOPLINE`（默认 30）参数化，半年报/年报披露期可取回全量持仓提升 coverage。`tracking_ratio` 历史回归计算已就绪、待指数日变动数据积累后接线（见 [fund-intraday-nav.md](fund-intraday-nav.md) §13 M3）
 
 > ✅ **绑定断头路已修复**：`underlying_index_symbol` 的初始写入源现为 `fund_index_bindings` 配置表（`db/init_db.py` 种子灌入主流宽基绑定；见 [fund-intraday-nav.md](fund-intraday-nav.md) §3.3/§4.3），`get_fund_nav` 读取次序为绑定表 → 既有行内绑定回退；`tracking_ratio` 改由绑定表提供（默认 1.0，不再硬编码于估值公式）。
 
@@ -397,9 +398,9 @@ graph TD
 |--------|------|--------|
 | `market_indices_refresh` | 30s（`MARKET_INDICES_REFRESH_INTERVAL`） | 开市门控 → `FinanceService.refresh_market_indices` |
 | `commodities_refresh` | 60s（`COMMODITIES_REFRESH_INTERVAL`） | 开市门控 → `FinanceService.refresh_commodities` |
-| `fund_nav_official_refresh` | 每日 20:00（cron，Asia/Shanghai） | `FinanceService.update_official_nav`：天天基金官方净值 → `fund_nav_estimates` upsert（`estimate_method='official'`，见 §3.3）；**无开市门控**（官方净值每交易日收盘后发布一次，与盘中行情刷新不同）；失败记日志不杀任务 |
+| `fund_nav_official_refresh` | 每日 20:00（cron，Asia/Shanghai） | `FinanceService.update_official_nav`：天天基金官方净值 → `fund_nav_estimates` upsert（`estimate_method='official'`，见 §3.3）；**无开市门控**（官方净值每交易日收盘后发布一次，与盘中行情刷新不同）；失败记日志不杀任务。**upsert 有更新时追加夜间校准钩子** `_run_night_calibration`（M3）：best-effort 重算各基金加性估值偏差落 `fund_nav_calibration`，独立会话、失败仅记日志绝不影响已提交的官方净值 |
 | `fund_nav_intraday_refresh` | 3s（`FUND_NAV_INTRADAY_REFRESH_INTERVAL`，下限 2s；`FUND_NAV_INTRADAY_ENABLED` 总开关） | **仅 CN 开市门控**（`_is_market_open("CN")`，含节假日历与午休）→ 关注并集（跨租户去重、空则零请求短路、超 `FUND_NAV_INTRADAY_MAX_FUNDS` 按最早关注截断）→ 持仓快照 + 官方净值锚 → 成分股批量行情（预算治理器）→ 分层估值 → `fund_nav_rt:{code}`（TTL 12s）+ `nav_batch_update` 按租户扇出 + 降采样落库（[fund-intraday-nav.md](fund-intraday-nav.md) §7） |
-| `fund_holdings_refresh` | 每日 `FUND_HOLDINGS_REFRESH_HOUR`:00（cron，Asia/Shanghai，默认 18 点） | 关注并集全部基金逐个摄取东财 f10 持仓（预算门控串行节流 ≤8 次/分），整组替换快照 + 更新披露状态（§5 见 [fund-intraday-nav.md](fund-intraday-nav.md)）；单基金失败不杀整轮 |
+| `fund_holdings_refresh` | 每日 `FUND_HOLDINGS_REFRESH_HOUR`:00（cron，Asia/Shanghai，默认 18 点） | 关注并集全部基金逐个摄取东财 f10 持仓（预算门控串行节流 ≤8 次/分；每期行数上限 `FUND_HOLDINGS_TOPLINE` 默认 30，半年报/年报期可取回全量持仓——M3），整组替换快照 + 更新披露状态（§5 见 [fund-intraday-nav.md](fund-intraday-nav.md)）；单基金失败不杀整轮 |
 | `finance_quotes_partition_roll` | 每日 00:30（cron，UTC） | `db/partitions.py::ensure_quote_partitions`：`finance_quotes` 按月 RANGE 分区（database.md §3.1）幂等供给上月/当月/下月分区（命名 `finance_quotes_y{yyyy}m{mm}`）；"无可创建"是常态结果（记成功）；非 PostgreSQL 为 no-op；失败仅日志不杀任务 |
 
 - **开市门控**：`FinanceService.is_any_market_open()`（复用 `MARKET_TRADING_HOURS` / `_is_market_open`），任一主要市场开市才执行；全休市时静默跳过（省外部 API 调用）——替代原设计的 `market_indices_off_hours` 低频任务

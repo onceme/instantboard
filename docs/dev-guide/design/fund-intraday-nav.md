@@ -1,7 +1,7 @@
 ---
-version: 1.1
+version: 1.2
 author: designer
-date: 2026-08-31
+date: 2026-09-01
 status: finalized
 cross_refs: [finance-tab.md, data-sources.md, data-flow.md, database.md, api.md, frontend.md]
 ---
@@ -46,7 +46,7 @@ cross_refs: [finance-tab.md, data-sources.md, data-flow.md, database.md, api.md,
 - 货币基金/纯债基金的精确估值（权益持仓≈0 → 天然落入回退 2，展示官方净值，不是缺陷）。
 - 非 CN 开市窗口的盘中估值（门控仅 CN；QDII 的美股腿在 CN 盘中本就闭市，贡献恒为 0）。
 - 不替代官方净值、不作为交易依据（免责声明沿用 finance-tab.md §3.3 口径）。
-- v1 不做：盘中汇率波动修正、`tracking_ratio` 历史回归、估值-官方净值偏差校准、盘中估值曲线持久化（见 §13 M3）。
+- v1 不做：盘中汇率波动修正、盘中估值曲线持久化；`tracking_ratio` 历史回归与估值-官方净值偏差校准见 §13 M3（加性偏差校准已落地接线；tracking_ratio 回归计算就绪、应用待指数日变动数据积累后接入）。
 - 不注册新的采集器进 `COLLECTOR_REGISTRY`（不走通用 items 管道，理由见 §12）。
 
 ## 2. 总体数据流
@@ -238,7 +238,7 @@ nav_estimate            = nav_official × (1 + estimate_change_percent/100)
 
 ### 5.3 解析与报告期更新检测
 
-- 接口：`GET https://fundf10.eastmoney.com/FundArchivesDatas.aspx?type=jjcc&code={code}&topline=10`，**必须 `Referer: https://fundf10.eastmoney.com/`**（不带 404；2026-08-31 实测 ~0.34s），UA 浏览器风格（对齐 `TiantianFundCollector` 做法）。
+- 接口：`GET https://fundf10.eastmoney.com/FundArchivesDatas.aspx?type=jjcc&code={code}&topline={FUND_HOLDINGS_TOPLINE}`（默认 30，见 §10；M3：`topline` 上限是**每个报告期**返回的持仓行数——季报本就只披露前十大，半年报/年报披露全量持仓时需调大 topline 才取得回，2026-09-01 实测 topline=10 → 10 行/期、topline=30 → 披露 ~20 只的基金取回 ~20 行/期），**必须 `Referer: https://fundf10.eastmoney.com/`**（不带 404；2026-08-31 实测 ~0.34s），UA 浏览器风格（对齐 `TiantianFundCollector` 做法）。
 - 响应 `var apidata={content:"<html>"}` → BeautifulSoup（lxml，回退 html.parser，对齐 `WebScrapeCollector`）解析表格：股票代码/名称/占净值比/持股数/报告期；**一次返回含多个报告期 → 取最新者**整组替换该基金旧快照（事务内删旧插新）。
 - **secid 提取**：行内链接 `…/unify/r/{secid}` 直接解析（`1.`沪 `0.`深 `116.`港 `105./106.`美）；缺失时行情侧按 `stock_code + market` 规则转换。
 
@@ -446,6 +446,7 @@ M1 部署验证发现的缺口：`finance_symbols` 无任何 `type='fund'` 条�
 | `FUND_NAV_HOLDINGS_MIN_COVERAGE` | 30 | 主方法最低 coverage（%，§4.3） |
 | `FUND_NAV_DB_FLUSH_MIN_GAP` | 60 | 落库降采样最小间隔秒（§3.4） |
 | `FUND_HOLDINGS_REFRESH_HOUR` | 18 | 持仓每日摄取小时（Asia/Shanghai cron） |
+| `FUND_HOLDINGS_TOPLINE` | 30 | f10 jjcc 每期摄取行数上限（§13 M3：半年报/年报披露期全量持仓摄取，上限 100） |
 | `QUOTE_UPSTREAM_SAFETY_FACTOR` | 0.8 | 全局预算安全系数 |
 | `QUOTE_EASTMONEY_MAIN_ENABLED` | false | 东财 push2 主域是否入链（IP 安全红线开关，§6.3） |
 | `QUOTE_TENCENT_MAX_RPM` / `QUOTE_SINA_MAX_RPM` / `QUOTE_EM_DELAY_MAX_RPM` / `QUOTE_EM_F10_MAX_RPM` | 120 / 60 / 40 / 8 | 单上游预算覆盖（§6.1 登记默认值） |
@@ -504,9 +505,17 @@ e2e 要点：SSE `nav_batch_update` 前端消费；Watchlist 基金行估值列/
 - ✅ 基金符号可用化（M1 部署验证发现的缺口，见 §9.3）；
 - ✅ 集成测试（`tests/integration/test_fund_nav_intraday_sql.py`：周期端到端/降采样三连/batch 矩阵/搜索注册）+ e2e（`tests/e2e/test_e2e_fund_nav_pipeline.py`：加自选钩子→batch 结构→SSE 频道可订阅）。
 
-**M3 精度增强（可选）**
-- 中报/年报全量持仓摄取提升 coverage（全量披露截止日每年 8/31；接口形态需另探测）；
-- `tracking_ratio` 历史回归、估值-官方净值偏差校准回测；QDII 盘中汇率修正；被截断基金的分级轮转队列。
+**M3 精度增强** ✅ 主体完成（2026-09-01）
+
+- ✅ **加性偏差校准（估值-官方净值偏差校准回测）**：夜间官方净值 upsert 提交后，`scheduler/manager.py::_run_night_calibration` best-effort 调用 `FundCalibrationService.update_calibrations`（独立会话、失败仅记日志不杀任务）；从 `fund_nav_estimates` 配对「closing holdings_weighted/index_tracking 估计变化（`nav_estimate_deviation_percent`）× 官方净值日间变化」生成日样本，偏差 = mean(官方变化 − 估计变化)，落新表 `fund_nav_calibration`（每基金一行，RLS 同其他基金表，迁移 `d8e5b2a9c4f7`）。盘中周期经 `_load_calibrations` 一次批读（读失败降级未校准），`apply_additive_bias` 应用于 `holdings_weighted` 估值，结果带 `calibrated` 标记。**校准模型/门槛/夹界**：样本门槛 ≥3 个日样本（不足则该基金休眠跳过）；偏差夹界 ±50bp（存储与应用双夹界，防异常样本放大修正）；非有限样本（NaN）跳过；零/None 官方净值不能作日间变化锚（除零防护）。样本自官方净值任务首跑 + 盘中估值落库双条件成立后逐日积累，校准是结构化渐进启用；
+- ✅ **中报/年报全量持仓摄取提升 coverage**：`FUND_HOLDINGS_TOPLINE`（默认 30，§10）参数化 f10 jjcc `topline`（§5.3）——接口探测已验证（2026-09-01：topline=10 → 10 行/期，topline=30 → 披露 ~20 只的基金取回 ~20 行/期）；季报期本就只披露前十大（无增益也无害），半年报/年报期（全量披露截止日每年 8/31）摄取即得全量持仓、coverage 自然抬升；
+- ⏸ **`tracking_ratio` 历史回归：计算已就绪、应用待接入**。`compute_tracking_ratio`（过原点最小二乘 Σf·i/Σi²，每样本比率中位数为稳健初估 + 5% 残差离群剔除后 OLS 重拟合，夹界 [0.5, 1.5]，样本门槛 ≥5 日，全零指数变动/分母≈0 返回 None）已实现并有单测；但接入 `update_calibrations` 更新 `fund_index_bindings.tracking_ratio` 需要「绑定指数日变动」样本序列，现无系统性数据源：`finance_quotes` 仅有按需用户报价落库、指数刷新只进 60s-TTL Redis 缓存、`fund_nav_estimates` 的 index_tracking 收盘快照是**按当前比率折算后**的变动（直接使用会形成比率反馈振荡）。待每指数日收盘落库积累后再接线；
+- ⏸ 延后：**QDII 盘中 FX 修正**（需可靠盘中汇率源与逐腿币种处理，相对现有延迟行情标注收益有限）；**被截断基金的分级轮转队列**（并集截断仅在关注 >500 基金时理论触发，当前规模远未达到）。
+
+**M3 实现要点**：
+- 校准是纯函数（`compute_additive_bias` / `compute_tracking_ratio` / `apply_additive_bias`）+ 服务装配（`FundCalibrationService`），单测覆盖于 `tests/unit/test_fund_calibration.py`（含阈值/夹界/离群/除零防护/落库-更新-跳过路径）；
+- 消费点在 `fund_intraday.py`：`compute_cycle` 每周期一次 `_load_calibrations(codes)`（SELECT … WHERE fund_code IN (…) AND additive_bias_percent IS NOT NULL），仅 `holdings_weighted` 腿应用（index_tracking 腿的比率语义不同，不受偏差校准）；
+- `fund_nav_calibration` 与迁移同时落 RLS（`rls_ddl_statements`，PostgreSQL 生效、SQLite no-op），system 租户作用域与其他基金表一致。
 
 ## 14. 交叉引用与文档状态更新清单
 

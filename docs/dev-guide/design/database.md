@@ -1,7 +1,7 @@
 ---
-version: 1.4
+version: 1.5
 author: designer
-date: 2026-08-27
+date: 2026-09-01
 status: revised
 cross_refs: [architecture.md, api.md, security.md, data-flow.md, admin-login.md, finance-tab.md]
 ---
@@ -299,11 +299,12 @@ CREATE TABLE fund_nav_estimates (
 CREATE INDEX idx_fund_nav_symbol ON fund_nav_estimates(symbol_id, estimate_timestamp DESC);
 
 -- ============================================
--- 基金盘中估值三表 (fund-intraday-nav.md §3)
+-- 基金盘中估值表族 (fund-intraday-nav.md §3)
 -- 租户归属: 均为 system 租户 (SYSTEM_TENANT_ID) 写入与托管——持仓是跨租户
 -- 共享的市场客观事实, 关注并集本就全局计算一次; 租户隔离保留在自选关系层
--- (watchlist_items)。三表均启用 RLS (tenant_isolation 策略), 由迁移
--- c3f2a8d1e9b4_fund_intraday_nav 建表后施加。
+-- (watchlist_items)。各表均启用 RLS (tenant_isolation 策略): 前三表由迁移
+-- c3f2a8d1e9b4_fund_intraday_nav 建表后施加; fund_nav_calibration 由迁移
+-- d8e5b2a9c4f7_fund_nav_calibration 同款施加 (M3 估值校准)。
 -- ============================================
 
 CREATE TABLE fund_holdings_snapshots (           -- 基金最新披露前 N 大持仓快照
@@ -347,6 +348,21 @@ CREATE TABLE fund_index_bindings (               -- 基金→跟踪指数绑定 
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE TABLE fund_nav_calibration (              -- 基金盘中估值加性偏差校准 (每基金一行, M3)
+    id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id             UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,   -- 恒为 system 租户
+    fund_code             VARCHAR(6) NOT NULL,          -- 规范化 6 位基金代码
+    symbol_id             UUID REFERENCES finance_symbols(id) ON DELETE CASCADE,
+    additive_bias_percent DECIMAL(8,4),                 -- 加性偏差 (%), ±50bp 夹界后存储
+    sample_count          INTEGER,                      -- 学习偏差所用的日样本数
+    last_official_nav     DECIMAL(18,4),                -- 最近官方净值 (增量样本配对预留)
+    last_official_date    DATE,
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_fund_nav_calibration_fund_code UNIQUE (fund_code)
+);
+
+CREATE INDEX idx_fund_nav_calibration_fund_code ON fund_nav_calibration(fund_code);
 
 -- ============================================
 -- 自选关注列表
@@ -544,7 +560,11 @@ CREATE INDEX idx_dashboard_snapshots_time ON dashboard_snapshots(tenant_id, time
   `c3f2a8d1e9b4_fund_intraday_nav`（基金盘中估值，2026-08-31）：新增
   `fund_holdings_snapshots` / `fund_holdings_meta` / `fund_index_bindings` 三表、
   `fund_nav_estimates` 增列 `holdings_coverage_percent` / `holdings_report_date`，
-  并在建表后对三张新表施加同款 `tenant_isolation` RLS 策略（表清单现为 15 张）
+  并在建表后对三张新表施加同款 `tenant_isolation` RLS 策略 →
+  `e5a9c4f7b2d1_repair_fund_intraday_nav_schema`（上述三表 schema 修复，幂等）→
+  `d8e5b2a9c4f7_fund_nav_calibration`（基金估值校准，2026-09-01）：新增
+  `fund_nav_calibration`（每基金一行加性偏差校准，M3）并施加同款 RLS 策略
+  （表清单现为 16 张）
 
 **启动链路（upgrade-first）**: `entrypoint.sh` 检测 `versions/` 是否含迁移脚本：
 
@@ -597,12 +617,14 @@ app/alembic/alembic.ini revision --autogenerate -m "..."`）→ **人工审查**
 **第二道防线——PostgreSQL RLS** ✅ 已实现（迁移 `7d9a46a0d5c9_tenancy_row_level_security`；
 SQL 常量与运行时接线集中在 `app/db/rls.py`）：
 
-*覆盖的 11 张表*（按模型逐一核对，凡含 `tenant_id` 的业务表全覆盖）：
+*覆盖的 12 张表*（按模型逐一核对，凡含 `tenant_id` 的业务表全覆盖）：
 `categories`、`sources`、`items`、`finance_symbols`、`finance_quotes`、
 `fund_nav_estimates`、`watchlist_items`、`sse_connections`
 + 基金盘中估值三表 `fund_holdings_snapshots`、`fund_holdings_meta`、`fund_index_bindings`
-（由迁移 `c3f2a8d1e9b4_fund_intraday_nav` 建表后即时施加同款策略——`app/db/rls.py`
-的 `RLS_TABLES` 常量冻结在 `7d9a46a0d5c9` 运行时的 8 张表语义，新表不进入旧迁移的迭代集）
+（由迁移 `c3f2a8d1e9b4_fund_intraday_nav` 建表后即时施加同款策略）
++ `fund_nav_calibration`（由迁移 `d8e5b2a9c4f7_fund_nav_calibration` 建表后即时施加同款策略）
+——`app/db/rls.py` 的 `RLS_TABLES` 常量冻结在 `7d9a46a0d5c9` 运行时的 8 张表语义，
+新表不进入旧迁移的迭代集
 
 *明确排除*：
 - `users`：登录/SSO/refresh 的用户查找发生在租户上下文建立**之前**（无 JWT 可解析），

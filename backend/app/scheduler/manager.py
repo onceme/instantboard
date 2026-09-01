@@ -599,6 +599,17 @@ class AsyncSchedulerManager:
         try:
             from app.db.session import apply_service_context, async_session_factory
             from app.services.fund_holdings import FundHoldingsService
+            from app.services.fund_registry import refresh_registry
+
+            # Opportunistic registry refresh (fund-intraday-nav.md §9.3): the
+            # catalog TTLs at 24h and lazy-rebuilds on search anyway; doing it
+            # here keeps the nightly cycle warm without a dedicated job.
+            # Failures never affect the holdings round.
+            try:
+                if not await refresh_registry():
+                    logger.warning(f"{job_id}: fund registry refresh failed (search degrades to heuristic)")
+            except Exception as exc:
+                logger.warning(f"{job_id}: fund registry refresh errored: {exc}")
 
             async with async_session_factory() as session:
                 await apply_service_context(session)

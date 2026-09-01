@@ -19,6 +19,7 @@ from app.core.redis import RedisKeys, get_redis_client, redis_delete, redis_get,
 from app.core.sse_router import SSEEventType, event_router
 from app.models.finance import FinanceQuote, FinanceSymbol, FundNAVEstimate
 from app.models.watchlist import WatchlistItem
+from app.services import fund_registry
 from app.services.market_calendar import (
     CLOSED_REASON_HOLIDAY,
     MARKET_TIMEZONES,
@@ -143,12 +144,16 @@ class FinanceService:
 
         results = []
         seen_symbols = set()
+        seen_fund_codes = set()
 
         for stmt_level in [stmt_exact, stmt_prefix, stmt_fuzzy]:
             rows = await self.db.execute(stmt_level)
             for row in rows.scalars().all():
                 if row.symbol not in seen_symbols:
                     seen_symbols.add(row.symbol)
+                    fund_code_norm = self._normalize_fund_code(row.symbol)
+                    if fund_code_norm:
+                        seen_fund_codes.add(fund_code_norm)
                     quote_data = await self._get_cached_quote(tenant_id, row.symbol)
                     results.append(
                         {
@@ -163,19 +168,67 @@ class FinanceService:
                         }
                     )
 
-        if not results:
+        # Fund registry is the authoritative catalog of every registered CN fund
+        # (fund-intraday-nav.md §9.3): exact codes resolve with real names ahead
+        # of the external indexes, and text/pinyin input gains OTC candidates no
+        # external index knows. get_registry() degrades to None on any failure —
+        # the heuristic/external paths below then carry the query as before.
+        fund_type_ok = type in (None, "all", "fund")
+        fund_market_ok = market in (None, "all", "CN")
+        registry = await fund_registry.get_registry() if fund_type_ok and fund_market_ok else None
+
+        registry_candidates: list[dict] = []
+        if registry is not None:
+            fund_code_query = self._normalize_fund_code(q)
+            if fund_code_query:
+                entry = registry.lookup_code(fund_code_query)
+                if entry is not None:
+                    hit = await self._register_registry_fund(tenant_id, entry)
+                    if entry.code in seen_fund_codes:
+                        # The DB tier already surfaced a spelling variant of this
+                        # code — sync its displayed name to the authoritative one
+                        # (heals the legacy "基金 {code}" placeholder rows).
+                        for item in results:
+                            if self._normalize_fund_code(item["symbol"]) == entry.code:
+                                item["name"] = hit["name"]
+                    else:
+                        seen_symbols.add(entry.code)
+                        seen_fund_codes.add(entry.code)
+                        results.append(hit)
+                    # Registry hit outranks the external indexes for exact codes:
+                    # OTC funds are absent from them anyway.
+                    if results:
+                        await redis_set(cache_key, json.dumps(results), ex=REDIS_TTL_SEARCH)
+                    return self._paginate_results(results, page, page_size)
+            else:
+                # Candidates are returned WITHOUT pre-registering tenant symbols
+                # (a keystroke search might match 20 funds); registration happens
+                # at selection time — add_to_watchlist's registry fallback.
+                for entry in registry.search(q):
+                    if entry.code in seen_fund_codes or entry.code in seen_symbols:
+                        continue
+                    seen_symbols.add(entry.code)
+                    seen_fund_codes.add(entry.code)
+                    registry_candidates.append(self._registry_candidate_result(entry))
+
+        if not results and not registry_candidates:
             external_results = await self._search_symbols_external(q, tenant_id)
             for ext in external_results:
                 if ext["symbol"] not in seen_symbols:
                     seen_symbols.add(ext["symbol"])
+                    fund_code_norm = self._normalize_fund_code(ext["symbol"])
+                    if fund_code_norm:
+                        seen_fund_codes.add(fund_code_norm)
                     results.append(ext)
 
-        # CN fund-code fallback (fund-intraday-nav.md, M2 phase A): external
-        # indexes do not know OTC open-end funds and search only ever created
-        # symbols from upstream hits. When the query itself is a 6-digit CN
-        # fund code and nothing matched, register a fund symbol under the
-        # requesting tenant so the code can be added to a watchlist and
-        # consumed by the intraday pipeline.
+        results.extend(registry_candidates)
+
+        # CN fund-code fallback (fund-intraday-nav.md, M2 phase A): the registry
+        # now owns code resolution when loaded; this heuristic path remains the
+        # degradation target for registry outages and codes missing from the
+        # catalog. External indexes do not know OTC open-end funds and search
+        # only ever created symbols from upstream hits, so without this a bare
+        # fund code could never enter a watchlist.
         if not results and (type in (None, "all", "fund")):
             auto_registered = await self._maybe_autoregister_fund_code(tenant_id, q)
             if auto_registered is not None:
@@ -986,6 +1039,16 @@ class FinanceService:
                         .limit(1)
                     )
                     fin_symbol = (await self.db.execute(stmt_variants)).scalar_one_or_none()
+                    if not fin_symbol:
+                        # Selection-time registration (§9.3): registry text/pinyin
+                        # candidates are returned by search WITHOUT pre-registering
+                        # a symbol row, so create it now (authoritative name) —
+                        # this is also the plain-code entry point. Registry
+                        # unavailable or code unknown → SymbolNotFound as before.
+                        registry = await fund_registry.get_registry()
+                        entry = registry.lookup_code(fund_code) if registry is not None else None
+                        if entry is not None:
+                            fin_symbol = await self._ensure_registry_fund_symbol(tenant_id, entry)
             if not fin_symbol:
                 raise SymbolNotFound(message=f"Symbol not found: {symbol_text}")
             symbol_id = str(fin_symbol.id)
@@ -1540,15 +1603,96 @@ class FinanceService:
 
         return None
 
+    def _registry_candidate_result(self, entry: fund_registry.FundRegistryEntry) -> dict:
+        """Search-result row for a registry text/pinyin candidate. The symbol is
+        NOT pre-registered — registration happens at selection time
+        (add_to_watchlist's registry fallback, §9.3)."""
+        return {
+            "symbol": entry.code,
+            "name": entry.name,
+            "type": "fund",
+            "market": "CN",
+            "exchange": "",
+            "current_price": None,
+            "change_percent": None,
+            "currency": "CNY",
+        }
+
+    async def _register_registry_fund(self, tenant_id: str, entry: fund_registry.FundRegistryEntry) -> dict:
+        """Ensure a type='fund' symbol exists under the tenant for an
+        authoritative registry entry (real name, not the legacy placeholder)
+        and return its search-result row."""
+        symbol = await self._ensure_registry_fund_symbol(tenant_id, entry)
+        return {
+            "symbol": symbol.symbol,
+            "name": symbol.name,
+            "type": symbol.type,
+            "market": symbol.market,
+            "exchange": symbol.exchange or "",
+            "current_price": None,
+            "change_percent": None,
+            "currency": symbol.currency or "CNY",
+        }
+
+    async def _ensure_registry_fund_symbol(
+        self, tenant_id: str, entry: fund_registry.FundRegistryEntry
+    ) -> FinanceSymbol:
+        """Reuse an existing spelling variant under the tenant or create the
+        bare-code fund symbol; legacy placeholder names heal to the registry
+        name (§9.3)."""
+        variants = [entry.code, f"{entry.code}.SS", f"{entry.code}.SZ", f"{entry.code}.OF"]
+        existing_stmt = (
+            select(FinanceSymbol)
+            .where(
+                FinanceSymbol.tenant_id == tenant_id,
+                func.upper(FinanceSymbol.symbol).in_([v.upper() for v in variants]),
+            )
+            .order_by(FinanceSymbol.symbol)
+            .limit(1)
+        )
+        existing = (await self.db.execute(existing_stmt)).scalar_one_or_none()
+        if existing is not None:
+            if existing.type == "fund" and fund_registry.is_placeholder_name(existing.name, entry.code):
+                existing.name = entry.name
+                try:
+                    await self.db.commit()
+                except Exception as e:
+                    logger.warning(f"Fund placeholder-name healing failed for {entry.code}: {e}")
+                    await self.db.rollback()
+            return existing
+
+        new_symbol = FinanceSymbol(
+            tenant_id=tenant_id,
+            symbol=entry.code,
+            name=entry.name,
+            type="fund",
+            market="CN",
+            exchange="",
+            currency="CNY",
+            is_active=True,
+        )
+        self.db.add(new_symbol)
+        try:
+            await self.db.commit()
+            return new_symbol
+        except Exception as e:
+            # Concurrent search racing the unique constraint: the winner's row is
+            # re-looked up; never fail the request over the race.
+            logger.warning(f"Fund registry symbol registration failed for {entry.code}: {e}")
+            await self.db.rollback()
+            winner = (await self.db.execute(existing_stmt)).scalar_one_or_none()
+            return winner if winner is not None else new_symbol
+
     async def _maybe_autoregister_fund_code(self, tenant_id: str, query: str) -> dict | None:
         """Register a bare 6-digit CN fund code as a fund symbol (§M2 phase A).
 
-        Fires only when search produced no hits at all — OTC open-end funds are
-        absent from every external index, so without this they could never enter
-        a watchlist. Listed ETF/LOF codes normally resolve through the external
-        path (with the corrected type), so this is the narrow OTC gap filler.
-        Returns the search-result dict for the (existing or newly created)
-        symbol, or None when the query is not a fund code / already registered.
+        Fires only when search produced no hits at all — with the fund registry
+        loaded (§9.3) exact codes resolve there first with authoritative names;
+        this heuristic path (placeholder name, prefix-classified codes) is the
+        degradation target for registry outages. Listed ETF/LOF codes normally
+        resolve through the external path (with the corrected type). Returns
+        the search-result dict for the (existing or newly created) symbol, or
+        None when the query is not a fund code / already registered.
         """
         fund_code = self._normalize_fund_code(query)
         if not fund_code or not self._is_cn_fund_code(fund_code):
@@ -1582,7 +1726,7 @@ class FinanceService:
         new_symbol = FinanceSymbol(
             tenant_id=tenant_id,
             symbol=fund_code,
-            name=f"基金 {fund_code}",
+            name=fund_registry.fund_placeholder_name(fund_code),
             type="fund",
             market="CN",
             exchange="",
@@ -1599,7 +1743,7 @@ class FinanceService:
             await self.db.rollback()
         return {
             "symbol": fund_code,
-            "name": f"基金 {fund_code}",
+            "name": fund_registry.fund_placeholder_name(fund_code),
             "type": "fund",
             "market": "CN",
             "exchange": "",
@@ -1708,6 +1852,10 @@ class FinanceService:
         return type_map.get(q_type, "stock")
 
     # 6-digit CN fund-code heuristic (fund-intraday-nav.md, M2 phase A).
+    # DEMOTED to fallback once the fund registry (§9.3) is loaded — the registry
+    # is the authoritative catalog and resolves any registered code including the
+    # families this heuristic cannot see. The heuristic remains the degradation
+    # path for registry outages.
     # External search indexes map CN listed ETFs/LOFs to EQUITY and miss OTC
     # open-end funds entirely, which left the intraday NAV pipeline without
     # consumable type='fund' symbols. Unambiguous CN fund-code families:

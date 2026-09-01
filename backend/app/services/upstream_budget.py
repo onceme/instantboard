@@ -124,6 +124,21 @@ UPSTREAM_REGISTRY: dict[str, UpstreamSpec] = {
         timeliness="disclosure data",
         known_limit="<=10 req/min advised",
     ),
+    # Full catalog of registered CN funds (fund-intraday-nav.md §9.3): one static
+    # ~3.1MB JS file carrying all ~28k funds; daily-class freshness, fetched
+    # lazily (24h Redis TTL) and opportunistically by the nightly holdings cron.
+    # Budget 2/min covers at most two api processes cold-rebuilding in the same
+    # minute; the breaker guards against a 403 loop, not sustained traffic.
+    "em_fund_registry": UpstreamSpec(
+        name="em_fund_registry",
+        endpoint="https://fund.eastmoney.com/js/fundcode_search.js",
+        batch_limit=1,
+        max_rpm=2,
+        burst=1,
+        required_headers={"Referer": "https://fund.eastmoney.com/"},
+        timeliness="catalog changes at most daily (new fund registrations)",
+        known_limit="200 OK in 0.6s, 3.15MB, 27718 entries (2026-09-01 measured)",
+    ),
 }
 
 # Env overrides for registry budgets (§10): settings field name per upstream.

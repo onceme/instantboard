@@ -139,6 +139,14 @@ class RedisKeys:
     # api process writes the tenants holding an active finance/all SSE connection;
     # the worker reads it to fan out nav_batch_update only to online tenants.
     SSE_CONNECTED_TENANTS_FINANCE = "sse:connected_tenants:finance"
+    # Fund registry cache (fund-intraday-nav.md §9.3): pointer → active version
+    # digest; the versioned data key holds the parsed catalog JSON. Content-hashed
+    # versioning lets an updated catalog land under a fresh key without racing the
+    # previous one. The fail marker short-circuits upstream retries after a fetch
+    # failure (negative cache).
+    FUND_REGISTRY_PTR = "fund_registry:ptr"
+    FUND_REGISTRY_DATA = "fund_registry:{version}"
+    FUND_REGISTRY_FAIL = "fund_registry:fail"
 
     SEARCH_TTL = 300
     # OAuth state validity window (seconds): long enough to finish a provider
@@ -185,8 +193,15 @@ class RedisKeys:
     # Online-tenant finance set TTL (seconds): 3x the 30s SSE heartbeat refresh
     # cadence so a live api process never lets it lapse while a dead api process
     # drops the fan-out target promptly (same gauge logic as
-    # SSE_ACTIVE_CONNECTIONS_TTL, fund-intraday-nav.md §8.1).
+    # SSE_CONNECTED_TENANTS_FINANCE_TTL, fund-intraday-nav.md §8.1).
     SSE_CONNECTED_TENANTS_FINANCE_TTL = 90
+    # Fund registry TTL (seconds): the catalog changes at most daily, so 24h with
+    # the data key outliving the pointer by 1h (a stale-read after pointer expiry
+    # then rebuilds lazily instead of mid-read). The fail marker bounds upstream
+    # retries after a fetch failure (fund-intraday-nav.md §9.3).
+    FUND_REGISTRY_TTL = 24 * 3600
+    FUND_REGISTRY_DATA_EXTRA_TTL = 3600
+    FUND_REGISTRY_FAIL_TTL = 300
 
     @staticmethod
     def session_key(session_id: str) -> str:
@@ -307,6 +322,18 @@ class RedisKeys:
     @staticmethod
     def sse_connected_tenants_finance_key() -> str:
         return RedisKeys.SSE_CONNECTED_TENANTS_FINANCE
+
+    @staticmethod
+    def fund_registry_ptr_key() -> str:
+        return RedisKeys.FUND_REGISTRY_PTR
+
+    @staticmethod
+    def fund_registry_data_key(version: str) -> str:
+        return RedisKeys.FUND_REGISTRY_DATA.format(version=version)
+
+    @staticmethod
+    def fund_registry_fail_key() -> str:
+        return RedisKeys.FUND_REGISTRY_FAIL
 
 
 async def redis_get(key: str) -> str | None:

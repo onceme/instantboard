@@ -51,7 +51,15 @@ logger = logging.getLogger(__name__)
 # index tracking / latest official and the UI warns).
 FUND_HOLDINGS_ANOMALOUS_DAYS = 730
 
-F10_JJCC_URL = "https://fundf10.eastmoney.com/FundArchivesDatas.aspx?type=jjcc&code={code}&topline=10"
+# The `topline` parameter caps holdings rows returned PER report period. The
+# default endpoint value of 10 returns only the top-10 holdings per period;
+# quarterly reports disclose only top-10 anyway, but semi-annual / annual
+# reports disclose the full book, which needs a larger topline to be returned.
+# Probed 2026-09-01 (polite, topline=10 → 10 rows/period, topline=30 → ~20
+# rows/period for a fund disclosing ~20 stocks). Driven by
+# settings.fund_holdings_topline (fund-intraday-nav.md §13 M3 §1.2). See §1.2
+# — parameterized so full-holdings ingestion lifts coverage beyond top-10.
+F10_JJCC_URL = "https://fundf10.eastmoney.com/FundArchivesDatas.aspx?type=jjcc&code={code}&topline={topline}"
 # Mandatory: without a fundf10.eastmoney.com Referer the endpoint answers 404
 # (verified 2026-08-31). Browser-style UA matches the TiantianFundCollector
 # convention.
@@ -295,7 +303,10 @@ class FundHoldingsService:
                 "Accept": "text/javascript, application/javascript, */*",
             }
             async with httpx.AsyncClient(timeout=FETCH_TIMEOUT_SECONDS) as client:
-                response = await client.get(F10_JJCC_URL.format(code=fund_code), headers=headers)
+                response = await client.get(
+                    F10_JJCC_URL.format(code=fund_code, topline=settings.fund_holdings_topline),
+                    headers=headers,
+                )
             await self.governor.report_result("em_f10_holdings", response.status_code == 200, response.status_code)
             if response.status_code != 200:
                 logger.warning(f"fund_holdings: HTTP {response.status_code} for {fund_code}")

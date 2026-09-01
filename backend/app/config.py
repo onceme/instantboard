@@ -203,6 +203,12 @@ class Settings(BaseSettings):
     # close, when quarterly disclosure updates land (fund-intraday-nav.md
     # §5.1/§5.5).
     fund_holdings_refresh_hour: int = Field(default=18, ge=0, le=23, alias="FUND_HOLDINGS_REFRESH_HOUR")
+    # Holdings rows fetched per report period from the EastMoney f10 jjcc
+    # endpoint (fund-intraday-nav.md §13 M3 §1.2). The upstream `topline` param
+    # caps rows per period; 10 (the historical default) returns only the top-10
+    # holdings per period, while semi-annual / annual reports disclose the full
+    # book. Default 30 lifts coverage beyond top-10 without being excessive.
+    fund_holdings_topline: int = Field(default=30, ge=1, le=100, alias="FUND_HOLDINGS_TOPLINE")
 
     # Quote upstream budget governance (fund-intraday-nav.md §6): global safety
     # factor applied to every upstream's max_rpm budget, and the IP-safety red

@@ -433,12 +433,40 @@ class AsyncSchedulerManager:
 
             if updated:
                 logger.info(f"{job_id}: official NAV updated for {updated} fund(s)")
+                # Nightly calibration (fund-intraday-nav.md §13 M3 §1.1): now that
+                # fresh official NAV is committed, learn each fund's additive
+                # estimate bias from accumulated daily samples. Runs AFTER the
+                # official upsert commits. Best-effort in its own session — a
+                # calibration failure logs but never kills this job, and never
+                # affects the official NAV already committed above.
+                await self._run_night_calibration(job_id)
             else:
                 logger.info(f"{job_id}: no official NAV updates (no fund symbols or collector returned nothing)")
             self._last_run_results[job_id] = {"success": True, "items_count": updated}
         except Exception as e:
             logger.error(f"{job_id} failed: {e}")
             self._last_run_results[job_id] = {"success": False, "error": str(e), "items_count": 0}
+
+    async def _run_night_calibration(self, job_id: str) -> None:
+        """Nightly estimate-calibration pass (fund-intraday-nav.md §13 M3 §1.1).
+
+        Called once, right after the official NAV upsert commits. Learns each
+        fund's additive estimate bias from accumulated daily samples and stores
+        it in fund_nav_calibration (dormant until enough samples accrue). A
+        failure here is logged and never raised — calibration is best-effort and
+        must never take down the official NAV job that already succeeded.
+        """
+        try:
+            from app.db.session import apply_service_context, async_session_factory
+            from app.services.fund_calibration import FundCalibrationService
+
+            async with async_session_factory() as session:
+                await apply_service_context(session)
+                calibrated = await FundCalibrationService(session).update_calibrations(str(SYSTEM_TENANT_ID))
+            if calibrated:
+                logger.info(f"{job_id}: nightly calibration updated for {calibrated} fund(s)")
+        except Exception as exc:  # noqa: BLE001 - calibration must never kill the job
+            logger.warning(f"{job_id}: nightly calibration failed (non-fatal): {exc}")
 
     async def add_fund_intraday_jobs(self) -> None:
         """Register the intraday NAV estimate loop (fund-intraday-nav.md §7.1).

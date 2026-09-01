@@ -199,6 +199,30 @@ class FundIntradayService:
                     bindings[code] = (str(row.underlying_index_symbol), 1.0)
         return bindings
 
+    async def _load_calibrations(self, codes: list[str]) -> dict[str, float]:
+        """Per-fund additive calibration bias (M3 §1.1), loaded once per cycle.
+
+        Returns {fund_code: additive_bias_percent} for funds with a stored
+        calibration; funds without one (insufficient samples) are simply absent
+        and the estimate is left un-calibrated. Read failures degrade to {} so
+        the cycle is unaffected."""
+        from app.models.finance import FundNAVCalibration
+
+        try:
+            stmt = select(FundNAVCalibration).where(
+                FundNAVCalibration.fund_code.in_(codes),
+                FundNAVCalibration.additive_bias_percent.is_not(None),
+            )
+            result = await self.db.execute(stmt)
+            return {
+                row.fund_code: float(row.additive_bias_percent)
+                for row in result.scalars().all()
+                if row.additive_bias_percent is not None
+            }
+        except Exception as exc:  # noqa: BLE001 - calibration is best-effort
+            logger.debug(f"fund_intraday: calibration load failed (estimates un-calibrated): {exc}")
+            return {}
+
     # ------------------------------------------------------------------
     # Tier planning (§4.3)
     # ------------------------------------------------------------------
@@ -248,6 +272,9 @@ class FundIntradayService:
         ids_per_code, name_per_code = await self._load_symbol_map(code_set)
         anchors = await self._load_official_anchors(ids_per_code)
         bindings = await self._load_bindings(codes, ids_per_code)
+        # Per-fund additive calibration bias learned nightly (M3 §1.1); None for
+        # funds without enough samples (calibration dormant).
+        calibrations = await self._load_calibrations(codes)
 
         holdings_by_code: dict[str, dict | None] = {}
         for code in codes:
@@ -308,6 +335,7 @@ class FundIntradayService:
                     now=now,
                     today=today,
                     fresh_days=fresh_days,
+                    calibration_bias=calibrations.get(code),
                 )
             )
 
@@ -354,6 +382,7 @@ class FundIntradayService:
         now: datetime,
         today: date,
         fresh_days: int,
+        calibration_bias: float | None = None,
     ) -> dict:
         nav_official = anchor[0] if anchor else None
         nav_official_date = str(anchor[1]) if anchor and anchor[1] else None
@@ -371,7 +400,7 @@ class FundIntradayService:
         }
 
         if tier == "holdings_weighted":
-            estimated = self._estimate_holdings_weighted(holdings_payload, quotes, base)
+            estimated = self._estimate_holdings_weighted(holdings_payload, quotes, base, calibration_bias)
             if estimated is not None:
                 return estimated
             tier = "index_tracking" if binding is not None else "latest_official"
@@ -396,10 +425,20 @@ class FundIntradayService:
         return (today - report_date).days > fresh_days
 
     @staticmethod
-    def _estimate_holdings_weighted(holdings_payload: dict | None, quotes: dict, base: dict) -> dict | None:
+    def _estimate_holdings_weighted(
+        holdings_payload: dict | None, quotes: dict, base: dict, calibration_bias: float | None = None
+    ) -> dict | None:
         """Σᵢ (wᵢ/100 × chgᵢ); undiscussed positions contribute 0 by design
         (§4.1). Returns None when no constituent quote resolved (caller then
-        degrades one tier)."""
+        degrades one tier).
+
+        When a nightly-learned additive calibration bias is available (M3 §1.1),
+        it is applied (bounded) to correct the holdings-weighted systematic bias;
+        the result carries ``calibrated`` so the UI can show a badge. With no
+        bias (insufficient samples), the raw estimate is used unchanged.
+        """
+        from app.services.fund_calibration import apply_additive_bias
+
         weighted_change = 0.0
         resolved = 0
         coverage = 0.0
@@ -434,7 +473,8 @@ class FundIntradayService:
         else:
             quote_status = "realtime"
 
-        change_percent = round(weighted_change, 4)
+        calibrated = calibration_bias is not None
+        change_percent = round(apply_additive_bias(weighted_change, calibration_bias), 4)
         nav_official = base.get("nav_official")
         result = dict(base)
         result.update(
@@ -445,6 +485,7 @@ class FundIntradayService:
                 "coverage_percent": min(round(coverage, 4), 100.0),
                 "quote_status": quote_status,
                 "delayed_markets": sorted(m for m in delayed_markets if m),
+                "calibrated": calibrated,
             }
         )
         return result

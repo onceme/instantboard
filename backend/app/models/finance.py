@@ -184,6 +184,58 @@ class FundNAVEstimate(Base):
     symbol = relationship("FinanceSymbol", back_populates="nav_estimates", lazy="selectin")
 
 
+class FundNAVCalibration(Base):
+    """Per-fund estimate calibration (fund-intraday-nav.md §13 M3 §1.1).
+
+    Each night after the official NAV update, the fund's systematic intraday
+    estimate bias is learned by comparing recent closing estimates against the
+    realized official NAV change, then applied (bounded) to intraday estimates.
+    One row per fund. System-tenant scoped like the other fund tables. Sample
+    accumulation starts once daily samples exist; calibration is only applied
+    once enough samples have accumulated (see FundCalibrationService).
+    """
+
+    __tablename__ = "fund_nav_calibration"
+
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
+    tenant_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    fund_code = Column(String(6), nullable=False)
+    symbol_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("finance_symbols.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    # Additive estimate bias in percent, bounded to ±50bp before storage.
+    additive_bias_percent = Column(Numeric(8, 4), nullable=True)
+    # Number of daily samples the bias was computed from.
+    sample_count = Column(Integer, nullable=True)
+    # Last official NAV/date seen, to support incremental sample pairing.
+    last_official_nav = Column(Numeric(18, 4), nullable=True)
+    last_official_date = Column(DATE, nullable=True)
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        server_default=text("NOW()"),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("fund_code", name="uq_fund_nav_calibration_fund_code"),
+        Index("idx_fund_nav_calibration_fund_code", "fund_code"),
+    )
+
+    tenant = relationship("Tenant", lazy="selectin")
+
+
 class FundHoldingSnapshot(Base):
     """Latest disclosed top-N holdings snapshot for one fund (fund-intraday-nav.md §3.1).
 

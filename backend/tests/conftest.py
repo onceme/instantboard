@@ -337,3 +337,35 @@ async def async_client():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
+
+
+@pytest.fixture(autouse=True)
+def _isolate_fund_registry():
+    """Keep the fund registry's real network/Redis load out of the suite.
+
+    search_symbols consults the registry for any query and the nightly holdings
+    cron calls refresh_registry(); an uncached load would fetch the ~3MB
+    upstream catalog mid-test. Autouse degradation keeps every existing test on
+    the pure heuristic baseline path; registry-specific tests re-patch these
+    seams (or the lower layers) explicitly.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    with (
+        patch("app.services.fund_registry.get_registry", new=AsyncMock(return_value=None)),
+        patch("app.services.fund_registry.refresh_registry", new=AsyncMock(return_value=True)),
+        # Belt and braces: even an explicitly re-enabled entry point must never
+        # leave the process — the only network seam stays closed by default.
+        patch("app.services.fund_registry._fetch_payload", new=AsyncMock(return_value=None)),
+    ):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _reset_fund_registry_process_cache():
+    """Drop the module-level snapshot so no test inherits another's cache."""
+    from app.services import fund_registry
+
+    fund_registry._reset_process_cache()
+    yield
+    fund_registry._reset_process_cache()

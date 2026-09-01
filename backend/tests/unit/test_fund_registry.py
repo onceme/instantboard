@@ -179,6 +179,68 @@ class TestFundRegistrySearch:
         assert reg.search("ETF", limit=0) == []
 
 
+def _synthetic_registry(seed: int = 7, size: int = 600) -> fund_registry.FundRegistry:
+    """Random-but-deterministic catalog exercising every ASCII index leg:
+    pinyin full/abbreviated prefixes, digit-bearing pinyin, ASCII name tokens,
+    code prefixes and CJK-only names."""
+    import random
+
+    rng = random.Random(seed)
+    letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    tokens = ["", "ETF", "QDII", "LOF", "100", "300ETF", "A", "(QDII)A", "ESG300", "C", "E人民币"]
+    entries: dict[str, fund_registry.FundRegistryEntry] = {}
+    code_num = 0
+    for _ in range(size):
+        code = f"{code_num:06d}"
+        code_num += rng.randint(1, 97)
+        body = "".join(rng.choice(letters) for _ in range(rng.randint(4, 28)))
+        if rng.random() < 0.3:
+            body = body[:3] + str(rng.randint(0, 999)) + body[3:]
+        pinyin_full = body
+        pinyin_abbr = body[:: rng.randint(2, 4)] if rng.random() < 0.9 else ""
+        cjk = "示例基金名称" + "".join(
+            rng.choice("甲乙丙丁戊己庚辛壬癸混合债券指数增强") for _ in range(rng.randint(0, 6))
+        )
+        name = cjk + rng.choice(tokens)
+        entries[code] = fund_registry.FundRegistryEntry(code, name, "混合型-灵活", pinyin_full, pinyin_abbr)
+    return fund_registry.FundRegistry(entries, "synthetic", "2026-09-01T00:00:00+00:00")
+
+
+class TestAsciiIndexConsistency:
+    """The indexed ASCII path must reproduce the legacy full-catalog scan
+    exactly (same entries, same code-ascending order, same limit cutoff)."""
+
+    @pytest.mark.parametrize("qu", ["A", "AB", "E", "ETF", "QDI", "300", "0", "00", "Z", "100E", "QDIIA", "0001"])
+    def test_targeted_queries_match_legacy_scan(self, qu):
+        reg = _synthetic_registry()
+        assert reg._search_ascii_indexed(qu, 20) == reg._search_ascii_scan(qu, 20)
+
+    def test_random_probes_match_legacy_scan(self):
+        import random
+
+        reg = _synthetic_registry()
+        rng = random.Random(42)
+        alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+        for _ in range(300):
+            qu = "".join(rng.choice(alphabet) for _ in range(rng.randint(1, 5)))
+            assert reg._search_ascii_indexed(qu, 20) == reg._search_ascii_scan(qu, 20), qu
+
+    def test_search_dispatch_matches_legacy_scan(self):
+        reg = _synthetic_registry()
+        for q in ("ETF", "a", "300etf", "100", "0000"):
+            assert reg.search(q, 20) == reg._search_ascii_scan(q.upper(), 20), q
+
+    def test_real_sample_pinyin_prefixes_match_legacy_scan(self):
+        reg = _registry()
+        for q in ("HXCZHH", "jingshunc", "yfd", "G", "GUANGFANASIDAKE", "5103", "etf"):
+            assert reg.search(q, 20) == reg._search_ascii_scan(q.upper(), 20), q
+
+    def test_single_letter_uses_pinyin_bucket(self):
+        reg = _registry()
+        assert [e.code for e in reg.search("h")] == ["000001", "510300"]
+        assert [e.code for e in reg.search("J")] == ["019118"]
+
+
 class TestPlaceholderHelpers:
     def test_placeholder_roundtrip(self):
         assert fund_registry.fund_placeholder_name("019118") == "基金 019118"
@@ -435,6 +497,67 @@ class TestRegistrySearchIntegration:
         assert page["data"][0]["name"] == "易方达优质精选混合(QDII)"
         db.add.assert_not_called()  # candidates register at selection time
         external.assert_not_awaited()  # registry candidates skip the external hop
+
+    async def test_cjk_miss_skips_external_when_registry_loaded(self):
+        # The registry owns CJK retrieval: a zero-candidate Chinese query never
+        # reaches Yahoo (it cannot know OTC funds), saving the external hop.
+        db = AsyncMock()
+        db.execute = AsyncMock(return_value=_empty_tier_result())
+        svc = _svc(db)
+        with (
+            patch("app.services.finance.redis_get", new_callable=AsyncMock, return_value=None),
+            patch("app.services.finance.redis_set", new_callable=AsyncMock),
+            patch("app.services.fund_registry.get_registry", new=AsyncMock(return_value=_registry())),
+            patch.object(FinanceService, "_search_symbols_external", new_callable=AsyncMock) as external,
+        ):
+            page = await svc.search_symbols("t1", "根本不存在某某基金")
+        assert page["meta"]["total"] == 0
+        external.assert_not_awaited()
+
+    async def test_pinyin_miss_skips_external_when_registry_loaded(self):
+        db = AsyncMock()
+        db.execute = AsyncMock(return_value=_empty_tier_result())
+        svc = _svc(db)
+        with (
+            patch("app.services.finance.redis_get", new_callable=AsyncMock, return_value=None),
+            patch("app.services.finance.redis_set", new_callable=AsyncMock),
+            patch("app.services.fund_registry.get_registry", new=AsyncMock(return_value=_registry())),
+            patch.object(FinanceService, "_search_symbols_external", new_callable=AsyncMock) as external,
+        ):
+            page = await svc.search_symbols("t1", "ZZQQXYZWVU")
+        assert page["meta"]["total"] == 0
+        external.assert_not_awaited()
+
+    async def test_ticker_miss_still_reaches_external_when_registry_loaded(self):
+        # Short ASCII letter runs stay ticker-shaped (AAPL ≤5 chars): the
+        # external index keeps its chance even with a loaded registry.
+        db = AsyncMock()
+        db.execute = AsyncMock(return_value=_empty_tier_result())
+        svc = _svc(db)
+        external_rows = [
+            {
+                "symbol": "AAPL",
+                "name": "Apple",
+                "type": "stock",
+                "market": "US",
+                "exchange": "NASDAQ",
+                "current_price": None,
+                "change_percent": None,
+                "currency": "USD",
+            }
+        ]
+        with (
+            patch("app.services.finance.redis_get", new_callable=AsyncMock, return_value=None),
+            patch("app.services.finance.redis_set", new_callable=AsyncMock),
+            patch("app.services.fund_registry.get_registry", new=AsyncMock(return_value=_registry())),
+            patch.object(
+                FinanceService, "_search_symbols_external", new_callable=AsyncMock, return_value=external_rows
+            ) as external,
+        ):
+            page = await svc.search_symbols("t1", "AAPL")
+        assert page["meta"]["total"] == 1
+        assert page["data"][0]["symbol"] == "AAPL"
+        external.assert_awaited_once()
 
     async def test_type_filter_excludes_registry_entirely(self):
         db = AsyncMock()

@@ -196,6 +196,60 @@ class TestSearchSymbols:
             assert result["meta"]["total"] == 1
 
 
+class TestExternalSearchWorthwhile:
+    """§9.3 search-performance gate: skip the Yahoo round-trip for fund-shaped
+    text the loaded registry already failed on; keep it for ticker-like input."""
+
+    @pytest.mark.parametrize(
+        "query",
+        ["DFRGZNZZQ", "dongfangren", "QQQQQZZZZZ", "maotaijiu"],
+    )
+    def test_long_pinyin_skipped_when_registry_loaded(self, query):
+        assert FinanceService._external_search_worthwhile(query, registry_loaded=True) is False
+
+    @pytest.mark.parametrize(
+        "query",
+        ["东方人工智能", "易方达优质精选", "不存在的某某基金", "东方人工智能zzq"],
+    )
+    def test_cjk_skipped_when_registry_loaded(self, query):
+        assert FinanceService._external_search_worthwhile(query, registry_loaded=True) is False
+
+    @pytest.mark.parametrize(
+        "query",
+        ["AAPL", "TSLA", "nvda", "BRK.B", "GOOGL"],
+    )
+    def test_ticker_like_kept_when_registry_loaded(self, query):
+        assert FinanceService._external_search_worthwhile(query, registry_loaded=True) is True
+
+    @pytest.mark.parametrize(
+        "query",
+        ["600519", "000002", "300750", "00700", "600519.SS", "0700.HK", "017811"],
+    )
+    def test_stock_code_shapes_kept_when_registry_loaded(self, query):
+        # 017811 is not a heuristic fund-code family (01-series codes resolve
+        # via the registry lookup long before this gate; a miss here means the
+        # catalog does not have it, so the external index keeps its chance).
+        assert FinanceService._external_search_worthwhile(query, registry_loaded=True) is True
+
+    @pytest.mark.parametrize(
+        "query",
+        ["005999", "510300", "159915", "161725", "180012"],
+    )
+    def test_cn_fund_code_shapes_skipped_when_registry_loaded(self, query):
+        # Heuristic fund-code families (§9.3): the registry/auto-registration
+        # path owns these; Yahoo never lists OTC funds under bare codes.
+        assert FinanceService._external_search_worthwhile(query, registry_loaded=True) is False
+
+    @pytest.mark.parametrize(
+        "query",
+        ["AAPL", "东方人工智能", "DFRGZNZZQ", "600519", ""],
+    )
+    def test_registry_unavailable_keeps_legacy_behavior(self, query):
+        # Degradation: without the registry the external index stays reachable
+        # for every query (even the blank one — the empty result is cached).
+        assert FinanceService._external_search_worthwhile(query, registry_loaded=False) is True
+
+
 class TestGetQuote:
     @patch("app.services.finance.event_router")
     async def test_get_quote_cached(self, mock_router):

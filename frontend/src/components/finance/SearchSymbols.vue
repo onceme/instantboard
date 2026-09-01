@@ -35,7 +35,9 @@ function onInput() {
 // empty after the drawer closes.
 function selectResult(result: SearchResult) {
   selectedSymbol.value = result.symbol;
-  financeStore.getQuote(result.symbol);
+  // OTC fund candidates have no realtime quote source; the drawer renders its
+  // no-quote fallback (watchlist action stays reachable) when the fetch fails.
+  financeStore.getQuote(result.symbol).catch(() => {});
   drawerSymbol.value = result.symbol;
   drawerVisible.value = true;
   searchQuery.value = "";

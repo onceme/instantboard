@@ -219,9 +219,6 @@ async function addToWatchlist() {
           </div>
 
           <div v-if="loading" class="drawer-status">加载行情中…</div>
-          <div v-else-if="loadError" class="drawer-status drawer-status-error">
-            {{ loadError }}
-          </div>
 
           <template v-else-if="quote">
             <div class="drawer-price">
@@ -309,6 +306,39 @@ async function addToWatchlist() {
               {{ watchlistHint }}
             </p>
           </template>
+
+          <!-- OTC open-end funds (and any symbol without a realtime quote
+               source) land here: keep the watchlist action reachable so they
+               can still be followed even though the quote fetch failed. The
+               fund NAV pipeline consumes them via official NAV / holdings, not
+               quote vendors (fund-intraday-nav.md §9.3). -->
+          <div v-else class="drawer-noquote">
+            <div class="drawer-status drawer-status-error">
+              {{ loadError || "该标的暂无实时行情源" }}
+            </div>
+            <p class="noquote-hint">
+              场外基金没有实时行情源，但仍可加入自选；其盘中估值与净值将在「基金」面板展示。
+            </p>
+            <div class="drawer-actions">
+              <button
+                type="button"
+                class="btn-watchlist"
+                :disabled="watchlistDisabled"
+                @click="addToWatchlist"
+              >
+                {{ watchlistButtonText }}
+              </button>
+            </div>
+            <p
+              v-if="watchlistHint"
+              class="watchlist-hint"
+              :class="
+                watchlistState === 'failed' ? 'hint-error' : 'hint-success'
+              "
+            >
+              {{ watchlistHint }}
+            </p>
+          </div>
         </aside>
       </div>
     </Transition>
@@ -402,6 +432,19 @@ async function addToWatchlist() {
 
 .drawer-status-error {
   color: var(--danger);
+}
+
+.drawer-noquote {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.noquote-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-muted);
 }
 
 .drawer-price {

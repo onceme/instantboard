@@ -2,6 +2,7 @@
 import { useFinanceStore } from "@/stores/finance";
 import { formatCurrency, formatPercent, getChangeClass } from "@/utils/format";
 import { getApiErrorMessage } from "@/utils/api";
+import { getFundStatusNote } from "@/utils/fundStatus";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import {
   Bell,
@@ -84,17 +85,23 @@ const successId = ref<string | null>(null);
 const sortedWatchlist = computed(() => {
   return [...financeStore.watchlist]
     .sort((a, b) => a.display_order - b.display_order)
-    .map((item, index) => ({
-      ...item,
-      quote: financeStore.watchlistQuotes.get(item.symbol),
+    .map((item, index) => {
       // Intraday estimate (fund rows): the SSE-fed navEstimates wins; the
       // quote's fund_nav snapshot seeds the row until the first batch lands.
-      nav:
+      const nav =
         financeStore.navEstimates[item.symbol] ??
         financeStore.watchlistQuotes.get(item.symbol)?.fund_nav ??
-        null,
-      order: index + 1,
-    }));
+        null;
+      return {
+        ...item,
+        quote: financeStore.watchlistQuotes.get(item.symbol),
+        nav,
+        // §9.4 status note: explains why a fund row shows no live estimate
+        // instead of a bare "--" (e.g. 「官方净值待更新」/「净值停更」).
+        statusNote: getFundStatusNote(nav),
+        order: index + 1,
+      };
+    });
 });
 
 // --- 拖拽排序（finance-tab.md §3.2）---
@@ -424,14 +431,30 @@ async function retryWatchlist() {
           <div v-if="!item.quote" class="item-price">--</div>
           <div v-if="!item.quote" class="item-change">--</div>
           <!-- Intraday estimate column (fund rows only): estimate NAV +
-               estimated change vs. official NAV. Hidden below 768px. -->
+               estimated change vs. official NAV. Hidden below 768px. When no
+               live estimate exists the §9.4 status note takes its place so
+               the row always explains itself (官方净值待更新 / 净值停更 …). -->
           <div v-if="item.nav" class="item-nav">
-            <span class="nav-value">{{
-              fmtNavCurrency(item.nav.nav_estimate)
-            }}</span>
-            <span :class="navChangeClass(item.nav.estimate_change_percent)">
-              {{ fmtNavPercent(item.nav.estimate_change_percent) }}
-            </span>
+            <template v-if="item.statusNote && item.nav.nav_estimate == null">
+              <span class="nav-status-note" :title="item.statusNote.tooltip">
+                {{ item.statusNote.label }}
+              </span>
+            </template>
+            <template v-else>
+              <span class="nav-value">{{
+                fmtNavCurrency(item.nav.nav_estimate)
+              }}</span>
+              <span :class="navChangeClass(item.nav.estimate_change_percent)">
+                {{ fmtNavPercent(item.nav.estimate_change_percent) }}
+              </span>
+              <span
+                v-if="item.statusNote"
+                class="nav-status-note nav-status-sub"
+                :title="item.statusNote.tooltip"
+              >
+                {{ item.statusNote.label }}
+              </span>
+            </template>
           </div>
           <div class="row-move">
             <button
@@ -696,6 +719,32 @@ async function retryWatchlist() {
     transparent
   );
   border: 1px solid color-mix(in srgb, var(--warning, #f59e0b) 35%, transparent);
+}
+
+/* §9.4 status note inside the estimate column: replaces the estimate when a
+   live number is unavailable, or annotates it as a sub-line otherwise. */
+.nav-status-note {
+  font-size: 11px;
+  line-height: 16px;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm, 4px);
+  color: var(--warning, #f59e0b);
+  background-color: color-mix(
+    in srgb,
+    var(--warning, #f59e0b) 12%,
+    transparent
+  );
+  border: 1px solid color-mix(in srgb, var(--warning, #f59e0b) 35%, transparent);
+  cursor: help;
+  user-select: none;
+  white-space: nowrap;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nav-status-sub {
+  margin-top: 2px;
 }
 
 .remove-btn {

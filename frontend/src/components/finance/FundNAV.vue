@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useFinanceStore } from "@/stores/finance";
 import { formatCurrency, formatPercent, getChangeClass } from "@/utils/format";
+import { getFundStatusNote } from "@/utils/fundStatus";
 import { computed, ref } from "vue";
 import type { FundNAVIntraday } from "@/types";
 import { Search } from "lucide-vue-next";
@@ -87,6 +88,10 @@ function delayedMarketsText(fund: FundNAVIntraday): string {
     ? `（${fund.delayed_markets.join("/")} 延迟）`
     : "";
 }
+
+// §9.4 status note for the selected fund (explains a missing live estimate
+// instead of rendering bare "--" rows).
+const statusNote = computed(() => getFundStatusNote(selectedFund.value));
 
 // Concise reason for the degraded estimate methods (fund-intraday-nav.md
 // §4.3): why the holdings-weighted path is not in effect.
@@ -194,6 +199,13 @@ function methodReason(fund: FundNAVIntraday): string | null {
           <span class="quote-status">
             {{ QUOTE_STATUS_LABELS[selectedFund.quote_status]
             }}{{ delayedMarketsText(selectedFund) }}
+          </span>
+        </div>
+
+        <div v-if="statusNote" class="nav-row">
+          <span class="nav-label">估值状态</span>
+          <span class="nav-status-note" :title="statusNote.tooltip">
+            {{ statusNote.label }}
           </span>
         </div>
 
@@ -392,6 +404,24 @@ function methodReason(fund: FundNAVIntraday): string | null {
   color: var(--accent);
   background-color: color-mix(in srgb, var(--accent) 12%, transparent);
   border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  cursor: help;
+  user-select: none;
+}
+
+/* §9.4 estimate status note: why this fund shows no live intraday value. */
+.nav-status-note {
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  padding: 1px 8px;
+  border-radius: var(--radius-sm);
+  color: var(--warning, #f59e0b);
+  background-color: color-mix(
+    in srgb,
+    var(--warning, #f59e0b) 12%,
+    transparent
+  );
+  border: 1px solid color-mix(in srgb, var(--warning, #f59e0b) 35%, transparent);
   cursor: help;
   user-select: none;
 }

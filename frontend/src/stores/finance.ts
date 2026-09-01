@@ -13,7 +13,13 @@ import type {
   FinancePanel,
 } from "@/types";
 import { SSEEventType } from "@/types";
-import { apiGet, apiPost, apiDelete, getApiErrorMessage } from "@/utils/api";
+import {
+  apiGet,
+  apiPost,
+  apiDelete,
+  getApiErrorMessage,
+  isCanceledError,
+} from "@/utils/api";
 import { formatPercent } from "@/utils/format";
 import { financeApi } from "@/api/finance";
 import { SSEConnection, SSEConnectionState } from "@/utils/sse.ts";
@@ -29,6 +35,9 @@ export const useFinanceStore = defineStore("finance", () => {
   const marketIndices = ref<MarketIndex[]>([]);
   const commodities = ref<Commodity[]>([]);
   const searchResults = ref<SearchResult[]>([]);
+  // True while a symbol search request is in flight (drives the loading state
+  // of the suggestion panel so late/empty responses never blank it silently).
+  const searchLoading = ref(false);
   const quotesCache = ref<Map<string, FinanceQuote>>(new Map());
   const navData = ref<Map<string, FundNAV>>(new Map());
   // Intraday NAV estimates keyed by normalized 6-digit fund code
@@ -70,17 +79,54 @@ export const useFinanceStore = defineStore("finance", () => {
     currentPanel.value = panel;
   }
 
+  // Race guard for symbol search. Two keystrokes fire two requests; a slow
+  // first response arriving after a newer one must NOT overwrite the fresh
+  // results (the "候选列表闪退/跳走" symptom). Defense in depth:
+  //  - a monotonically increasing sequence number stamps every request; a
+  //    response is applied only if it is still the latest, and
+  //  - the previous in-flight request is aborted via AbortController so a
+  //    stale response is usually never even produced.
+  let searchSeq = 0;
+  let searchAbort: AbortController | null = null;
+
   async function searchSymbols(query: string, type: string = "all") {
+    searchSeq += 1;
+    const seq = searchSeq;
+    searchAbort?.abort();
+
     if (!query.trim()) {
+      searchAbort = null;
+      searchQuery.value = query;
       searchResults.value = [];
+      searchLoading.value = false;
       return;
     }
+
     searchQuery.value = query;
-    const response = await apiGet<SearchResult[]>("/finance/search", {
-      q: query,
-      type,
-    });
-    searchResults.value = response.data;
+    const controller = new AbortController();
+    searchAbort = controller;
+    searchLoading.value = true;
+    try {
+      const response = await apiGet<SearchResult[]>(
+        "/finance/search",
+        { q: query, type },
+        controller.signal,
+      );
+      // A newer query superseded this one while in flight — drop the stale
+      // response instead of clobbering the current results.
+      if (seq !== searchSeq) return;
+      searchResults.value = response.data;
+    } catch (err) {
+      // Deliberate cancellation of a superseded request: nothing to surface.
+      if (seq !== searchSeq || isCanceledError(err)) return;
+      // Genuine failure of the latest query: show an empty result set (the
+      // panel renders its "no match" state) rather than leaving stale rows.
+      searchResults.value = [];
+    } finally {
+      if (seq === searchSeq) {
+        searchLoading.value = false;
+      }
+    }
   }
 
   async function getQuote(symbol: string) {
@@ -440,6 +486,7 @@ export const useFinanceStore = defineStore("finance", () => {
     marketIndices,
     commodities,
     searchResults,
+    searchLoading,
     quotesCache,
     navData,
     navEstimates,

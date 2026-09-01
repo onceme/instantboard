@@ -104,9 +104,20 @@ apiClient.interceptors.response.use(
 export async function apiGet<T>(
   url: string,
   params?: Record<string, unknown>,
+  signal?: AbortSignal,
 ): Promise<ApiResponse<T>> {
-  const response = await apiClient.get<ApiResponse<T>>(url, { params });
+  const response = await apiClient.get<ApiResponse<T>>(url, {
+    params,
+    signal,
+  });
   return response.data;
+}
+
+// True when a request was cancelled via AbortController (axios rejects with a
+// CanceledError). Callers must drop such errors silently — the caller itself
+// moved on to a newer request (see the finance store search guard).
+export function isCanceledError(err: unknown): boolean {
+  return axios.isCancel(err);
 }
 
 export async function apiPost<T>(

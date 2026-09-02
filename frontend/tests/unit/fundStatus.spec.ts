@@ -69,6 +69,40 @@ describe("getFundStatusNote", () => {
     expect(note).toBeNull();
   });
 
+  it("holdings ingesting without a live estimate → 持仓数据摄取中… (just searched/followed)", () => {
+    const note = getFundStatusNote(nav({ holdings_ingesting: true }));
+    expect(note?.label).toBe("持仓数据摄取中…");
+    expect(note?.tooltip).toContain("官方净值每晚 20:00 左右更新");
+  });
+
+  it("holdings ingesting with a live estimate → no note (estimate is real)", () => {
+    const note = getFundStatusNote(
+      nav({
+        holdings_ingesting: true,
+        estimate_method: "index_tracking",
+        nav_official: 1.0,
+        nav_estimate: 1.02,
+        estimate_change_percent: 2.0,
+        quote_status: "realtime",
+      }),
+    );
+    expect(note).toBeNull();
+  });
+
+  it("holdings ingesting outranks 官方净值待更新", () => {
+    // Freshly followed fund: anchor missing AND ingestion in flight — the
+    // specific in-flight explanation wins over the generic anchor note.
+    const note = getFundStatusNote(nav({ holdings_ingesting: true }));
+    expect(note?.label).toBe("持仓数据摄取中…");
+  });
+
+  it("disclosure anomaly outranks 持仓数据摄取中…", () => {
+    const note = getFundStatusNote(
+      nav({ holdings_ingesting: true, holdings_stale: true }),
+    );
+    expect(note?.label).toBe("盘中估值不可用·持仓披露异常");
+  });
+
   it("held anchor with latest_official method → 净值停更 (user-chosen wording)", () => {
     const note = getFundStatusNote(
       nav({

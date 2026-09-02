@@ -11,6 +11,7 @@ from apscheduler.triggers.cron import CronTrigger
 
 from app.core.constants import SYSTEM_TENANT_ID
 from app.scheduler.manager import (
+    FUND_NAV_OFFICIAL_CATCHUP_JOB_ID,
     FUND_NAV_OFFICIAL_REFRESH_JOB_ID,
     FUND_NAV_REFRESH_HOUR,
     FUND_NAV_REFRESH_MINUTE,
@@ -45,13 +46,18 @@ def _mock_session():
 
 
 class TestAddFundNavJob:
+    @staticmethod
+    def _call_kwargs(mgr, job_id):
+        calls = {c.kwargs["id"]: c.kwargs for c in mgr.scheduler.add_job.call_args_list}
+        return calls[job_id]
+
     async def test_registers_cron_20_00_asia_shanghai(self):
         mgr = _make_manager()
         await mgr.add_fund_nav_job()
 
-        mgr.scheduler.add_job.assert_called_once()
-        kwargs = mgr.scheduler.add_job.call_args.kwargs
-        assert kwargs["id"] == FUND_NAV_OFFICIAL_REFRESH_JOB_ID
+        # Cron + the one-shot startup catch-up (§7) are registered together.
+        assert mgr.scheduler.add_job.call_count == 2
+        kwargs = self._call_kwargs(mgr, FUND_NAV_OFFICIAL_REFRESH_JOB_ID)
         assert kwargs["replace_existing"] is True
 
         trigger = kwargs["trigger"]
@@ -66,15 +72,17 @@ class TestAddFundNavJob:
     async def test_job_body_is_the_gated_run_body(self):
         mgr = _make_manager()
         await mgr.add_fund_nav_job()
-        func = mgr.scheduler.add_job.call_args.args[0]
-        assert func == mgr._run_fund_nav_official_refresh
+        call = next(
+            c for c in mgr.scheduler.add_job.call_args_list if c.kwargs["id"] == FUND_NAV_OFFICIAL_REFRESH_JOB_ID
+        )
+        assert call.args[0] == mgr._run_fund_nav_official_refresh
 
     async def test_reregistration_replaces_existing(self):
         mgr = _make_manager()
         await mgr.add_fund_nav_job()
         await mgr.add_fund_nav_job()
-        assert mgr.scheduler.add_job.call_count == 2
-        assert mgr.scheduler.add_job.call_args.kwargs["replace_existing"] is True
+        assert mgr.scheduler.add_job.call_count == 4  # cron + catch-up, twice
+        assert all(c.kwargs["replace_existing"] is True for c in mgr.scheduler.add_job.call_args_list)
 
     async def test_cron_job_not_in_interval_bookkeeping(self):
         """The adaptive/load rescheduling machinery is interval-based; the cron
@@ -85,6 +93,8 @@ class TestAddFundNavJob:
         assert FUND_NAV_OFFICIAL_REFRESH_JOB_ID not in mgr._original_intervals
         assert FUND_NAV_OFFICIAL_REFRESH_JOB_ID not in mgr._adaptive_multipliers
         assert FUND_NAV_OFFICIAL_REFRESH_JOB_ID not in mgr._load_multipliers
+        # Same for the one-shot catch-up companion.
+        assert FUND_NAV_OFFICIAL_CATCHUP_JOB_ID not in mgr._original_intervals
 
     async def test_independent_of_market_refresh_switch(self):
         """market_refresh_jobs_enabled only governs the interval market jobs;
@@ -92,7 +102,9 @@ class TestAddFundNavJob:
         mgr = _make_manager()
         mgr.market_refresh_jobs_enabled = False
         await mgr.add_fund_nav_job()
-        mgr.scheduler.add_job.assert_called_once()
+        ids = {c.kwargs["id"] for c in mgr.scheduler.add_job.call_args_list}
+        assert FUND_NAV_OFFICIAL_REFRESH_JOB_ID in ids
+        assert FUND_NAV_OFFICIAL_CATCHUP_JOB_ID in ids
 
 
 class TestFundNavJobBody:

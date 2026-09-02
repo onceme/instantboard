@@ -1,5 +1,5 @@
 ---
-version: 1.4
+version: 1.5
 author: designer
 date: 2026-09-01
 status: finalized
@@ -182,6 +182,8 @@ class FundNAVIntraday(BaseModel):
     quote_status: Literal["realtime", "delayed", "mixed", "frozen"]
     delayed_markets: list[str] = []         # 如 ["HK","US"] → UI 延迟行情标注
     holdings_stale: bool = False            # 报告期超阈值
+    calibrated: bool = False                # M3 加性校准已应用（UI 徽章）
+    holdings_ingesting: bool = False        # 1.5：持仓摄取在途（§9.4「持仓数据摄取中…」）
     estimate_timestamp: str                 # UTC ISO8601
 ```
 
@@ -240,6 +242,8 @@ nav_estimate            = nav_official × (1 + estimate_change_percent/100)
 
 - 接口：`GET https://fundf10.eastmoney.com/FundArchivesDatas.aspx?type=jjcc&code={code}&topline={FUND_HOLDINGS_TOPLINE}`（默认 30，见 §10；M3：`topline` 上限是**每个报告期**返回的持仓行数——季报本就只披露前十大，半年报/年报披露全量持仓时需调大 topline 才取得回，2026-09-01 实测 topline=10 → 10 行/期、topline=30 → 披露 ~20 只的基金取回 ~20 行/期），**必须 `Referer: https://fundf10.eastmoney.com/`**（不带 404；2026-08-31 实测 ~0.34s），UA 浏览器风格（对齐 `TiantianFundCollector` 做法）。
 - 响应 `var apidata={content:"<html>"}` → BeautifulSoup（lxml，回退 html.parser，对齐 `WebScrapeCollector`）解析表格：股票代码/名称/占净值比/持股数/报告期；**一次返回含多个报告期 → 取最新者**整组替换该基金旧快照（事务内删旧插新）。
+- **实盘表格版式（1.5 修复）**：f10 jjcc 的实盘 `<table class='w782 comm tzxq'>` 带**前导「序号」列**（纯文本 1、2、3…）以及 最新价/涨跌幅/相关资讯 列；相关资讯单元格本身又含 `…/unify/r/` 行情链接。因此**代码单元格必须按「第一个含 `/unify/r/{secid}` 链接的单元格」定位，绝不能按列序号位置取**——否则序号会被误当股票代码（2026-09-01 事故：017811/510500 的序号 1-10 被当港股、权重全错、行情 0 解析、估值降级）。兜底路径（无任何链接时）对纯数字且长度 <5 的单元格按 `_looks_like_security_code` 拒绝（真实代码：CN 6 位 / 港 5 位补零 / 美股含字母）。
+- **脏快照自愈（1.5 修复）**：上述事故期间已入库的快照（序号当代码）对 meta 门控而言「看起来正常」却永远拉不到行情。`needs_ingestion` / `codes_needing_ingestion` 增设**快照可用性探测**：某基金最新快照若**一行都没有**可辨识的证券代码，即视为「缺快照」重新摄取（整组替换），无需手工清库；每日 18:00 cron 对全部关注基金本就重抓，构成第二道自愈。
 - **secid 提取**：行内链接 `…/unify/r/{secid}` 直接解析（`1.`沪 `0.`深 `116.`港 `105./106.`美）；缺失时行情侧按 `stock_code + market` 规则转换。
 
 ### 5.4 披露异常标记与提示
@@ -383,6 +387,18 @@ async def add_fund_intraday_jobs(self):
 
 极端规模评估：512 自选上限 × 50 用户 = 25,600 自选条目 → 并集去重最坏上万基金，**必须截断**：`FUND_NAV_INTRADAY_MAX_FUNDS=500`（硬上限 1000，超出为配置错误）。被截断基金的降级路径：REST batch 端点仍按 `latest_official` 供应；盘中加权估值缺失记 warning。监控建议：周期时长 > 2.5s 或发生截断时告警（结构化日志）。
 
+### 7.4 官方净值启动补跑（1.5 新增）
+
+**动机**：官方净值锚是盘中估值的分母锚，但 `fund_nav_official_refresh` 是**每日一次**的 20:00 cron——容器若在该时点前后重启（典型场景：部署撞车、进程崩溃），当晚这一发就被 APScheduler 丢火（`misfire_grace_time=60` 远小于停机窗口），锚**缺失一整天**，次日盘中所有基金只能显示 `latest_official` 兜底。2026-08-31 staging 即因此全库无锚。
+
+**方案：注册时挂一次性补跑探测**（`add_fund_nav_job` 同时注册 `fund_nav_official_catchup`，`DateTrigger` = 启动后 45s）：
+
+1. 探测 `official_nav_anchor_lagging(system)`：租户有 `type='fund'` 活跃符号，且**最新存量官方净值日期** < `latest_expected_official_nav_date()`（交易日历感知：交易日的 20:00 之前期望上一交易日、之后期望当日；周末/节假日回溯跳过）→ 落后；
+2. 落后 → 立即跑一次 `update_official_nav`（与 20:00 cron 同路径，含事后夜校准），成功记 `items_count`；
+3. 探测任何异常 → 返回「不落后」——**坏探测绝不能在每次重启时触发上游抓取风暴**。
+
+**性质**：幂等（同行覆盖）、一次性、best-effort、不进 `_original_intervals`（非 interval 语义）。即使部署再次晚于 20:00，容器起来后也会自动灌锚——**消除「部署时机撞掉唯一一发」的脆弱性**。
+
 ## 8. 推送与多租户策略
 
 ### 8.1 矛盾与方案
@@ -410,9 +426,9 @@ async def add_fund_intraday_jobs(self):
 
 | 端点 | 状态 | 说明 |
 |------|------|------|
-| `GET /api/v1/finance/fund-nav/batch?symbols=510300,005827` | **新增** | JWT 鉴权；`symbols ≤ 50` 去重（**超出返回 400 `VALIDATION_ERROR`**——项目异常约定，非 422）；命中 `fund_nav_rt` 返回最新估值，未命中走 `latest_official` 兜底（不触发持仓摄取的重路径，摄取另由钩子异步触发）；未知代码返回 `error` 字段条目而非整体 404；响应 `SuccessResponse[list[FundNAVIntraday]]` |
+| `GET /api/v1/finance/fund-nav/batch?symbols=510300,005827` | **新增** | JWT 鉴权；`symbols ≤ 50` 去重（**超出返回 400 `VALIDATION_ERROR`**——项目异常约定，非 422）；命中 `fund_nav_rt` 返回最新估值；**盘中（CN 门控）未命中 → 按需即时计算 `compute_on_demand`**（§9.5，复用周期同一分层管线 + 写 `fund_nav_rt`）；**盘外**未命中走 `latest_official` 兜底（零上游请求原则不变）；缺可用快照的代码异步触发持仓摄取钩子（§5.1）并在条目上打 `holdings_ingesting=true`（UI 显示「持仓数据摄取中…」，§9.4）；未知代码返回 `error` 字段条目而非整体 404；响应 `SuccessResponse[list[FundNAVIntraday]]` |
 | `GET /api/v1/finance/watchlist/quotes`（finance.py:284） | **修改** | `FinanceQuoteResponse` 增可选字段 `fund_nav: FundNAVIntraday \| None`（仅基金条目填充，股票条目 None，向后兼容）——Watchlist 基金行的估值列直接用它 |
-| `GET /api/v1/finance/fund/{symbol}/nav`（finance.py:157） | **修改** | `get_fund_nav` 先读 `fund_nav_rt:{code}`（新鲜→直接返回、跳过副作用推送）；未命中走现有路径；指数绑定改读 `fund_index_bindings`（断头路修复落点，§3.3） |
+| `GET /api/v1/finance/fund/{symbol}/nav`（finance.py:157） | **修改** | `get_fund_nav` 先读 `fund_nav_rt:{code}`（新鲜→直接返回、跳过副作用推送）；**盘中 rt 未命中 → 同 `compute_on_demand` 即时计算并直接返回（顺带写缓存）**；仍未命中走现有路径；指数绑定改读 `fund_index_bindings`（断头路修复落点，§3.3） |
 | `POST /api/v1/finance/watchlist` | **修改（内部）** | 成功后基金符号触发异步持仓摄取钩子（§5.1）；对外契约不变 |
 
 ### 9.2 前端改动清单
@@ -423,10 +439,24 @@ async def add_fund_intraday_jobs(self):
 | `frontend/src/utils/sse.ts` | 增 `nav_batch_update` 分发 case |
 | `frontend/src/stores/finance.ts` | 新增 `navEstimates: Record<string, FundNAVIntraday>` + `updateNAVBatchFromSSE`（按 symbol 整体替换合并）；`FundNAV` 选中项数据源改读 `navEstimates`（响应式，替换现快照逻辑） |
 | `frontend/src/components/finance/Watchlist.vue` | 基金行：估值列（估值 + 估算涨跌%，复用 `change-up`/`change-down` 配色）+ **精度徽章**（「精度 {coverage}%」，tooltip 说明口径与未知仓位假设、免责）+ **延迟标注**（`quote_status` 含 delayed → 「延迟·HK/US」，tooltip 给 15~25min 量级）+ `holdings_stale` 警示图标 |
-| `frontend/src/components/finance/FundNAV.vue` | 改为订阅 `navEstimates` 的响应式视图；展示 coverage、`holdings_report_date`、`quote_status` 标注 |
+| `frontend/src/components/finance/FundNAV.vue` | 改为订阅 `navEstimates` 的响应式视图；展示 coverage、`holdings_report_date`、`quote_status` 标注；**（1.5）搜索结果每行 + 选中详情头部带「＋关注」快捷按钮**（行为对齐 `SearchSymbols.vue`：成功→「✓已关注」、409 重复→「已在自选」浮注）——用户实测反馈在基金面板找不到加自选入口，这是把「搜到的基金」拉进盘中估值循环（§9.5 按需路径 + 关注并集）的唯一动作 |
 | `frontend/src/components/finance/DetailDrawer.vue` | （可选，低优先）基金类型抽屉内联估值小行，复用 store |
 
-加自选入口：沿用 DetailDrawer/QuoteCard 现有「加入自选」链路（`finance_symbols` 中 `type='fund'` 符号可加），**无需新入口**；加自选后 ≤1 个周期（~3s）估值经 SSE/REST 自动到位，缺数据显示「—」。场外基金无实时行情源、详情抽屉行情请求必然失败，DetailDrawer 的无行情兜底态（错误/提示 + 「加入自选」按钮）保证此类标的同样可加自选（§9.3）。
+加自选入口（1.5 修订）：DetailDrawer/QuoteCard 沿用原「加入自选」链路；**`SearchSymbols.vue` 与 `FundNAV.vue` 另各带行级「＋关注」快捷按钮**（1.4 仅落地了前者，1.5 补齐后者——用户实测路径是基金面板内搜索）。关注后基金进入关注并集，≤1 个周期（~3s）估值经 SSE/REST 自动到位；关注前盘中查看也有值（§9.5 按需即时计算）；缺数据显示「—」并附状态文案（§9.4）。场外基金无实时行情源、详情抽屉行情请求必然失败，DetailDrawer 的无行情兜底态（错误/提示 + 「加入自选」按钮）保证此类标的同样可加自选（§9.3）。
+
+### 9.5 盘中按需计算（1.5 新增：「搜到即可看到估值」）
+
+**动机**：关注制（§1.2.3）只把「已关注并集」拉进 3s 循环；用户**搜索到但尚未关注**的基金，盘中查询只能得到 `latest_official` 兜底——正是 017811 事故的用户体验缺口。
+
+**机制**：`FundIntradayService.compute_on_demand(codes)`——把周期体的「引用载入 → 分层规划 → 成分行情 → 逐基金估值」抽成共享管线 `_compute_results`（周期与按需共用，决策/加权逻辑零分叉），按需路径额外：
+
+1. **仅盘中生效**：调用方（`get_fund_nav_batch` / `get_fund_nav`）先查 `_is_market_open("CN")`，盘外完全短路——**零上游请求原则不变**；
+2. **未知代码不入结果**（不在 `finance_symbols` 的码由调用方转 `error` 条目）；
+3. **写 `fund_nav_rt`**（TTL 12s）——重复查询命中缓存，且与周期/收盘快照共享同一缓存面；
+4. **失败静默降级**返回空 → 调用方回落 `latest_official`，REST 永不因按需路径报错；
+5. **不做推送/落库**：按需答案是请求级的；基金只有被加自选后才进入 SSE 推送面。持仓缺失的条目由调用方触发摄取钩子（§5.1 case 3）并打 `holdings_ingesting=true`（§9.4 文案）。
+
+**限流**：按需请求经同一预算治理器（行情链 + `em_f10_holdings`），JWT 鉴权 + `symbols ≤ 50` 天然限幅。
 
 ### 9.3 基金符号可用化（M2 新增，M3 名录扩展）
 
@@ -445,18 +475,21 @@ M1 部署验证发现的缺口：`finance_symbols` 无任何 `type='fund'` 条�
 
 ### 9.4 状态文案体系（1.4 新增）
 
-**动机**：用户实测 017811（东方人工智能主题混合C）——首次入库、官方净值锚与持仓快照双缺，盘中只能看到一片 `--`，无任何解释。**无实时估值时必须给用户明确交代**，而不是空白。本体系为纯前端推导（`frontend/src/utils/fundStatus.ts::getFundStatusNote`），不新增后端字段——所需判据 `quote_status` / `nav_official` / `holdings_stale` / `estimate_method` 均已在 `FundNAVIntraday` payload 内（§3.5）。
+**动机**：用户实测 017811（东方人工智能主题混合C）——首次入库、官方净值锚与持仓快照双缺，盘中只能看到一片 `--`，无任何解释。**无实时估值时必须给用户明确交代**，而不是空白。推导在纯前端 `frontend/src/utils/fundStatus.ts::getFundStatusNote`，判据全部来自 `FundNAVIntraday` payload（§3.5）：`quote_status` / `nav_official` / `holdings_stale` / `estimate_method`，以及 1.5 新增的 `holdings_ingesting`（REST 懒摄取钩子触发且尚无可读快照时置位，见 §9.1/§9.5）。
 
-**四态映射**（按优先级自上而下求值，首个命中即返回；`error` 条目与空快照无状态）：
+**五态映射**（按优先级自上而下求值，首个命中即返回；`error` 条目与空快照无状态）：
 
 | 优先级 | 触发条件（均由现有字段推导） | 文案 | 语义与措辞依据 |
 |--------|------------------------------|------|----------------|
-| 1 | `holdings_stale=true` 且（非 `index_tracking` 或 `nav_estimate` 为空） | **「盘中估值不可用·持仓披露异常」** | `holdings_stale` 聚合了两种披露异常：报告期超新鲜度阈值（>120 天，§4.3）与 `disclosure_status=anomalous`（>730 天/零持仓，§5.4）。此时持仓法与（无绑定时）指数法都无法产出实时估值，是最强的阻断性解释，故压过「净值停更」 |
-| 2 | `quote_status=frozen` 且 `nav_official` 缺失 | **「官方净值待更新」** | 首次入库 / 刚加自选的基金：官方净值锚要等每晚 20:00 的 `fund_nav_official_refresh` 回灌，持仓摄取钩子也刚触发。017811 实测即此形态 |
-| 3 | `estimate_method=latest_official` 且 `nav_official` 在载 | **「净值停更」** | **用户指定措辞**，用于「只能给最新官方净值、无实时估值」的语境（无可用持仓与指数绑定，或估值上游暂停）。注意与优先级 1 的分工：无披露异常时用中性「净值停更」，披露异常时用阻断性文案 |
-| 4 | 其余（实时/延迟/混合行情正常产出估值） | 无额外状态 | 正常路径不打扰；延迟行情仍由既有「延迟·HK/US」徽章表达 |
+| 1 | `holdings_stale=true` 且（非 `index_tracking` 或 `nav_estimate` 为空） | **「盘中估值不可用·持仓披露异常」** | `holdings_stale` 聚合了两种披露异常：报告期超新鲜度阈值（>120 天，§4.3）与 `disclosure_status=anomalous`（>730 天/零持仓，§5.4）。此时持仓法与（无绑定时）指数法都无法产出实时估值，是最强的阻断性解释，故压过其余 |
+| 2 | `holdings_ingesting=true` 且 `estimate_change_percent` 为空（1.5 新增） | **「持仓数据摄取中…」** | 刚被搜索/关注的基金，持仓正抓取（§5.1 case 3 / §9.5），数秒到一分钟后即可出值。比泛化的「官方净值待更新」更具体、可预期，故列其前；例外：有指数绑定时持仓在途也照常有实时估值，此时不显示本态 |
+| 3 | `quote_status=frozen` 且 `nav_official` 缺失 | **「官方净值待更新」** | 首次入库 / 刚加自选的基金：官方净值锚要等每晚 20:00 的 `fund_nav_official_refresh` 回灌（撞车时由启动补跑兜底，§7.4），持仓摄取钩子也刚触发。017811 实测即此形态 |
+| 4 | `estimate_method=latest_official` 且 `nav_official` 在载 | **「净值停更」** | **用户指定措辞**，用于「只能给最新官方净值、无实时估值」的语境（无可用持仓与指数绑定，或估值上游暂停）。注意与优先级 1 的分工：无披露异常时用中性「净值停更」，披露异常时用阻断性文案 |
+| 5 | 其余（实时/延迟/混合行情正常产出估值） | 无额外状态 | 正常路径不打扰；延迟行情仍由既有「延迟·HK/US」徽章表达 |
 
 **例外**：优先级 1 中，若 `holdings_stale=true` 但仍有 `index_tracking` 实时估值（有指数绑定），则**不显示**本状态——估值真实存在，误报「不可用」反而矛盾；该场景沿用既有 `holdings_stale` ⚠ 徽章（§9.2）表达披露陈旧。
+
+**1.5 不变式**：盘中时段、持仓与锚齐备却无估值**不应出现**——按需计算（§9.5）保证齐备即出值；一旦出现无估值，必落在上述某个可解释分支（摄取中/披露异常/锚缺失/净值停更）。
 
 **展示落点**（均带 `title` tooltip 解释，含「官方净值每晚 20:00 左右更新」）：
 - `Watchlist.vue` 基金行估值列：无估值时状态文案**替换** `--`；有估值但命中状态（如净值停更）时作文案副行。

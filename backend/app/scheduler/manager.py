@@ -1,11 +1,12 @@
 import asyncio
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy.orm import selectinload
 
@@ -54,6 +55,13 @@ FUND_NAV_OFFICIAL_REFRESH_JOB_ID = "fund_nav_official_refresh"
 FUND_NAV_REFRESH_HOUR = 20
 FUND_NAV_REFRESH_MINUTE = 0
 FUND_NAV_REFRESH_TIMEZONE = "Asia/Shanghai"
+
+# Startup catch-up run for the official NAV job (fund-intraday-nav.md §7):
+# a container that (re)starts after the 20:00 cron — typically a redeploy
+# crossing the fire — missed it, and the intraday anchor stays empty until
+# the next evening. The one-shot check below backfills automatically.
+FUND_NAV_OFFICIAL_CATCHUP_JOB_ID = "fund_nav_official_catchup"
+FUND_NAV_CATCHUP_DELAY_SECONDS = 45
 
 # Fund intraday NAV (fund-intraday-nav.md §7): the estimate loop is an
 # interval job gated on the CN market being open; the holdings refresh is a
@@ -407,6 +415,21 @@ class AsyncSchedulerManager:
             f"(daily {FUND_NAV_REFRESH_HOUR:02d}:{FUND_NAV_REFRESH_MINUTE:02d} {FUND_NAV_REFRESH_TIMEZONE})"
         )
 
+        # Startup catch-up (fund-intraday-nav.md §7): a one-shot probe shortly
+        # after boot backfills the official NAV anchor when the latest stored
+        # date lags what should already be disclosed — i.e. the container missed
+        # the 20:00 cron (redeploy crossing the fire). Runs once, best-effort.
+        self.scheduler.add_job(
+            self._run_fund_nav_official_catchup,
+            trigger=DateTrigger(run_date=datetime.now(UTC) + timedelta(seconds=FUND_NAV_CATCHUP_DELAY_SECONDS)),
+            id=FUND_NAV_OFFICIAL_CATCHUP_JOB_ID,
+            replace_existing=True,
+        )
+        logger.info(
+            f"Job {FUND_NAV_OFFICIAL_CATCHUP_JOB_ID} added "
+            f"(one-shot catch-up probe in {FUND_NAV_CATCHUP_DELAY_SECONDS}s)"
+        )
+
     async def _run_fund_nav_official_refresh(self) -> None:
         """Job body of fund_nav_official_refresh (finance-tab.md §3.8.2).
 
@@ -442,6 +465,49 @@ class AsyncSchedulerManager:
                 await self._run_night_calibration(job_id)
             else:
                 logger.info(f"{job_id}: no official NAV updates (no fund symbols or collector returned nothing)")
+            self._last_run_results[job_id] = {"success": True, "items_count": updated}
+        except Exception as e:
+            logger.error(f"{job_id} failed: {e}")
+            self._last_run_results[job_id] = {"success": False, "error": str(e), "items_count": 0}
+
+    async def _run_fund_nav_official_catchup(self) -> None:
+        """Startup catch-up for the official NAV job (fund-intraday-nav.md §7).
+
+        Fires once, shortly after boot. Probes whether the newest stored
+        official NAV date lags the date that should already be disclosed; if so
+        the container missed a nightly 20:00 run (the usual cause is a redeploy
+        crossing the cron) and we backfill now via the same
+        FinanceService.update_official_nav path. Strictly best-effort: a
+        failure logs and records the result but never raises — the regular
+        cron still owns the steady state, and the probe itself degrades to
+        "no catch-up" on any error so a bad probe cannot trigger an upstream
+        fetch storm on every restart.
+        """
+        job_id = FUND_NAV_OFFICIAL_CATCHUP_JOB_ID
+        self._last_run_times[job_id] = datetime.now(UTC)
+        try:
+            from app.db.session import apply_service_context, async_session_factory
+            from app.services.finance import FinanceService
+
+            async with async_session_factory() as session:
+                await apply_service_context(session)
+                service = FinanceService(db=session, redis=None)
+                lagging = await service.official_nav_anchor_lagging(str(SYSTEM_TENANT_ID))
+
+            if not lagging:
+                logger.info(f"{job_id}: official NAV anchor current, no catch-up needed")
+                self._last_run_results[job_id] = {"success": True, "items_count": 0}
+                return
+
+            logger.info(f"{job_id}: official NAV anchor lagging, running catch-up backfill")
+            async with async_session_factory() as session:
+                await apply_service_context(session)
+                service = FinanceService(db=session, redis=None)
+                updated = await service.update_official_nav(str(SYSTEM_TENANT_ID))
+
+            if updated:
+                await self._run_night_calibration(job_id)
+            logger.info(f"{job_id}: catch-up backfilled official NAV for {updated} fund(s)")
             self._last_run_results[job_id] = {"success": True, "items_count": updated}
         except Exception as e:
             logger.error(f"{job_id} failed: {e}")

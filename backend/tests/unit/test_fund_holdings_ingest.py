@@ -49,6 +49,45 @@ NEWEST_ROWS = _table(
 OLDER_ROWS = _table(_row("1.600519", "600519", "贵州茅台", "0.10%", "800", "9.99%"))
 
 
+# Live f10 jjcc archive layout (probed 2026-09-01, e.g. 017811 / 510500):
+# a leading 序号 (row index) column plus 最新价 / 涨跌幅 / 相关资讯 columns
+# precede the NAV weight. The 相关资讯 cell itself carries unify quote links
+# (行情), so code-cell detection must key on the FIRST linking cell.
+def _real_row(index: str, secid: str, code: str, name: str, weight: str, shares: str) -> str:
+    return (
+        "<tr>"
+        f"<td>{index}</td>"
+        f"<td><a href='//quote.eastmoney.com/unify/r/{secid}'>{code}</a></td>"
+        f"<td class='tol'><a href='//quote.eastmoney.com/unify/r/{secid}'>{name}</a></td>"
+        f"<td class='tor'><span data-id='dq{code}'></span></td>"
+        f"<td class='tor'><span data-id='zd{code}'></span></td>"
+        f"<td class='xglj'><a href='ccbdxq_017811_{code}.html' class='red'>变动详情</a>"
+        f"<a href='//guba.eastmoney.com/interface/GetList.aspx?code={secid}'>股吧</a>"
+        f"<a href='//quote.eastmoney.com/unify/r/{secid}'>行情</a></td>"
+        f"<td class='tor'>{weight}%</td>"
+        f"<td class='tor'>{shares}</td>"
+        "<td class='tor'>335,557.72</td>"
+        "</tr>"
+    )
+
+
+def _real_table(rows_html: str) -> str:
+    return (
+        "<table class='w782 comm tzxq'>"
+        "<thead><tr><th class='first'>序号</th><th>股票代码</th><th>股票名称</th><th>最新价</th>"
+        "<th>涨跌幅</th><th class='xglj'>相关资讯</th><th>占净值<br />比例</th>"
+        "<th class='cgs'>持股数<br />（万股）</th><th class='last ccs'>持仓市值<br />（万元）</th></tr></thead>"
+        f"<tbody>{rows_html}</tbody></table>"
+    )
+
+
+REAL_LAYOUT_ROWS = _real_table(
+    _real_row("1", "1.688361", "688361", "中科飞测", "9.55", "780.37")
+    + _real_row("2", "1.688037", "688037", "芯源微", "9.19", "735.44")
+    + _real_row("3", "0.002371", "002371", "北方华创", "8.92", "1,200")
+)
+
+
 class TestParseF10Jjcc:
     def test_multi_period_newest_wins(self):
         """One payload carries several report periods; only the newest is kept
@@ -114,6 +153,60 @@ class TestParseF10Jjcc:
         assert parse_f10_jjcc(_apidata("<div>nothing here</div>")).rows == []
 
 
+class TestParseRealF10Layout:
+    """Regression for the 2026-09-01 incident: the live f10 jjcc table carries
+    a leading 序号 column (plus 最新价/涨跌幅/相关资讯), and positional cells[0]
+    parsing ingested the row index as the stock code. The code cell must be
+    located by its unify quote link, never by column position."""
+
+    def test_real_layout_parses_true_codes(self):
+        result = parse_f10_jjcc(_apidata(f"<h4>2026-06-30 股票投资明细</h4>{REAL_LAYOUT_ROWS}"))
+        assert result.report_date == date(2026, 6, 30)
+        assert [r.stock_code for r in result.rows] == ["688361", "688037", "002371"]
+        assert [r.stock_name for r in result.rows] == ["中科飞测", "芯源微", "北方华创"]
+        assert all(r.market == "CN" for r in result.rows)
+        assert result.rows[0].secid == "1.688361"
+        assert [r.weight_percent for r in result.rows] == [9.55, 9.19, 8.92]
+        # decimal 万股 share counts stay references-only (None), integers parse
+        assert result.rows[0].shares_held is None
+        assert result.rows[2].shares_held == 1200.0
+
+    def test_real_layout_coverage_sum(self):
+        """The 017811 (C share) probe: its own disclosure is complete — the
+        parsed top-10 weights must sum to the fund's real coverage, proof the
+        序号 column no longer pollutes the weight math."""
+        result = parse_f10_jjcc(_apidata(f"<h4>2026-06-30 明细</h4>{REAL_LAYOUT_ROWS}"))
+        assert round(sum(r.weight_percent for r in result.rows), 2) == 27.66
+
+    def test_index_only_rows_are_rejected(self):
+        """A row whose only candidate code cell is a bare 序号 digit (no unify
+        link anywhere) is dropped, never mistaken for a security."""
+        html = "<h4>2026-06-30 持仓</h4>" + _table(
+            "<tr><td>1</td><td>600519</td><td>贵州茅台</td><td class='tor'>8.52%</td></tr>"
+        )
+        result = parse_f10_jjcc(_apidata(html))
+        assert result.rows == []
+
+
+class TestSecurityCodeValidity:
+    def test_valid_codes(self):
+        from app.services.fund_holdings import _looks_like_security_code
+
+        assert _looks_like_security_code("600519") is True
+        assert _looks_like_security_code("00700") is True
+        assert _looks_like_security_code("AAPL") is True
+        assert _looks_like_security_code("A") is True  # single-letter US ticker
+
+    def test_layout_noise_rejected(self):
+        from app.services.fund_holdings import _looks_like_security_code
+
+        assert _looks_like_security_code("1") is False
+        assert _looks_like_security_code("30") is False
+        assert _looks_like_security_code("1234") is False  # no exchange lists 4-digit codes
+        assert _looks_like_security_code("") is False
+        assert _looks_like_security_code(None) is False
+
+
 class TestDisclosureStateMachine:
     def _svc(self):
         return FundHoldingsService(db=AsyncMock(), governor=AsyncMock())
@@ -154,6 +247,12 @@ class TestNeedsIngestion:
         svc = FundHoldingsService(db=db, governor=AsyncMock())
         assert await svc.needs_ingestion("510300") is True
 
+    @staticmethod
+    def _snapshot_result(rows: list[tuple[str, str]]):
+        result = MagicMock()
+        result.all.return_value = rows
+        return result
+
     async def test_healthy_meta_does_not_need_ingestion(self):
         db = AsyncMock()
         meta = MagicMock()
@@ -163,9 +262,26 @@ class TestNeedsIngestion:
         meta_result.scalar_one_or_none.return_value = meta
         count_result = MagicMock()
         count_result.scalar.return_value = 1
-        db.execute = AsyncMock(side_effect=[count_result, meta_result])
+        snapshot_result = self._snapshot_result([("510300", "600519")])
+        db.execute = AsyncMock(side_effect=[count_result, meta_result, snapshot_result])
         svc = FundHoldingsService(db=db, governor=AsyncMock())
         assert await svc.needs_ingestion("510300") is False
+
+    async def test_dirty_snapshot_needs_reingest(self):
+        """A snapshot whose rows carry no plausible security code (parser-broken
+        legacy rows) counts as missing and gets re-ingested (§5 self-heal)."""
+        db = AsyncMock()
+        meta = MagicMock()
+        meta.last_error = None
+        meta.latest_report_date = date.today()
+        meta_result = MagicMock()
+        meta_result.scalar_one_or_none.return_value = meta
+        count_result = MagicMock()
+        count_result.scalar.return_value = 1
+        snapshot_result = self._snapshot_result([("017811", "1"), ("017811", "2")])
+        db.execute = AsyncMock(side_effect=[count_result, meta_result, snapshot_result])
+        svc = FundHoldingsService(db=db, governor=AsyncMock())
+        assert await svc.needs_ingestion("017811") is True
 
     async def test_errored_meta_needs_retry(self):
         db = AsyncMock()
@@ -192,10 +308,28 @@ class TestNeedsIngestion:
         errored.latest_report_date = None
         result = MagicMock()
         result.scalars.return_value.all.return_value = [healthy, errored]
-        db.execute = AsyncMock(return_value=result)
+        # Second execute: snapshot validity probe for the meta-healthy remainder.
+        snapshot_result = self._snapshot_result([("510300", "600519")])
+        db.execute = AsyncMock(side_effect=[result, snapshot_result])
         svc = FundHoldingsService(db=db, governor=AsyncMock())
         needing = await svc.codes_needing_ingestion(["510300", "005827", "110011"])
         assert needing == {"005827", "110011"}  # errored + never-ingested
+
+    async def test_codes_needing_ingestion_flags_dirty_snapshots(self):
+        """Codes with a current-looking meta but unusable snapshot rows (the
+        2026-09-01 parser incident) are added to the needing set."""
+        db = AsyncMock()
+        healthy_meta = MagicMock()
+        healthy_meta.fund_code = "017811"
+        healthy_meta.last_error = None
+        healthy_meta.latest_report_date = date.today()
+        result = MagicMock()
+        result.scalars.return_value.all.return_value = [healthy_meta]
+        snapshot_result = self._snapshot_result([("017811", "1"), ("017811", "10")])
+        db.execute = AsyncMock(side_effect=[result, snapshot_result])
+        svc = FundHoldingsService(db=db, governor=AsyncMock())
+        needing = await svc.codes_needing_ingestion(["017811"])
+        assert needing == {"017811"}
 
 
 class TestIngestFund:

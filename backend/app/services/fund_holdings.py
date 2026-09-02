@@ -138,13 +138,32 @@ def _parse_shares_text(text: str) -> float | None:
     return value if value >= 1 else None
 
 
+def _looks_like_security_code(stock_code: str | None) -> bool:
+    """Heuristic separating real security codes from layout noise.
+
+    CN A-shares are 6 digits, HK 5 (zero-padded), US tickers carry letters —
+    the live jjcc table's leading 序号 (row index) column produces 1-2 digit
+    pure-numeric cells that must never be mistaken for codes (2026-09-01
+    incident: index cells ingested as HK codes, estimates degraded).
+    """
+    code = (stock_code or "").strip().upper()
+    if not code or len(code) > 10:
+        return False
+    return not (code.isdigit() and len(code) < 5)
+
+
 def _parse_holding_row(cells: list) -> HoldingRow | None:
     """One holdings table row → HoldingRow (None: not a data row).
 
-    Expected column shape: code (link) | name (link) | price | day change% |
-    shares held | holding value | NAV weight%. Everything past the name cell is
-    classified defensively: the LAST percent cell is the weight, the first
-    integer-ish cell is the share count, decimals (price/value) are ignored.
+    Two live column layouts are handled (2026-09-01 probe): the compact shape
+    (code link | name | ... | weight%) and the f10 archive shape, which adds a
+    leading 序号 (index) column plus 最新价/涨跌幅/相关资讯 columns before the
+    weight. The code cell is therefore located by scanning for the first cell
+    carrying an EastMoney unify quote link (its href embeds the secid); only
+    when no cell links do we fall back to the legacy cells[0] text. Everything
+    past the code cell is classified defensively: the LAST percent cell is the
+    weight, the first integer-ish cell is the share count, decimals
+    (price/value) and prose cells (related-news links) are ignored.
     """
     if not cells:
         return None
@@ -152,34 +171,43 @@ def _parse_holding_row(cells: list) -> HoldingRow | None:
     stock_code: str | None = None
     secid: str | None = None
     stock_name: str | None = None
+    code_index = -1
 
-    first_cell_text = cells[0].get_text(strip=True)
-    first_link = cells[0].find("a", href=True)
-    if first_link is not None:
-        href = str(first_link.get("href") or "")
-        href_match = _SECID_LINK_RE.search(href)
-        if href_match:
+    for idx, cell in enumerate(cells):
+        for link in cell.find_all("a", href=True):
+            href_match = _SECID_LINK_RE.search(str(link.get("href") or ""))
+            if not href_match:
+                continue
             secid = href_match.group(1)
-        link_text = first_link.get_text(strip=True)
-        if link_text:
-            stock_code = link_text.upper()
-    if stock_code is None and first_cell_text:
-        stock_code = first_cell_text.upper()
-    if not stock_code or not re.fullmatch(r"[\w.]{1,10}", stock_code):
+            link_text = link.get_text(strip=True)
+            if link_text:
+                stock_code = link_text.upper()
+                code_index = idx
+            break
+        if code_index >= 0:
+            break
+
+    if code_index < 0:
+        first_cell_text = cells[0].get_text(strip=True)
+        if first_cell_text and re.fullmatch(r"[\w.]{1,10}", first_cell_text):
+            stock_code = first_cell_text.upper()
+            code_index = 0
+    if not stock_code or not _looks_like_security_code(stock_code):
         return None
 
-    if len(cells) > 1:
-        name_link = cells[1].find("a", href=True)
+    name_cell = cells[code_index + 1] if code_index + 1 < len(cells) else None
+    if name_cell is not None:
+        name_link = name_cell.find("a", href=True)
         if name_link is not None and name_link.get_text(strip=True):
             stock_name = name_link.get_text(strip=True)
         else:
-            plain = cells[1].get_text(strip=True)
+            plain = name_cell.get_text(strip=True)
             if plain and not plain.endswith("%"):
                 stock_name = plain
 
     shares: float | None = None
     percent_cells: list[float] = []
-    for cell in cells[2:]:
+    for cell in cells[code_index + 1 :]:
         text = cell.get_text(strip=True)
         cell_weight = _parse_weight_text(text)
         if cell_weight is not None:
@@ -445,9 +473,32 @@ class FundHoldingsService:
             with contextlib.suppress(Exception):
                 await self.db.rollback()
 
+    async def _codes_with_unusable_snapshots(self, fund_codes: list[str]) -> set[str]:
+        """Codes whose stored snapshot carries no plausible security code at
+        all — the signature of rows ingested by a broken parser (2026-09-01
+        序号-column incident). Such snapshots look current to the meta gate
+        but can never produce quotes, so they must be re-ingested once the
+        parser is fixed. Empty result when every code has ≥1 valid row."""
+        if not fund_codes:
+            return set()
+        result = await self.db.execute(
+            select(FundHoldingSnapshot.fund_code, FundHoldingSnapshot.stock_code).where(
+                FundHoldingSnapshot.fund_code.in_(fund_codes)
+            )
+        )
+        valid: set[str] = set()
+        present: set[str] = set()
+        for fund_code, stock_code in result.all():
+            present.add(fund_code)
+            if _looks_like_security_code(stock_code):
+                valid.add(fund_code)
+        return {code for code in fund_codes if code in present and code not in valid}
+
     async def codes_needing_ingestion(self, fund_codes: list[str]) -> set[str]:
         """Batched needs_ingestion gate for the REST lazy-ingest fallback
-        (§5.1 case 3): one query instead of N."""
+        (§5.1 case 3): one query instead of N. Codes with a snapshot whose
+        rows carry no plausible security code are re-ingested too (repair
+        path for parser-broken legacy snapshots)."""
         if not fund_codes:
             return set()
         result = await self.db.execute(select(FundHoldingsMeta).where(FundHoldingsMeta.fund_code.in_(fund_codes)))
@@ -457,12 +508,14 @@ class FundHoldingsService:
             meta = metas.get(code)
             if meta is None or meta.last_error or meta.latest_report_date is None:
                 needing.add(code)
+        needing |= await self._codes_with_unusable_snapshots([c for c in fund_codes if c not in needing])
         return needing
 
     async def needs_ingestion(self, fund_code: str) -> bool:
         """Add-to-watchlist hook gate (§5.1): ingest when there is no snapshot
         yet or the last attempt failed; freshness updates are the daily job's
-        business."""
+        business. A stored snapshot without a single plausible security code
+        counts as missing (parser-broken legacy rows get replaced)."""
         result = await self.db.execute(
             select(func.count()).select_from(FundHoldingsMeta).where(FundHoldingsMeta.fund_code == fund_code)
         )
@@ -475,7 +528,9 @@ class FundHoldingsService:
             return True
         if meta.last_error:
             return True
-        return meta.latest_report_date is None
+        if meta.latest_report_date is None:
+            return True
+        return bool(await self._codes_with_unusable_snapshots([fund_code]))
 
     # --- read path (cache through) ---
 

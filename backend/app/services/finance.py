@@ -1,7 +1,7 @@
 import hashlib
 import json
 import logging
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 from redis.asyncio import Redis
 from sqlalchemy import func, or_, select
@@ -450,6 +450,24 @@ class FinanceService:
                 except (json.JSONDecodeError, TypeError):
                     pass
 
+            # On-demand intraday compute (§9): rt miss while the CN market is
+            # open means the fund is not (yet) in the followed union, so the
+            # same tiered pipeline the worker cycle uses answers here and seeds
+            # fund_nav_rt. Unknown codes fall through to the legacy path below
+            # (which raises SymbolNotFound), and any compute failure degrades
+            # silently — off-market this branch is inert (zero upstream).
+            if self._is_market_open("CN"):
+                try:
+                    from app.services.fund_intraday import FundIntradayService
+
+                    computed = await FundIntradayService(db=self.db).compute_on_demand([fund_code_fast])
+                except Exception as e:
+                    logger.debug(f"fund_nav on-demand compute failed for {fund_code_fast}: {e}")
+                    computed = {}
+                on_demand_payload = computed.get(fund_code_fast)
+                if on_demand_payload is not None:
+                    return on_demand_payload
+
         nav_cache_key = RedisKeys.nav_key(tenant_id, symbol)
         cached = await redis_get(nav_cache_key)
         if cached:
@@ -789,16 +807,36 @@ class FinanceService:
                     results_by_code[code] = payload
             missing = [code for code in ordered_codes if code not in results_by_code]
             if missing:
-                results_by_code.update(await self._fund_nav_latest_official_entries(missing))
+                # On-demand intraday compute (§9): while the CN market is open a
+                # searched-but-not-followed fund is not in the 3s cycle union,
+                # so its estimate is computed here right now (holdings + anchor
+                # + quotes ready → live value written to the fund_nav_rt cache;
+                # holdings missing → degrades to the official fallback below
+                # and the ingest hook fires). Off-market this branch is inert —
+                # zero upstream requests.
+                if self._is_market_open("CN"):
+                    from app.services.fund_intraday import FundIntradayService
+
+                    computed = await FundIntradayService(db=self.db).compute_on_demand(missing)
+                    results_by_code.update(computed)
+                    missing = [code for code in missing if code not in computed]
+                if missing:
+                    results_by_code.update(await self._fund_nav_latest_official_entries(missing))
                 # Lazy holdings ingest (§5.1 case 3): fire-and-forget only for
                 # codes that truly lack a usable snapshot; the current request
-                # already got its lightweight answer.
+                # already got its lightweight answer. Such entries carry
+                # holdings_ingesting so the UI explains the empty estimate
+                # (「持仓数据摄取中…」, §9.4).
                 try:
                     from app.services.fund_holdings import FundHoldingsService, spawn_holdings_ingestion
 
-                    needing = await FundHoldingsService(db=self.db).codes_needing_ingestion(missing)
+                    needing = await FundHoldingsService(db=self.db).codes_needing_ingestion(ordered_codes)
                     for code in sorted(needing):
                         spawn_holdings_ingestion(code)
+                    for code in needing:
+                        entry = results_by_code.get(code)
+                        if entry is not None:
+                            entry["holdings_ingesting"] = True
                 except Exception as e:
                     logger.debug(f"fund-nav batch: lazy ingest hook failed: {e}")
 
@@ -923,6 +961,63 @@ class FinanceService:
         else:
             logger.info("update_official_nav: collector items did not match any tracked fund")
         return updated
+
+    @staticmethod
+    def latest_expected_official_nav_date(now_local: datetime | None = None) -> date:
+        """Newest CN official-NAV date that should already be in the store.
+
+        Official NAV for trading day D is published after the close and fetched
+        by the daily job at 20:00 Asia/Shanghai, so at local time T the
+        expectation is D=T.date() only on a trading day at/after the fetch
+        hour; otherwise the latest trading day strictly before T. Weekends and
+        calendar holidays are skipped via the CN holiday table.
+        """
+        now_local = now_local or datetime.now(MARKET_TIMEZONES["CN"])
+        day = now_local.date()
+        trading_today = day.weekday() < 5 and not is_market_holiday("CN", day)
+        # Kept in sync with scheduler/manager.py FUND_NAV_REFRESH_HOUR (the
+        # daily fetch time — the NAV for a trading day cannot be expected
+        # before the fetch that retrieves it has had a chance to run).
+        if not (trading_today and now_local.hour >= 20):
+            day -= timedelta(days=1)
+        while day.weekday() >= 5 or is_market_holiday("CN", day):
+            day -= timedelta(days=1)
+        return day
+
+    async def official_nav_anchor_lagging(self, tenant_id: str) -> bool:
+        """Startup catch-up gate (fund-intraday-nav.md §7 catch-up run): True
+        when the tenant tracks fund symbols but the newest stored official
+        NAV date lags the date that should already be disclosed — the mark of
+        a missed nightly job (e.g. the container was redeployed across the
+        20:00 cron). False when there are no funds to manage or the anchor is
+        current. Read-only; any failure degrades to False (no catch-up) so a
+        bad probe can never trigger an upstream storm on every restart."""
+        try:
+            fund_count_result = await self.db.execute(
+                select(func.count())
+                .select_from(FinanceSymbol)
+                .where(
+                    FinanceSymbol.tenant_id == tenant_id,
+                    FinanceSymbol.type == "fund",
+                    FinanceSymbol.is_active,
+                )
+            )
+            if not (fund_count_result.scalar() or 0):
+                return False
+            latest_result = await self.db.execute(
+                select(func.max(FundNAVEstimate.nav_official_date)).where(
+                    FundNAVEstimate.tenant_id == tenant_id,
+                    FundNAVEstimate.estimate_method == ESTIMATE_METHOD_OFFICIAL,
+                    FundNAVEstimate.nav_official.is_not(None),
+                )
+            )
+            latest = latest_result.scalar()
+            if latest is None:
+                return True
+            return latest < self.latest_expected_official_nav_date()
+        except Exception as e:
+            logger.warning(f"official_nav_anchor_lagging: probe failed, skipping catch-up: {e}")
+            return False
 
     @staticmethod
     def _normalize_fund_code(symbol: str) -> str | None:

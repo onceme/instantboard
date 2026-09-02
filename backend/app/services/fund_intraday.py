@@ -262,12 +262,47 @@ class FundIntradayService:
 
     async def compute_cycle(self) -> dict:
         now = datetime.now(UTC)
-        today = now.date()
 
         codes, per_tenant = await self._load_followed()
         if not codes:
             return {"codes": 0, "results": [], "pushed_tenants": 0}
 
+        results, _holdings_by_code, ids_per_code = await self._compute_results(codes, now)
+
+        # Stash the cycle context for the open→closed gate-edge closing snapshot
+        # write (§3.4 case 3, M2) — the scheduler calls write_close_snapshots()
+        # with the same session when the CN market flips closed.
+        _LAST_CYCLE_CONTEXT.clear()
+        _LAST_CYCLE_CONTEXT.update(
+            {
+                "results_by_code": {r["symbol"]: r for r in results},
+                "ids_per_code": ids_per_code,
+            }
+        )
+
+        await self._write_rt_cache(results)
+        pushed_tenants = await self._push_batch(results, per_tenant)
+        await self._flush_results(results, ids_per_code)
+
+        # Structured observability (fund-intraday-nav.md §13 M2): a cycle that
+        # nears the interval budget risks coalescing/overlap, so it warns early.
+        elapsed = (datetime.now(UTC) - now).total_seconds()
+        if elapsed > 2.5:
+            logger.warning(
+                f"fund_intraday: cycle duration {elapsed:.2f}s exceeds the 2.5s "
+                f"soft budget (codes={len(codes)}, pushed_tenants={pushed_tenants})"
+            )
+
+        return {"codes": len(codes), "results": results, "pushed_tenants": pushed_tenants}
+
+    async def _compute_results(
+        self, codes: list[str], now: datetime
+    ) -> tuple[list[dict], dict[str, dict | None], dict[str, list]]:
+        """Shared estimate pipeline for the worker cycle and the REST
+        on-demand path (§9): reference loads → tier planning → constituent
+        quotes → per-fund tiered estimates. Returns (results,
+        holdings_by_code, ids_per_code). Callers own caching/push/flush."""
+        today = now.date()
         code_set = set(codes)
         ids_per_code, name_per_code = await self._load_symbol_map(code_set)
         anchors = await self._load_official_anchors(ids_per_code)
@@ -339,31 +374,31 @@ class FundIntradayService:
                 )
             )
 
-        # Stash the cycle context for the open→closed gate-edge closing snapshot
-        # write (§3.4 case 3, M2) — the scheduler calls write_close_snapshots()
-        # with the same session when the CN market flips closed.
-        _LAST_CYCLE_CONTEXT.clear()
-        _LAST_CYCLE_CONTEXT.update(
-            {
-                "results_by_code": {r["symbol"]: r for r in results},
-                "ids_per_code": ids_per_code,
-            }
-        )
+        return results, holdings_by_code, ids_per_code
 
+    async def compute_on_demand(self, codes: list[str]) -> dict[str, dict]:
+        """On-demand estimate for REST paths while the CN market is open
+        (fund-intraday-nav.md §9): a searched fund that nobody follows is not
+        in the 3s cycle union, so without this hook its batch/single lookup
+        could only ever answer latest_official. Reuses the exact tiered
+        pipeline of the worker cycle and writes the same fund_nav_rt entries
+        (TTL 12s), which both answers repeat lookups from cache and keeps the
+        SSE cycle / close snapshots consistent. No push / DB flush here —
+        on-demand answers are request-scoped; only funds later added to a
+        watchlist enter the push surface. Never raises: any failure degrades
+        to an empty dict and the caller falls back to latest_official."""
+        if not codes:
+            return {}
+        try:
+            results, _holdings, ids_per_code = await self._compute_results(codes, datetime.now(UTC))
+        except Exception as exc:  # noqa: BLE001 - on-demand must degrade, never break REST
+            logger.warning(f"fund_intraday: on-demand compute failed: {exc}")
+            return {}
+        # Unknown codes (no type='fund' symbol row) produce no entry — the API
+        # caller degrades them to explicit error entries instead.
+        results = [r for r in results if r["symbol"] in ids_per_code]
         await self._write_rt_cache(results)
-        pushed_tenants = await self._push_batch(results, per_tenant)
-        await self._flush_results(results, ids_per_code)
-
-        # Structured observability (fund-intraday-nav.md §13 M2): a cycle that
-        # nears the interval budget risks coalescing/overlap, so it warns early.
-        elapsed = (datetime.now(UTC) - now).total_seconds()
-        if elapsed > 2.5:
-            logger.warning(
-                f"fund_intraday: cycle duration {elapsed:.2f}s exceeds the 2.5s "
-                f"soft budget (codes={len(codes)}, pushed_tenants={pushed_tenants})"
-            )
-
-        return {"codes": len(codes), "results": results, "pushed_tenants": pushed_tenants}
+        return {r["symbol"]: r for r in results}
 
     # ------------------------------------------------------------------
     # Per-fund estimate (§4.1 / §4.2 / §4.3)

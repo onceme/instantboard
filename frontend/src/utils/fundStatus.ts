@@ -21,6 +21,15 @@ const NOTE_DISCLOSURE_ANOMALY: FundStatusNote = {
     "持仓报告期缺失、超过新鲜度阈值（120 天）或披露异常，无法计算盘中估值；官方净值每晚 20:00 左右更新后仍可参考。",
 };
 
+// A fund that was just searched/followed has its holdings fetched lazily
+// (§5.1 case 3 / §9 on-demand compute): the estimate appears as soon as the
+// snapshot lands (and the nightly 20:00 official NAV anchor is present).
+const NOTE_HOLDINGS_INGESTING: FundStatusNote = {
+  label: "持仓数据摄取中…",
+  tooltip:
+    "该基金刚被搜索或加入自选，持仓数据正在抓取（通常数秒到一分钟）。持仓就绪且官方净值在库后，盘中即可看到实时估值；官方净值每晚 20:00 左右更新。",
+};
+
 // User-chosen wording for the "only the latest official NAV is available, no
 // realtime estimate" situation (e.g. no holdings and no index binding).
 const NOTE_NAV_FROZEN: FundStatusNote = {
@@ -34,9 +43,12 @@ const NOTE_NAV_FROZEN: FundStatusNote = {
  * (normal realtime/delayed estimation, or the row already carries the ⚠
  * stale badge alongside a live index-tracking estimate).
  *
- * Priority: disclosure anomaly > pending official anchor > NAV frozen:
+ * Priority: disclosure anomaly > holdings ingesting > pending official
+ * anchor > NAV frozen:
  * - holdings_stale without a live estimate means the pipeline is blocked by
  *   disclosure, the strongest explanation;
+ * - holdings_ingesting without a live estimate is the freshly searched or
+ *   just-followed fund: ingestion is in flight and explains the empty rows;
  * - frozen quote plus a missing anchor is the freshly-followed fund state
  *   (nightly 20:00 anchor backfill has not run yet);
  * - a held anchor with the latest_official method is the "净值停更" case.
@@ -54,6 +66,12 @@ export function getFundStatusNote(
       return null;
     }
     return NOTE_DISCLOSURE_ANOMALY;
+  }
+
+  if (nav.holdings_ingesting && nav.estimate_change_percent == null) {
+    // A fund with an index binding can still show a live estimate while its
+    // holdings load — no "ingesting" note then (the estimate is real).
+    return NOTE_HOLDINGS_INGESTING;
   }
 
   if (nav.quote_status === "frozen" && nav.nav_official == null) {

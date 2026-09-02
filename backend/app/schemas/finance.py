@@ -41,6 +41,14 @@ class FundNAVIntraday(BaseModel):
     delayed_markets: list[str] = Field(default_factory=list)
     # Report period older than the freshness threshold (§4.3).
     holdings_stale: bool = False
+    # Whether the nightly-learned additive bias was applied (M3 §1.1); the UI
+    # can badge calibrated estimates. Carried by the worker cycle entries.
+    calibrated: bool = False
+    # REST paths only (§9 on-demand): holdings ingestion for this fund was
+    # triggered by the current request (watchlist hook / lazy batch hook) and
+    # no usable snapshot exists yet — the UI explains the empty estimate with
+    # 「持仓数据摄取中…」 instead of a bare "--".
+    holdings_ingesting: bool = False
     estimate_timestamp: str  # UTC ISO8601
     # REST batch only (§9.1): per-code error marker so an unknown code degrades
     # to an entry instead of failing the whole array. Absent/null on SSE payloads

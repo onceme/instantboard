@@ -181,6 +181,11 @@ export interface FundNAVIntraday {
   delayed_markets: string[];
   // Report period older than the freshness threshold → warning icon.
   holdings_stale: boolean;
+  // Nightly additive calibration applied to the holdings-weighted estimate.
+  calibrated?: boolean;
+  // REST paths only: holdings ingestion was just triggered for this fund and
+  // no usable snapshot exists yet → status note 「持仓数据摄取中…」.
+  holdings_ingesting?: boolean;
   estimate_timestamp: string;
   // REST batch only: unknown/degenerate codes carry an error instead of the
   // whole request failing. Absent on resolvable entries and SSE payloads.

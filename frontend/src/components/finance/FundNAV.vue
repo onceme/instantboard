@@ -2,8 +2,10 @@
 import { useFinanceStore } from "@/stores/finance";
 import { formatCurrency, formatPercent, getChangeClass } from "@/utils/format";
 import { getFundStatusNote } from "@/utils/fundStatus";
-import { computed, ref } from "vue";
+import { getApiErrorCode, getApiErrorMessage } from "@/utils/api";
+import { computed, reactive, ref } from "vue";
 import type { FundNAVIntraday } from "@/types";
+import axios from "axios";
 import { Search } from "lucide-vue-next";
 
 const financeStore = useFinanceStore();
@@ -20,6 +22,69 @@ const selectedFund = computed<FundNAVIntraday | null>(() =>
     : null,
 );
 const isSearching = ref(false);
+
+// Quick-watch (加入自选) for search hits and the selected fund — behavior
+// identical to SearchSymbols' quick watch: success → 「✓已关注」, backend
+// 409 duplicate → friendly 「已在自选」. Following a fund is also what pulls
+// it into the intraday estimate loop (§5.1 watchlist hook), so the button is
+// the canonical "make this fund show a live estimate" entry point here.
+const watchPending = reactive(new Set<string>());
+const watchedSession = reactive(new Set<string>());
+const watchNotes = reactive<Record<string, string>>({});
+
+function normalizeFundCode(symbol: string): string {
+  return symbol.replace(/\.(SS|SZ|OF)$/i, "");
+}
+
+function isWatched(symbol: string): boolean {
+  const code = normalizeFundCode(symbol);
+  if (
+    financeStore.watchlist.some(
+      (item) => normalizeFundCode(item.symbol) === code,
+    )
+  ) {
+    return true;
+  }
+  // 409s from another session / spelling variants are not in the local list
+  // yet still mean "already followed".
+  return watchedSession.has(symbol);
+}
+
+function watchLabel(symbol: string): string {
+  if (watchPending.has(symbol)) return "关注中…";
+  if (isWatched(symbol)) return "✓已关注";
+  return "＋关注";
+}
+
+function setWatchNote(symbol: string, text: string) {
+  watchNotes[symbol] = text;
+  setTimeout(() => {
+    if (watchNotes[symbol] === text) {
+      delete watchNotes[symbol];
+    }
+  }, 2600);
+}
+
+async function quickWatchFund(symbol: string) {
+  if (isWatched(symbol) || watchPending.has(symbol)) return;
+  watchPending.add(symbol);
+  try {
+    await financeStore.addToWatchlist(symbol);
+    watchedSession.add(symbol);
+  } catch (err) {
+    if (
+      getApiErrorCode(err) === "DUPLICATE_WATCHLIST_ITEM" ||
+      (axios.isAxiosError(err) && err.response?.status === 409)
+    ) {
+      watchedSession.add(symbol);
+      setWatchNote(symbol, "已在自选");
+    } else {
+      setWatchNote(symbol, getApiErrorMessage(err, "加入自选失败，请稍后重试"));
+    }
+  } finally {
+    watchPending.delete(symbol);
+  }
+}
 
 async function searchFunds() {
   if (!searchQuery.value.trim()) {
@@ -132,8 +197,28 @@ function methodReason(fund: FundNAVIntraday): string | null {
         class="result-item"
         @click="selectFund(fund)"
       >
-        <span class="result-symbol">{{ fund.symbol }}</span>
-        <span class="result-name">{{ fund.name }}</span>
+        <div class="result-main">
+          <span class="result-symbol">{{ fund.symbol }}</span>
+          <span class="result-name">{{ fund.name }}</span>
+        </div>
+        <div class="result-actions">
+          <span v-if="watchNotes[fund.symbol]" class="watch-note">
+            {{ watchNotes[fund.symbol] }}
+          </span>
+          <button
+            class="watch-quick-btn"
+            :class="{ 'watch-added': isWatched(fund.symbol) }"
+            :title="
+              isWatched(fund.symbol)
+                ? '已在自选'
+                : '加入自选，开盘时段自动计算盘中估值'
+            "
+            :disabled="isWatched(fund.symbol) || watchPending.has(fund.symbol)"
+            @click.stop="quickWatchFund(fund.symbol)"
+          >
+            {{ watchLabel(fund.symbol) }}
+          </button>
+        </div>
       </div>
     </div>
 
@@ -148,6 +233,25 @@ function methodReason(fund: FundNAVIntraday): string | null {
         >
           精度 {{ selectedFund.coverage_percent.toFixed(1) }}%
         </span>
+        <span v-if="watchNotes[selectedFund.symbol]" class="watch-note">
+          {{ watchNotes[selectedFund.symbol] }}
+        </span>
+        <button
+          class="watch-quick-btn watch-detail-btn"
+          :class="{ 'watch-added': isWatched(selectedFund.symbol) }"
+          :title="
+            isWatched(selectedFund.symbol)
+              ? '已在自选'
+              : '加入自选，开盘时段自动计算盘中估值'
+          "
+          :disabled="
+            isWatched(selectedFund.symbol) ||
+            watchPending.has(selectedFund.symbol)
+          "
+          @click="quickWatchFund(selectedFund.symbol)"
+        >
+          {{ watchLabel(selectedFund.symbol) }}
+        </button>
         <button class="close-btn" @click="clearSelection">×</button>
       </div>
 
@@ -285,6 +389,7 @@ function methodReason(fund: FundNAVIntraday): string | null {
 
 .result-item {
   display: flex;
+  justify-content: space-between;
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
@@ -296,6 +401,13 @@ function methodReason(fund: FundNAVIntraday): string | null {
   background-color: var(--bg-hover);
 }
 
+.result-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
 .result-symbol {
   font-weight: 600;
   color: var(--text-primary);
@@ -305,6 +417,61 @@ function methodReason(fund: FundNAVIntraday): string | null {
 .result-name {
   color: var(--text-secondary);
   font-size: 13px;
+}
+
+.result-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.watch-quick-btn {
+  flex-shrink: 0;
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  background-color: var(--bg-secondary);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  transition: all var(--transition-fast);
+}
+
+.watch-quick-btn:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+  background-color: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.watch-quick-btn:disabled {
+  cursor: default;
+}
+
+.watch-quick-btn.watch-added {
+  color: var(--success, var(--down-color));
+  border-color: color-mix(
+    in srgb,
+    var(--success, var(--down-color)) 45%,
+    transparent
+  );
+  background-color: color-mix(
+    in srgb,
+    var(--success, var(--down-color)) 10%,
+    transparent
+  );
+}
+
+/* Detail-header variant: sits between the badges and the close button, which
+   keeps its own margin-left:auto to stay on the far right. */
+.watch-detail-btn {
+  margin-left: 8px;
+}
+
+.watch-note {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
 }
 
 .nav-detail {
